@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
@@ -43,7 +44,7 @@ def _close_thread_ops_ro() -> None:
 
 
 @contextmanager
-def ops_con(read_only: bool = False) -> Iterator[Any]:
+def ops_con(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     """Yield a connection to the ops warehouse. Applies schema on first open.
 
     Single-file DuckDB cannot mix concurrent read_only and read-write handles
@@ -79,11 +80,21 @@ def ops_con(read_only: bool = False) -> Iterator[Any]:
                 con0.close()
             _ops_initialized = True
 
-        con = duckdb.connect(str(path), read_only=False)
+        con = None
+        for attempt in range(5):
+            try:
+                con = duckdb.connect(str(path), read_only=False)
+                break
+            except Exception as exc:
+                if "Could not set lock on file" in str(exc) and attempt < 4:
+                    time.sleep(0.04 * (2 ** attempt))
+                    continue
+                raise
         try:
             yield con
         finally:
-            con.close()
+            if con is not None:
+                con.close()
 
 
 async def ops_in_thread(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:

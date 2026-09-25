@@ -39,6 +39,7 @@ async def list_all_packs() -> dict[str, Any]:
                 "pack_version": pack.pack_version,
                 "slots": [s.name for s in pack.manifest.slot_frame],
                 "entity_labels": pack.entity_labels,
+                "locale": getattr(pack, "locale", "en-US") or "en-US",
                 "lint_errors": errors,
                 "is_active": pid == active,
             })

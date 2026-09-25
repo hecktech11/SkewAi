@@ -7,6 +7,8 @@ defaults remain dark.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,9 +19,27 @@ DASH = REPO / "dashboard"
 ASSERT = DASH / "scripts" / "assert-light-theme.mjs"
 
 
+def _toolchain_missing() -> str:
+    """Reason the dashboard build cannot run here, or "" if it can.
+
+    CI installs node deps before pytest (see .github/workflows), so this never
+    excuses the gate there — it only keeps a Python-only checkout runnable.
+    """
+    if os.getenv("CI", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return ""
+    if shutil.which("npm") is None or shutil.which("node") is None:
+        return "node/npm not installed"
+    if not (DASH / "node_modules").is_dir():
+        return "dashboard/node_modules missing — run `npm ci` in dashboard/"
+    return ""
+
+
 @pytest.fixture(scope="module")
 def built_dashboard() -> None:
     assert ASSERT.is_file(), f"missing theme assert script: {ASSERT}"
+    reason = _toolchain_missing()
+    if reason:
+        pytest.skip(reason)
     # Ensure dist exists so the script checks production CSS
     r = subprocess.run(
         ["npm", "run", "build"],

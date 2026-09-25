@@ -143,17 +143,42 @@ def _auth_required() -> bool:
 def _secret() -> bytes:
     """HMAC material for session tokens.
 
-    Hardened (auth required): never fall back to the public ``dev-only`` string.
-    Open mode may still use a weak fallback so local demos work without secrets.
+    Requires explicit SESSION_SECRET whenever authentication is required.
+    Never alias to FRONTLINE_API_KEY in any mode (separate cryptographic principals).
+    Open mode without auth falls back to dev-only.
     """
-    secret = (os.getenv("SESSION_SECRET") or os.getenv("FRONTLINE_API_KEY") or "").strip()
-    if secret:
-        return secret.encode()
+    session_sec = (os.getenv("SESSION_SECRET") or "").strip()
+    api_key = (os.getenv("FRONTLINE_API_KEY") or "").strip()
+
+    if session_sec and api_key and session_sec == api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="SESSION_SECRET must not match FRONTLINE_API_KEY (cannot alias service API key to session signing key).",
+        )
+
+    try:
+        from src.security.harden import is_production_like
+
+        if is_production_like() or _env_bool("PILOT_HARDENED", False) or _env_bool("SOC2_MODE", False):
+            if not session_sec:
+                raise HTTPException(
+                    status_code=503,
+                    detail="SESSION_SECRET must be configured for session tokens in production-like mode.",
+                )
+            return session_sec.encode()
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    if session_sec:
+        return session_sec.encode()
+
     if _auth_required() or _env_bool("PILOT_HARDENED", False):
         raise HTTPException(
             status_code=503,
             detail=(
-                "SESSION_SECRET or FRONTLINE_API_KEY must be configured for "
+                "SESSION_SECRET must be configured for "
                 "session tokens when auth is required (refusing dev-only fallback)."
             ),
         )
@@ -186,6 +211,13 @@ def issue_session(
         if issuer not in ROLES:
             issuer = "agent"
         bootstrap = _env_bool("FRONTLINE_BOOTSTRAP_ADMIN", False)
+        try:
+            from src.security.harden import is_production_like
+
+            if is_production_like():
+                bootstrap = False
+        except Exception:
+            pass
         if requested in ELEVATED:
             allowed = issuer == "admin" or (
                 requested == "admin" and bootstrap
@@ -202,13 +234,23 @@ def issue_session(
     exp = int(time.time()) + max(60, int(ttl_s))
     body = {"sub": subject, "role": requested, "exp": exp}
     if extra:
-        body.update(extra)
+        # SECURITY: never allow caller-supplied extra to overwrite reserved
+        # claims (sub/role/exp/idp). Previously extra={"role": <display>}
+        # clobbered the validated role, letting open-mode signup mint
+        # arbitrary roles including "admin".
+        for k, v in extra.items():
+            if k in {"sub", "subject", "role", "exp", "iat", "idp", "iss"}:
+                continue
+            body[k] = v
     raw = json.dumps(body, separators=(",", ":"), sort_keys=True)
     sig = hmac.new(_secret(), raw.encode(), hashlib.sha256).hexdigest()
     token = f"{raw}|{sig}"
     res = {"token": token, "role": requested, "subject": subject, "exp": exp}
     if extra:
-        res.update(extra)
+        for k, v in extra.items():
+            if k in {"token", "role", "subject", "exp", "sub"}:
+                continue
+            res[k] = v
     return res
 
 
@@ -223,9 +265,78 @@ def issue_idp_session(subject: str, *, ttl_s: int = 3600) -> dict[str, Any]:
     return {"token": token, "role": "agent", "subject": name, "exp": exp}
 
 
+_REVOKED_SESSION_SIGS: set[str] = set()
+
+
+def revoke_session(token: str) -> None:
+    """Revoke a session token on logout, adding it to the revocation denylist."""
+    if not token or not isinstance(token, str):
+        return
+    tok = token.strip()
+    if not tok:
+        return
+    sig = tok.rsplit("|", 1)[1] if "|" in tok else hashlib.sha256(tok.encode()).hexdigest()
+    _REVOKED_SESSION_SIGS.add(sig)
+
+    try:
+        from src.data.warehouse import ops_con
+
+        exp_val = None
+        if "|" in tok:
+            try:
+                body = json.loads(tok.rsplit("|", 1)[0])
+                exp_val = int(body.get("exp") or 0)
+            except Exception:
+                pass
+        with ops_con() as con:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS revoked_sessions (
+                    token_sig VARCHAR PRIMARY KEY,
+                    revoked_at TIMESTAMP WITH TIME ZONE,
+                    exp BIGINT
+                )
+                """
+            )
+            con.execute(
+                "INSERT OR REPLACE INTO revoked_sessions (token_sig, revoked_at, exp) VALUES (?, CURRENT_TIMESTAMP, ?)",
+                [sig, exp_val],
+            )
+    except Exception:
+        pass
+
+
+def is_session_revoked(token: str) -> bool:
+    """Check whether a session token has been revoked."""
+    if not token or not isinstance(token, str):
+        return False
+    tok = token.strip()
+    if not tok:
+        return False
+    sig = tok.rsplit("|", 1)[1] if "|" in tok else hashlib.sha256(tok.encode()).hexdigest()
+    if sig in _REVOKED_SESSION_SIGS:
+        return True
+    try:
+        from src.data.warehouse import ops_con
+
+        with ops_con(read_only=True) as con:
+            row = con.execute(
+                "SELECT 1 FROM revoked_sessions WHERE token_sig = ?",
+                [sig],
+            ).fetchone()
+            if row:
+                _REVOKED_SESSION_SIGS.add(sig)
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def verify_session(token: str) -> dict[str, Any]:
     if "|" not in token:
         raise HTTPException(status_code=401, detail="invalid session token")
+    if is_session_revoked(token):
+        raise HTTPException(status_code=401, detail="session has been revoked")
     raw, sig = token.rsplit("|", 1)
     expect = hmac.new(_secret(), raw.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expect, sig):
@@ -233,6 +344,11 @@ def verify_session(token: str) -> dict[str, Any]:
     body = json.loads(raw)
     if int(body.get("exp") or 0) < time.time():
         raise HTTPException(status_code=401, detail="session expired")
+    # Fail closed: unknown/spoofed role strings (e.g. legacy tokens where
+    # display-title overwrote the claim) never elevate — treat as agent.
+    _r = str(body.get("role") or "agent")
+    if _r not in ROLES:
+        body["role"] = "agent"
     return body
 
 

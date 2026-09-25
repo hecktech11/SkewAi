@@ -4,8 +4,9 @@ import { hashQueryObject, patchHashQuery } from "../src/ui/opsActions.js";
 
 // ── Minimal markdown renderer (basic #, ##, ###, lists, tables, code) ──
 // Returns an array of React nodes. Intentionally simple — no library.
+// Exported for reuse (AnalyticsDesk digest panel).
 
-function renderMarkdown(md) {
+export function renderMarkdown(md) {
   if (!md) return [<div className="empty" key="empty">No report.</div>];
   const lines = md.split(/\r?\n/);
   const out = [];

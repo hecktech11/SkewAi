@@ -75,6 +75,9 @@ jobs:
         # Fail hangs instead of burning the runner (WS contract must not block CI).
         run: make test
 
+      - name: SLM Phase 0 probes (honest-baseline regression suite)
+        run: make slm-probes
+
       - name: Offline dual-pack eval
         run: make eval-frontline
 

@@ -63,9 +63,9 @@ def test_item12_oidc_config_needs_admin(reset_ops_db, seed_automotive_pack, monk
         assert r1.status_code == 403, (
             f"service key must not rewrite IdP config: {r1.status_code} {r1.text[:200]}"
         )
-        # …while an admin session succeeds (or fails only on payload, not auth).
         from src.api.rbac import issue_session
 
+        monkeypatch.setenv("SESSION_SECRET", "test-session-secret-distinct-32b!!")
         monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
         admin = issue_session("tester", "admin", issuer_role="admin")["token"]
         r2 = c.put(
@@ -84,6 +84,7 @@ def test_item12_oidc_config_malformed_payload_admin(reset_ops_db, seed_automotiv
 
     key = "oidc-rbac-key-32-bytes-long!!!!!!"
     monkeypatch.setenv("FRONTLINE_API_KEY", key)
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-distinct-32b!!")
     monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
     monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
     monkeypatch.delenv("FRONTLINE_OPEN_MODE", raising=False)
@@ -331,6 +332,7 @@ def test_item16_list_cases_redacted_by_default(reset_ops_db, seed_automotive_pac
         # Explicit opt-out without dsr:export is forbidden (agent session)…
         from src.api.rbac import issue_session
 
+        monkeypatch.setenv("SESSION_SECRET", "test-session-secret-distinct-32b!!")
         agent = issue_session("reader", "agent")["token"]
         r2 = c.get(
             "/api/frontline/cases?scrub_pii=false",

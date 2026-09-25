@@ -199,7 +199,8 @@ def test_commercial_keys_webhooks_sdk_widget(reset_ops_db):
             "stripe_session": session["stripe_session"],
             "tenant_id": "acme",
             "plan": "pilot",
-        }
+        },
+        allow_unsigned=True,
     )
     assert paid["ok"] is True
 

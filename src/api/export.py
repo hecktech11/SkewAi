@@ -124,7 +124,15 @@ async def build_audit_export(
             row["actions"] = actions
 
             report_path = REPORTS_DIR / f"{iid}.md"
-            row["report_name"] = f"{iid}.md" if report_path.exists() else None
+            try:
+                from src.security.identifiers import assert_under_roots as _assert_roots
+
+                report_path = _assert_roots(report_path, [REPORTS_DIR])
+            except Exception:
+                row["report_name"] = None
+                row["report_url"] = f"/api/frontline/audits/{iid}"
+                continue
+            row["report_name"] = f"{iid}.md" if report_path.is_file() else None
             row["report_url"] = f"/api/frontline/audits/{iid}"
             if include_markdown and report_path.exists():
                 row["report_markdown"] = report_path.read_text(encoding="utf-8")
@@ -188,6 +196,13 @@ async def build_audit_export(
     return payload
 
 
+def _csv_neutralize(value: object) -> object:
+    """Prefix formula-leading cells so Excel/Sheets will not execute them."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def export_to_csv(payload: dict[str, Any]) -> str:
     """Flatten export interactions into CSV (one row per contact)."""
     buf = io.StringIO()
@@ -215,20 +230,20 @@ def export_to_csv(payload: dict[str, Any]) -> str:
     for row in payload.get("interactions") or []:
         audit = row.get("audit") or {}
         writer.writerow({
-            "interaction_id": row.get("interaction_id", ""),
-            "pack_id": row.get("pack_id", ""),
-            "channel": row.get("channel", ""),
-            "status": row.get("status", ""),
-            "outcome": row.get("outcome", ""),
-            "started_at": row.get("started_at", ""),
-            "ended_at": row.get("ended_at", ""),
-            "entity_1": row.get("entity_1", ""),
-            "entity_2": row.get("entity_2", ""),
-            "entity_3": row.get("entity_3", ""),
-            "supervised": row.get("supervised", ""),
-            "peak_frustration": row.get("peak_frustration", ""),
+            "interaction_id": _csv_neutralize(row.get("interaction_id", "")),
+            "pack_id": _csv_neutralize(row.get("pack_id", "")),
+            "channel": _csv_neutralize(row.get("channel", "")),
+            "status": _csv_neutralize(row.get("status", "")),
+            "outcome": _csv_neutralize(row.get("outcome", "")),
+            "started_at": _csv_neutralize(row.get("started_at", "")),
+            "ended_at": _csv_neutralize(row.get("ended_at", "")),
+            "entity_1": _csv_neutralize(row.get("entity_1", "")),
+            "entity_2": _csv_neutralize(row.get("entity_2", "")),
+            "entity_3": _csv_neutralize(row.get("entity_3", "")),
+            "supervised": _csv_neutralize(row.get("supervised", "")),
+            "peak_frustration": _csv_neutralize(row.get("peak_frustration", "")),
             "action_count": len(row.get("actions") or []),
-            "audit_verdict": audit.get("overall_verdict", ""),
+            "audit_verdict": _csv_neutralize(audit.get("overall_verdict", "")),
             "audit_total_actions": audit.get("total_actions", ""),
             "audit_grounded_actions": audit.get("grounded_actions", ""),
             "audit_mismatch_actions": audit.get("mismatch_actions", ""),

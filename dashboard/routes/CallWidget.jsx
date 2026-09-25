@@ -20,6 +20,11 @@ import {
   shouldResumeListeningOnOpen,
   slotProgress,
   transcriptFromResume,
+  POST_TTS_COOLDOWN_MS,
+  STT_FINAL_DEBOUNCE_MS,
+  RECOG_RESTART_MS,
+  looksLikeAgentEcho,
+  coalesceSpeechFinals,
 } from "../src/voiceHelpers.js";
 import { capabilityLabel } from "../src/ui/labels.js";
 
@@ -48,6 +53,17 @@ export default function CallWidget() {
   const [micGranted, setMicGranted] = useState(null);
   const [turnCount, setTurnCount] = useState(0);
   const [speakPhase, setSpeakPhase] = useState("normal"); // 'greeting' | 'normal'
+  const [muted, setMuted] = useState(false);
+  const [driving, setDriving] = useState(false);
+  const [frustration, setFrustration] = useState(0);
+  const [latency, setLatency] = useState(null);
+  const [consent, setConsent] = useState(null);
+  const [safetyMode, setSafetyMode] = useState(false);
+  const [callSecs, setCallSecs] = useState(0);
+  const [survey, setSurvey] = useState({ csat: 0, resolved: null, sent: false });
+  const [region, setRegion] = useState(() => {
+    try { return localStorage.getItem("skew_region") || ""; } catch { return ""; }
+  });
 
   const hasSR = !!getSpeechRecognition();
   const hasTTS = typeof window !== "undefined" && "speechSynthesis" in window;
@@ -71,6 +87,105 @@ export default function CallWidget() {
   const activeWsUrlRef = useRef(null);
   const interactionIdRef = useRef(null);
   const turnSeqRef = useRef(0);
+  const speakWatchdogRef = useRef(null);
+  const lastAgentTextRef = useRef("");
+  const listenReadyAtRef = useRef(0);
+  const speakQueueRef = useRef([]);
+  const drainingSpeakRef = useRef(false);
+  const sttBufferRef = useRef({ text: "", at: 0 });
+  const sttFlushTimerRef = useRef(null);
+  const recogRestartTimerRef = useRef(null);
+  const lastInterimRef = useRef({ text: "", at: 0 });
+  const thinkingTimeoutRef = useRef(null);
+  const stateRef = useRef(CALL_STATE.IDLE);
+  const wsSeqRef = useRef(0);
+  const callStartRef = useRef(0);
+  const callTimerRef = useRef(null);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  useEffect(() => {
+    if (state === CALL_STATE.IDLE || state === CALL_STATE.ENDED) {
+      if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+      return;
+    }
+    if (!callStartRef.current) callStartRef.current = Date.now();
+    if (!callTimerRef.current) {
+      callTimerRef.current = setInterval(() => {
+        setCallSecs(Math.floor((Date.now() - callStartRef.current) / 1000));
+      }, 1000);
+    }
+    return () => {};
+  }, [state]);
+
+  function packLocale() {
+    try {
+      const l = pack && (pack.locale || pack?.pack?.locale);
+      if (l) return l;
+      if (pack && pack.id && typeof pack.id === "string") return "en-US";
+    } catch { /* ignore */ }
+    return "en-US";
+  }
+  function newTurnId() {
+    try {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    } catch { /* ignore */ }
+    return `t_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6)}`;
+  }
+
+  function clearSpeakWatchdog() {
+    if (speakWatchdogRef.current) {
+      clearTimeout(speakWatchdogRef.current);
+      speakWatchdogRef.current = null;
+    }
+  }
+
+  /**
+   * Recovery if the TTS engine never fires onend/onerror (throttled tab,
+   * headset switch, dropped utterance). Without this the call wedges in
+   * AGENT_SPEAKING with the mic gated off forever.
+   */
+  function armSpeakWatchdog(full) {
+    clearSpeakWatchdog();
+    if (typeof window === "undefined") return;
+    const ms = Math.min(
+      45000,
+      Math.max(10000, 6000 + String(full || "").length * 120),
+    );
+    speakWatchdogRef.current = window.setTimeout(() => {
+      speakWatchdogRef.current = null;
+      if (!speakingRef.current) return;
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        /* ignore */
+      }
+      speakingRef.current = false;
+      speakPhaseRef.current = "normal";
+      setSpeakPhase("normal");
+      drainingSpeakRef.current = false;
+      speakQueueRef.current = [];
+      armListenCooldown();
+      setInfo("Voice output stalled — mic is live, keep speaking or type below");
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        setState(CALL_STATE.LISTENING);
+        startRecognitionSafe();
+      }
+    }, ms);
+  }
+
+  function pickVoice() {
+    try {
+      const vs = window.speechSynthesis.getVoices() || [];
+      return (
+        vs.find((v) => v.default) ||
+        vs.find((v) => v.lang && v.lang.startsWith("en")) ||
+        null
+      );
+    } catch {
+      return null;
+    }
+  }
 
   function markCallTerminal() {
     // Prevent onclose reconnect from treating a normal server hangup as a drop.
@@ -80,6 +195,10 @@ export default function CallWidget() {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+    }
+    if (thinkingTimeoutRef.current) {
+      clearTimeout(thinkingTimeoutRef.current);
+      thinkingTimeoutRef.current = null;
     }
   }
 
@@ -117,10 +236,49 @@ export default function CallWidget() {
     }
   }
 
+  function clearThinkingTimeout() {
+    if (thinkingTimeoutRef.current) {
+      clearTimeout(thinkingTimeoutRef.current);
+      thinkingTimeoutRef.current = null;
+    }
+  }
+
+  function enterThinking() {
+    // Mic pauses while the server works so background noise during the
+    // 5-10s enrichment window cannot pile up duplicate user_turns.
+    stopRecognition();
+    setState(CALL_STATE.THINKING);
+    clearThinkingTimeout();
+    thinkingTimeoutRef.current = window.setTimeout(() => {
+      thinkingTimeoutRef.current = null;
+      if (callEndedRef.current || intentionalCloseRef.current) return;
+      if (stateRef.current !== CALL_STATE.THINKING) return;
+      setInfo("Still working — if the agent stays quiet, speak or type again");
+      setState(CALL_STATE.LISTENING);
+      startRecognitionSafe();
+    }, 12000);
+  }
+
   function startRecognitionSafe() {
     if (!recogRef.current) return;
     if (speakingRef.current) return;
+    if (drainingSpeakRef.current) return;
+    if (stateRef.current === CALL_STATE.THINKING) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    if (listenReadyAtRef.current && now < listenReadyAtRef.current) {
+      const wait = listenReadyAtRef.current - now;
+      if (recogRestartTimerRef.current) clearTimeout(recogRestartTimerRef.current);
+      recogRestartTimerRef.current = window.setTimeout(() => {
+        recogRestartTimerRef.current = null;
+        startRecognitionSafe();
+      }, wait + 20);
+      return;
+    }
+    if (recogRestartTimerRef.current) {
+      clearTimeout(recogRestartTimerRef.current);
+      recogRestartTimerRef.current = null;
+    }
     try {
       recogRef.current.start();
     } catch {
@@ -128,39 +286,112 @@ export default function CallWidget() {
     }
   }
 
-  /**
-   * Speak agent text. opts.phase === 'greeting' disables barge-in so speaker
-   * bleed cannot cancel the pack greeting mid-word ("than" from "Thanks").
-   */
-  function speak(text, opts = {}) {
-    const full = greetingSpeakText(text);
-    const phase = opts.phase || "normal";
-    speakPhaseRef.current = phase;
-    setSpeakPhase(phase);
-    bargeStreakRef.current = 0;
+  function armListenCooldown() {
+    listenReadyAtRef.current = Date.now() + POST_TTS_COOLDOWN_MS;
+  }
 
-    if (!hasTTS || !full) {
-      speakingRef.current = false;
-      speakPhaseRef.current = "normal";
-      setSpeakPhase("normal");
+  function flushCustomerUtterance() {
+    if (sttFlushTimerRef.current) {
+      clearTimeout(sttFlushTimerRef.current);
+      sttFlushTimerRef.current = null;
+    }
+    const buf = sttBufferRef.current;
+    sttBufferRef.current = { text: "", at: 0 };
+    // Single-word answers ("yes") often arrive as interim only and would be
+    // lost forever — promote the last interim to a final on flush.
+    const fallback = lastInterimRef.current && lastInterimRef.current.text
+      ? lastInterimRef.current.text
+      : "";
+    lastInterimRef.current = { text: "", at: 0 };
+    const raw = (buf && buf.text ? buf.text : "") || fallback;
+    const text = raw.replace(/\s+/g, " ").trim();
+    if (!text) return;
+    if (looksLikeAgentEcho(text, lastAgentTextRef.current)) {
+      setInfo("Ignored speaker echo — say your answer after the agent finishes");
+      return;
+    }
+    wsSeqRef.current += 1;
+    const sent = sendWs({
+      type: "user_turn", text, final: true,
+      turn_id: newTurnId(), turn_seq: wsSeqRef.current,
+      // Web Speech exposes confidence for an entire phrase, not for a vehicle
+      // slot. Do not send it: older API servers treated it as entity_1 and
+      // looped on a confirmation of every partial phrase.
+      locale: packLocale(),
+      region: (region || "").trim() || undefined,
+      drive_hint: driving || undefined,
+    });
+    if (!sent) {
+      setError("Connection was lost before your reply could be sent. Please reconnect and try again.");
       setState(CALL_STATE.LISTENING);
       startRecognitionSafe();
       return;
     }
-    // Pause STT while agent talks so we do not echo TTS into user_turn.
+    pushTurn({ speaker: "customer", text });
+    enterThinking();
+  }
+
+  function queueCustomerFinal(txt) {
+    const { buffer } = coalesceSpeechFinals(sttBufferRef.current, txt, Date.now(), STT_FINAL_DEBOUNCE_MS);
+    sttBufferRef.current = buffer;
+    if (sttFlushTimerRef.current) clearTimeout(sttFlushTimerRef.current);
+    sttFlushTimerRef.current = window.setTimeout(() => {
+      sttFlushTimerRef.current = null;
+      flushCustomerUtterance();
+    }, STT_FINAL_DEBOUNCE_MS);
+  }
+
+  /**
+   * Speak agent text. opts.phase === 'greeting' disables barge-in so speaker
+   * bleed cannot cancel the pack greeting mid-word ("than" from "Thanks").
+   * Queue later agent turns instead of cancel+speak — Chrome drops the next
+   * question when cancel and speak run back-to-back.
+   */
+  function enqueueSpeak(text, opts = {}) {
+    const full = greetingSpeakText(text);
+    if (!full) return;
+    lastAgentTextRef.current = full;
+    speakQueueRef.current.push({ full, phase: opts.phase || "normal" });
+    if (!drainingSpeakRef.current && !speakingRef.current) {
+      drainSpeakQueue();
+    }
+  }
+
+  function drainSpeakQueue() {
+    const next = speakQueueRef.current.shift();
+    if (!next) {
+      drainingSpeakRef.current = false;
+      armListenCooldown();
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        setState(CALL_STATE.LISTENING);
+        startRecognitionSafe();
+      }
+      return;
+    }
+    drainingSpeakRef.current = true;
+    speakNow(next.full, next.phase);
+  }
+
+  function speakNow(full, phase) {
+    speakPhaseRef.current = phase;
+    setSpeakPhase(phase);
+    bargeStreakRef.current = 0;
+
+    if (!hasTTS) {
+      clearSpeakWatchdog();
+      speakingRef.current = false;
+      speakPhaseRef.current = "normal";
+      setSpeakPhase("normal");
+      drainSpeakQueue();
+      return;
+    }
     speakingRef.current = true;
     setState(CALL_STATE.AGENT_SPEAKING);
     stopRecognition();
-
-    // Cancel any prior utterance, then speak on next task so Chrome does not
-    // drop the new utterance when cancel+speak run in the same turn.
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      /* ignore */
-    }
+    armSpeakWatchdog(full);
 
     const finishSpeaking = () => {
+      clearSpeakWatchdog();
       speakingRef.current = false;
       speakPhaseRef.current = "normal";
       setSpeakPhase("normal");
@@ -169,20 +400,19 @@ export default function CallWidget() {
         cancelAnimationFrame(bargeRafRef.current);
         bargeRafRef.current = null;
       }
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        setState(CALL_STATE.LISTENING);
-        startRecognitionSafe();
-      }
+      drainSpeakQueue();
     };
 
     window.setTimeout(() => {
       if (!speakingRef.current) return;
       const u = new SpeechSynthesisUtterance(full);
       u.rate = 1.0;
+      try { u.lang = packLocale() || "en-US"; } catch { u.lang = "en-US"; }
+      const voice = pickVoice();
+      if (voice) u.voice = voice;
       u.onstart = () => {
         ttsStartedAtRef.current = Date.now();
         bargeStreakRef.current = 0;
-        // Barge-in only for non-greeting agent turns, and only after grace.
         if (phase !== "greeting") {
           startBargeWatch();
         }
@@ -194,12 +424,11 @@ export default function CallWidget() {
       } catch {
         finishSpeaking();
       }
-      // If onstart never fires (some engines), still arm barge after grace for non-greeting.
       if (phase !== "greeting" && !ttsStartedAtRef.current) {
         ttsStartedAtRef.current = Date.now();
         startBargeWatch();
       }
-    }, 40);
+    }, 60);
   }
 
   function startBargeWatch() {
@@ -249,11 +478,20 @@ export default function CallWidget() {
         } catch {
           /* ignore */
         }
+        clearSpeakWatchdog();
         speakingRef.current = false;
         speakPhaseRef.current = "normal";
         setSpeakPhase("normal");
         bargeStreakRef.current = 0;
-        sendWs({ type: "barge_in" });
+        try {
+          const elapsedMs = Date.now() - (ttsStartedAtRef.current || Date.now());
+          sendWs({ type: "barge_in", elapsed_ms: Math.max(0, elapsedMs) });
+        } catch {
+          sendWs({ type: "barge_in" });
+        }
+        speakQueueRef.current = [];
+        drainingSpeakRef.current = false;
+        armListenCooldown();
         setState(CALL_STATE.LISTENING);
         setInfo("Barge-in — listening again");
         startRecognitionSafe();
@@ -268,17 +506,69 @@ export default function CallWidget() {
   function sendWs(obj) {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
+      try {
+        ws.send(JSON.stringify(obj));
+        return true;
+      } catch {
+        return false;
+      }
     }
+    return false;
   }
 
   function handleWsMessage(msg) {
     switch (msg.type) {
       case "agent_turn": {
         const agentText = greetingSpeakText(msg.text || "");
+        clearThinkingTimeout();
+        if (msg.drive_mode) setDriving(true);
+        if (msg.consent_required) setConsent((c) => c || { script: agentText });
+        // Safety escalation dominates the UI (Tier-B #13).
+        try {
+          const t = (agentText || "").toLowerCase();
+          if (t.includes("safety specialist") || t.includes("emergency services")) {
+            setSafetyMode(true);
+          }
+        } catch { /* ignore */ }
         pushTurn({ speaker: msg.speaker || "agent", text: agentText });
-        if (msg.speaker === "supervisor") return;
-        speak(agentText, { phase: "normal" });
+        if (msg.speaker === "supervisor") setInfo("A human specialist is responding");
+        enqueueSpeak(agentText, { phase: "normal" });
+        break;
+      }
+      case "frustration": {
+        try { setFrustration(Number(msg.value || 0)); } catch { /* ignore */ }
+        break;
+      }
+      case "turn_latency": {
+        try {
+          setLatency({
+            elapsed_ms: Number(msg.elapsed_ms || 0),
+            over_budget: !!msg.over_budget,
+            budget_ms: Number(msg.budget_ms || 1500),
+          });
+        } catch { /* ignore */ }
+        break;
+      }
+      case "consent_required": {
+        try {
+          setConsent({ script: String(msg.script || ""), region: msg.region || "", version: msg.version || "" });
+          setInfo("Recording consent required — say 'I consent' or tap Consent");
+        } catch { /* ignore */ }
+        break;
+      }
+      case "barge_in_reconciled": {
+        try {
+          setActivity({ agent: "voice_reconciler", action_type: "spoken_turn_truncated", summary: String(msg.audible_text || "[INTERRUPTED]") });
+        } catch { /* ignore */ }
+        break;
+      }
+      case "duplicate_dropped": {
+        // Proven replay (same turn_id seen twice) — stay live and ask for a
+        // fresh turn instead of wedging in THINKING until the 12s timeout.
+        clearThinkingTimeout();
+        setState(CALL_STATE.LISTENING);
+        setInfo("That turn arrived twice — please say it once more");
+        startRecognitionSafe();
         break;
       }
       case "agent_activity": {
@@ -287,6 +577,11 @@ export default function CallWidget() {
           action_type: msg.action_type,
           summary: msg.summary || msg.output_summary || "",
         });
+        try {
+          if (msg.action_type === "supervisor_whisper") setInfo("Supervisor coaching live on console");
+          if (msg.action_type === "drive_mode_detected") setDriving(true);
+          if (msg.action_type === "vin_captured") setInfo(String(msg.summary || "VIN captured"));
+        } catch { /* ignore */ }
         break;
       }
       case "slots_update": {
@@ -349,6 +644,20 @@ export default function CallWidget() {
 
   function cleanupCall() {
     stopRecognition();
+    clearSpeakWatchdog();
+    clearThinkingTimeout();
+    if (sttFlushTimerRef.current) {
+      clearTimeout(sttFlushTimerRef.current);
+      sttFlushTimerRef.current = null;
+    }
+    if (recogRestartTimerRef.current) {
+      clearTimeout(recogRestartTimerRef.current);
+      recogRestartTimerRef.current = null;
+    }
+    speakQueueRef.current = [];
+    drainingSpeakRef.current = false;
+    sttBufferRef.current = { text: "", at: 0 };
+    lastInterimRef.current = { text: "", at: 0 };
     if (bargeRafRef.current) cancelAnimationFrame(bargeRafRef.current);
     bargeRafRef.current = null;
     if (hasTTS) {
@@ -390,18 +699,35 @@ export default function CallWidget() {
     }
   }
 
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    try {
+      const tracks = (micStreamRef.current && micStreamRef.current.getAudioTracks()) || [];
+      tracks.forEach((t) => { t.enabled = !next; });
+    } catch { /* ignore */ }
+    if (next) stopRecognition();
+    else if (stateRef.current === CALL_STATE.LISTENING) startRecognitionSafe();
+  }
+
   function setupSpeechRecognition() {
     const SR = getSpeechRecognition();
     if (!SR) return null;
     const recog = new SR();
     recog.continuous = true;
     recog.interimResults = true;
-    recog.lang = "en-US";
+    try { recog.lang = packLocale() || "en-US"; } catch { recog.lang = "en-US"; }
     recog.onresult = (ev) => {
       const accept = shouldAcceptSpeechResult({
         speaking: speakingRef.current,
         wsOpen: !!(wsRef.current && wsRef.current.readyState === WebSocket.OPEN),
+        listenReadyAt: listenReadyAtRef.current,
+        now: Date.now(),
       });
+      // While thinking the mic is paused — drop late STT so it cannot stack
+      // a second user_turn behind the one the server is already answering.
+      if (stateRef.current === CALL_STATE.THINKING) return;
+      if (muted) return;
       if (!accept) return;
 
       let interim = "";
@@ -410,13 +736,15 @@ export default function CallWidget() {
         const txt = (res[0].transcript || "").trim();
         if (!txt) continue;
         if (res.isFinal) {
-          pushTurn({ speaker: "customer", text: txt });
-          sendWs({ type: "user_turn", text: txt, final: true });
+          if (looksLikeAgentEcho(txt, lastAgentTextRef.current)) continue;
+          lastInterimRef.current = { text: "", at: 0 };
+          queueCustomerFinal(txt);
         } else {
           interim += (interim ? " " : "") + txt;
         }
       }
-      if (interim) {
+      if (interim && !looksLikeAgentEcho(interim, lastAgentTextRef.current)) {
+        lastInterimRef.current = { text: interim, at: Date.now() };
         pushTurn({ speaker: "customer", text: interim, interim: true });
       }
     };
@@ -434,7 +762,30 @@ export default function CallWidget() {
       if (speakPhaseRef.current === "greeting") return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
       if (intentionalCloseRef.current) return;
-      startRecognitionSafe();
+      if (stateRef.current === CALL_STATE.THINKING) {
+        // A short answer ("yes") may end the session with only interim text
+        // buffered — promote it to a final instead of dropping the turn.
+        if (sttBufferRef.current.text || lastInterimRef.current.text) {
+          flushCustomerUtterance();
+        }
+        return;
+      }
+      // Chrome may end a recognition session between pieces of one spoken
+      // sentence. Keep the debounce window alive and restart recognition so
+      // "my car has ... been stuck" becomes one turn, not two competing turns.
+      if (sttBufferRef.current.text || lastInterimRef.current.text) {
+        if (recogRestartTimerRef.current) clearTimeout(recogRestartTimerRef.current);
+        recogRestartTimerRef.current = window.setTimeout(() => {
+          recogRestartTimerRef.current = null;
+          startRecognitionSafe();
+        }, RECOG_RESTART_MS);
+        return;
+      }
+      if (recogRestartTimerRef.current) clearTimeout(recogRestartTimerRef.current);
+      recogRestartTimerRef.current = window.setTimeout(() => {
+        recogRestartTimerRef.current = null;
+        startRecognitionSafe();
+      }, RECOG_RESTART_MS);
     };
     recogRef.current = recog;
     return recog;
@@ -450,15 +801,38 @@ export default function CallWidget() {
     setActivity(null);
     setTurnCount(0);
     turnSeqRef.current = 0;
+    wsSeqRef.current = 0;
     speakPhaseRef.current = "normal";
     setSpeakPhase("normal");
     setMicGranted(null);
+    setMuted(false);
+    setDriving(false);
+    setFrustration(0);
+    setLatency(null);
+    setConsent(null);
+    setSafetyMode(false);
+    setSurvey({ csat: 0, resolved: null, sent: false });
+    callStartRef.current = Date.now();
+    setCallSecs(0);
+    sttBufferRef.current = { text: "", at: 0 };
+    lastInterimRef.current = { text: "", at: 0 };
+    if (thinkingTimeoutRef.current) {
+      clearTimeout(thinkingTimeoutRef.current);
+      thinkingTimeoutRef.current = null;
+    }
     setWsStatus("connecting");
     setState(CALL_STATE.CONNECTING);
 
+    // Ask for microphone access in parallel with contact creation. Waiting for
+    // getUserMedia before opening the WebSocket made a permission prompt (or a
+    // slow Bluetooth device) look like a slow connection.
+    const micReady = setupMic();
     let startRes;
     try {
-      const r = await fetch("/api/interactions/start?channel=web_voice", {
+      try { localStorage.setItem("skew_region", region || ""); } catch { /* ignore */ }
+      const qs = new URLSearchParams({ channel: "web_voice" });
+      if ((region || "").trim()) qs.set("region", region.trim());
+      const r = await fetch(`/api/interactions/start?${qs.toString()}`, {
         method: "POST",
         headers: apiHeaders(),
       });
@@ -470,6 +844,7 @@ export default function CallWidget() {
     } catch (e) {
       setError(String(e.message || e));
       setState(CALL_STATE.IDLE);
+      void micReady.then(() => cleanupCall());
       return;
     }
 
@@ -480,8 +855,22 @@ export default function CallWidget() {
     callEndedRef.current = false;
     reconnectAttemptRef.current = 0;
 
-    await setupMic();
-    setupSpeechRecognition();
+    // Warm up the TTS voice list inside the user gesture so the first
+    // utterance is not dropped by engines that load voices lazily.
+    try {
+      if (hasTTS) {
+        window.speechSynthesis.getVoices();
+        window.speechSynthesis.onvoiceschanged = () => {
+          try {
+            window.speechSynthesis.getVoices();
+          } catch {
+            /* ignore */
+          }
+        };
+      }
+    } catch {
+      /* ignore */
+    }
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${proto}//${window.location.host}${startRes.ws_url}`;
@@ -510,7 +899,7 @@ export default function CallWidget() {
           // Full pack greeting — transcript + TTS must match start response.
           const greet = greetingSpeakText(startRes.greeting_text);
           pushTurn({ speaker: "agent", text: greet });
-          speak(greet, { phase: "greeting" });
+          enqueueSpeak(greet, { phase: "greeting" });
         } else if (
           shouldResumeListeningOnOpen({
             intentionalClose: intentionalCloseRef.current,
@@ -584,6 +973,14 @@ export default function CallWidget() {
     }
 
     bindWs(new WebSocket(wsUrl), { isReconnect: false });
+    // Recognition itself does not require a MediaStream, but wait until the
+    // microphone request settles so barge-in analysis and browser permissions
+    // are ready before we begin listening.
+    void micReady.finally(() => {
+      if (callEndedRef.current || intentionalCloseRef.current) return;
+      setupSpeechRecognition();
+      if (stateRef.current === CALL_STATE.LISTENING) startRecognitionSafe();
+    });
   }
 
   function endCall() {
@@ -634,15 +1031,112 @@ export default function CallWidget() {
       } catch {
         /* ignore */
       }
+      clearSpeakWatchdog();
       speakingRef.current = false;
     }
+    speakQueueRef.current = [];
+    drainingSpeakRef.current = false;
     speakPhaseRef.current = "normal";
     setSpeakPhase("normal");
+    wsSeqRef.current += 1;
+    const sent = sendWs({
+      type: "user_turn", text, final: true,
+      turn_id: newTurnId(), turn_seq: wsSeqRef.current,
+      locale: packLocale(), region: (region || "").trim() || undefined,
+      drive_hint: driving || undefined,
+    });
+    if (!sent) {
+      setError("Connection was lost before your reply could be sent. Please reconnect and try again.");
+      return;
+    }
     pushTurn({ speaker: "customer", text });
-    sendWs({ type: "user_turn", text, final: true });
     setTextFallback("");
-    setState(CALL_STATE.LISTENING);
-    startRecognitionSafe();
+    lastInterimRef.current = { text: "", at: 0 };
+    enterThinking();
+  }
+
+  function sendConsent() {
+    wsSeqRef.current += 1;
+    const txt = "I consent";
+    const sent = sendWs({
+      type: "user_turn", text: txt, final: true,
+      turn_id: newTurnId(), turn_seq: wsSeqRef.current,
+      locale: packLocale(), region: (region || "").trim() || undefined,
+    });
+    if (!sent) {
+      setError("Connection was lost before your consent could be sent. Please reconnect and try again.");
+      return;
+    }
+    pushTurn({ speaker: "customer", text: txt });
+    setConsent(null);
+    enterThinking();
+  }
+
+  async function requestHuman() {
+    const iid = interactionIdRef.current;
+    if (!iid) {
+      setError("Not connected — start a call first");
+      return;
+    }
+    try {
+      const r = await fetch(`/api/interactions/${iid}/handoff/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...apiHeaders() },
+        body: JSON.stringify({ force: true }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body.accepted === false) {
+        throw new Error(body.reason || `handoff failed (${r.status})`);
+      }
+      setHandoff(true);
+      setInfo(body.already_pending
+        ? "A human specialist is already being paged. Please stay on this call."
+        : "A human specialist has been paged. Please stay on this call while they join.");
+    } catch (e) {
+      setError(`Could not page a human specialist: ${String((e && e.message) || e).slice(0, 120)}`);
+    }
+  }
+
+  function openLiveConsole() {
+    try {
+      const iid = interactionIdRef.current || interactionId;
+      const base = window.location.href.split("#")[0];
+      const target = `${base}#console${iid ? `?id=${encodeURIComponent(iid)}` : ""}`;
+      const opened = window.open(target, "_blank", "noopener");
+      if (opened) {
+        setInfo("Supervisor console opened in a new tab. This call remains connected here.");
+      } else {
+        setInfo("Your browser blocked the new supervisor tab. This call remains connected here.");
+      }
+      return;
+    } catch { /* ignore */ }
+    setInfo("Unable to open the supervisor console. This call remains connected here.");
+  }
+
+  function copyReceipt() {
+    try {
+      const lines = transcript.map((t) => `[${t.speaker}] ${t.text}`).join("\n");
+      const body = `Skew AI contact ${interactionId || ""}\n${lines}\nCase: ${ended?.case_id || "—"}`;
+      navigator.clipboard.writeText(body).then(
+        () => setInfo("Transcript copied — receipt ready to email"),
+        () => setInfo("Copy blocked — select the transcript manually"),
+      );
+    } catch { /* ignore */ }
+  }
+
+  async function sendSurvey() {
+    if (!interactionId || survey.sent) return;
+    try {
+      await fetch(`/api/interactions/${interactionId}/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...apiHeaders() },
+        body: JSON.stringify({ csat: survey.csat || null, resolved: survey.resolved }),
+      });
+      setSurvey((s) => ({ ...s, sent: true }));
+      setInfo("Thanks — survey recorded");
+    } catch {
+      setError("Survey failed to send");
+    }
   }
 
   const slotEntries = buildSlotEntries(pack, slots);
@@ -663,8 +1157,8 @@ export default function CallWidget() {
         <div>
           <h1>Voice agent</h1>
           <p className="sub">
-            Live contact with the Skew AI orchestrator. Speak or type — STT pauses while the agent
-            talks so your mic does not echo the reply.
+            Live contact with the Skew AI orchestrator. Wait for the agent to finish, then speak or
+            type. The mic stays off during TTS so the next question is not lost to echo.
             {pack ? (
               <>
                 {" "}
@@ -700,6 +1194,22 @@ export default function CallWidget() {
           </button>
         </div>
       )}
+      {consent && (
+        <div className="banner banner-warn" role="alert">
+          {(consent.script || "This call may be recorded. Say 'I consent' to continue.")}{" "}
+          <button type="button" className="primary" onClick={sendConsent}>I consent</button>
+        </div>
+      )}
+      {safetyMode && inCall && (
+        <div className="banner banner-error" role="alert">
+          Safety escalation active — follow the specialist script. Do not drive until reviewed.
+        </div>
+      )}
+      {!hasSR && !canStart && (
+        <div className="banner banner-warn" role="status">
+          No Web Speech in this browser — text mode with server-side STT fallback. Typing works fully.
+        </div>
+      )}
 
       <div className="call-layout">
         <div className="call-stage">
@@ -727,7 +1237,7 @@ export default function CallWidget() {
                   disabled={state === CALL_STATE.CONNECTING}
                   aria-label={canStart ? "Start call" : "End call"}
                 >
-                  {state === CALL_STATE.CONNECTING ? (
+                  {state === CALL_STATE.CONNECTING || state === CALL_STATE.THINKING ? (
                     <span className="spinner" aria-hidden="true" />
                   ) : canStart ? (
                     <IconMic width={32} height={32} />
@@ -740,12 +1250,14 @@ export default function CallWidget() {
                   )}
                 </button>
               </div>
-              {(state === CALL_STATE.LISTENING || state === CALL_STATE.AGENT_SPEAKING) && (
+              {(state === CALL_STATE.LISTENING ||
+                state === CALL_STATE.AGENT_SPEAKING ||
+                state === CALL_STATE.THINKING) && (
                 <div className="voice-waves-wrap">
                   <div
                     className={
                       "voice-waves" +
-                      (state === CALL_STATE.AGENT_SPEAKING ? " speaking" : " listening") +
+                      (state === CALL_STATE.LISTENING ? " listening" : " speaking") +
                       (speakPhase === "greeting" ? " greeting" : "")
                     }
                   >
@@ -777,7 +1289,21 @@ export default function CallWidget() {
                   </>
                 )}
                 {turnCount > 0 && <> · {turnCount} turns</>}
+                {inCall && <> · {Math.floor(callSecs / 60)}:{String(callSecs % 60).padStart(2, "0")}</>}
+                {latency && <> · {latency.elapsed_ms}ms{latency.over_budget ? " over budget" : ""}</>}
+                {frustration > 0 && <> · frustration {frustration.toFixed(2)}</>}
               </span>
+              {inCall && (
+                <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
+                  <button type="button" className="ghost" onClick={toggleMute}>{muted ? "Unmute" : "Mute"}</button>
+                  <button type="button" className={driving ? "primary" : "ghost"} onClick={() => setDriving((d) => !d)}>{driving ? "Driving: on" : "I'm driving"}</button>
+                  <button type="button" className="ghost" onClick={requestHuman}>Get me a human</button>
+                  <label className="mono faint" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    Region
+                    <input aria-label="Region for consent" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="CA" style={{ width: 56 }} />
+                  </label>
+                </div>
+              )}
             </div>
             {progress.total > 0 && (
               <div className="slot-meter" aria-label={`Slots ${progress.filled} of ${progress.total}`}>
@@ -868,9 +1394,15 @@ export default function CallWidget() {
           )}
 
           {handoff && inCall && (
-            <p className="tag live" style={{ marginTop: 12 }}>
-              Supervisor handoff offered — open Live console to take over
-            </p>
+            <div className="banner banner-ok" role="status" style={{ marginTop: 12 }}>
+              Supervisor handoff queued — pickup SLA 75s.{" "}
+              <button type="button" className="primary" onClick={openLiveConsole}>
+                Open supervisor console in new tab
+              </button>{" "}
+              <button type="button" className="ghost" onClick={requestHuman}>
+                Re-page supervisor
+              </button>
+            </div>
           )}
 
           {ended && state === CALL_STATE.ENDED && (
@@ -902,7 +1434,22 @@ export default function CallWidget() {
                     Open case queue
                   </button>
                 )}
+                <button type="button" className="ghost" onClick={copyReceipt}>Copy receipt</button>
               </div>
+              <div className="row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+                <span className="mono faint">Did we get your issue right?</span>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} type="button" className={survey.csat === n ? "primary" : "ghost"} onClick={() => setSurvey((s) => ({ ...s, csat: n }))}>{n}</button>
+                ))}
+                <button type="button" className={survey.resolved === true ? "primary" : "ghost"} onClick={() => setSurvey((s) => ({ ...s, resolved: true }))}>Resolved</button>
+                <button type="button" className={survey.resolved === false ? "primary" : "ghost"} onClick={() => setSurvey((s) => ({ ...s, resolved: false }))}>Not resolved</button>
+                <button type="button" className="ghost" disabled={survey.sent} onClick={sendSurvey}>{survey.sent ? "Sent" : "Send survey"}</button>
+              </div>
+              {interactionId && (
+                <p className="muted small" style={{ marginTop: 8 }}>
+                  Resume link: <span className="mono">{window.location.origin}{window.location.pathname}#/call?resume={interactionId.slice(0, 16)}…</span>
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -974,7 +1521,7 @@ export default function CallWidget() {
 
           <div className="panel">
             <h2>Related</h2>
-            <button type="button" className="ghost" onClick={() => (window.location.hash = "console")}>
+            <button type="button" className="ghost" onClick={openLiveConsole}>
               Live console
             </button>
           </div>

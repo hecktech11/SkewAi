@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 
@@ -80,6 +83,8 @@ class ActiveEntry:
     # monotonic time the customer WS dropped without a hangup (None = never attached
     # or currently attached). Entries past the reconnect grace are reaped.
     detached_at: float | None = None
+    # Tier-A: durable turn sequencing survives reconnect + restart via turn_dedup.
+    turn_seq: int = 0
 
 
 _active: dict[str, ActiveEntry] = {}
@@ -207,55 +212,102 @@ def _is_reapable(entry: ActiveEntry, now: float, grace_s: float) -> bool:
     return (now - entry.created_at) > _ORPHAN_TTL_S
 
 
-async def _reap_orphans_unlocked(*, sweep_db: bool = False) -> list[str]:
-    """Drop registry entries past their orphan TTL / reconnect grace.
+def classify_customer_ws_attach(
+    entry: ActiveEntry | None,
+    *,
+    now: float,
+    grace_s: float,
+) -> str:
+    """Classify a customer-WS attach without I/O or the registry lock.
 
-    Caller holds ``_active_lock``. In-memory pops stay on the lock; DuckDB
-    writes are scheduled off the loop so ``_attach_customer_ws`` cannot stall
-    between ``websocket.accept()`` and ``ws_attached=True``.
+    Returns one of:
+      ``missing`` / ``busy`` / ``ended`` / ``not_resumable`` /
+      ``ok_new`` / ``ok_resume``.
     """
+    if entry is None:
+        return "missing"
+    if entry.ws_attached:
+        return "busy"
+    state = getattr(getattr(entry, "orch", None), "ctx", None)
+    st = getattr(state, "state", None)
+    if st in ("DONE", "ABANDONED"):
+        return "ended"
+    if _is_reapable(entry, now, grace_s):
+        return "not_resumable"
+    if entry.detached_at is not None:
+        return "ok_resume"
+    return "ok_new"
+
+
+def _pop_reapable_unlocked() -> list[tuple[str, ActiveEntry, str]]:
+    """Pop TTL/grace-expired entries. Caller holds ``_active_lock``. No hangup."""
     now = time.monotonic()
     grace_s = _reconnect_grace_s()
-    dead = [iid for iid, e in _active.items() if _is_reapable(e, now, grace_s)]
-    db_marks: list[tuple[str, str]] = []
-    for iid in dead:
-        entry = _active.pop(iid, None)
-        if entry is None:
+    dead: list[tuple[str, ActiveEntry, str]] = []
+    for iid, entry in list(_active.items()):
+        if not _is_reapable(entry, now, grace_s):
             continue
+        popped = _active.pop(iid, None)
+        if popped is None:
+            continue
+        reason = (
+            "reconnect_timeout" if popped.detached_at is not None else "orphan_timeout"
+        )
+        dead.append((iid, popped, reason))
+    return dead
+
+
+async def _finalize_reaped(dead: list[tuple[str, ActiveEntry, str]]) -> None:
+    """Hangup + DB mark **off** ``_active_lock`` so WS attach cannot stall."""
+    for iid, entry, reason in dead:
         try:
             if entry.orch.ctx.state not in ("DONE", "ABANDONED"):
                 await entry.orch.hangup()
         except Exception:
             pass
-        reason = "reconnect_timeout" if entry.detached_at is not None else "orphan_timeout"
-        db_marks.append((iid, reason))
-    live = set(_active.keys())
-    # Handoff SLA sweep (audit 2.4): unclaimed queued handoffs resume the AI.
-    for entry in list(_active.values()):
         try:
-            if entry.orch.ctx.state == "HANDOFF_PENDING":
-                await entry.orch.sweep_handoff_timeout()
+            loop = asyncio.get_running_loop()
+            loop.create_task(ops_in_thread(_mark_interaction_failed_sync, iid, reason))
         except Exception:
             pass
-    try:
-        loop = asyncio.get_running_loop()
-        for iid, reason in db_marks:
-            loop.create_task(ops_in_thread(_mark_interaction_failed_sync, iid, reason))
-    except Exception:
-        pass
+
+
+async def _reap_orphans_unlocked(*, sweep_db: bool = False) -> list[str]:
+    """Drop registry entries past their orphan TTL / reconnect grace.
+
+    Caller must **not** hold ``_active_lock`` across this function: hangup and
+    DuckDB run here and used to stall ``/ws/interaction/{id}`` accept (~30s).
+    """
+    async with _active_lock:
+        dead = _pop_reapable_unlocked()
+        handoff_orches = [
+            e.orch
+            for e in list(_active.values())
+            if getattr(getattr(e.orch, "ctx", None), "state", None) == "HANDOFF_PENDING"
+        ]
+    await _finalize_reaped(dead)
+    for orch in handoff_orches:
+        try:
+            await orch.sweep_handoff_timeout()
+        except Exception:
+            pass
+    ids = [iid for iid, _, _ in dead]
     if sweep_db:
+        # Recapture AFTER hangup: a POST /start during _finalize_reaped is
+        # already in `_active` and must not be swept as a zombie.
+        async with _active_lock:
+            live = set(_active.keys())
         try:
             extra = await ops_in_thread(_sweep_stale_active_db_rows, live)
-            dead.extend(extra)
+            ids.extend(extra)
         except Exception:
             pass
-    return dead
+    return ids
 
 
 async def reap_orphans() -> list[str]:
     """Public reaper (startup / tests): registry TTL + DB active-row sweep."""
-    async with _active_lock:
-        return await _reap_orphans_unlocked(sweep_db=True)
+    return await _reap_orphans_unlocked(sweep_db=True)
 
 
 async def reaper_loop(interval_s: float = 30.0) -> None:
@@ -277,7 +329,6 @@ async def reaper_loop(interval_s: float = 30.0) -> None:
 
 async def _get_entry(interaction_id: str) -> ActiveEntry:
     async with _active_lock:
-        await _reap_orphans_unlocked()
         entry = _active.get(interaction_id)
     if not entry:
         raise HTTPException(
@@ -288,9 +339,9 @@ async def _get_entry(interaction_id: str) -> ActiveEntry:
 
 async def _register(interaction_id: str, orch: Orchestrator) -> None:
     async with _active_lock:
-        # Register first so DB sweep does not treat this row as a zombie.
+        # Register only. Orphan hangup/DB sweep is the reaper's job — never
+        # hold ``_active_lock`` across hangup (that stalled WS attach ~30s).
         _active[interaction_id] = ActiveEntry(orch=orch)
-        await _reap_orphans_unlocked()
 
 
 async def _unregister(interaction_id: str) -> None:
@@ -306,29 +357,60 @@ async def _attach_customer_ws(interaction_id: str) -> tuple[ActiveEntry, bool]:
     same orchestrator instead of 404-ing the caller.
 
     Returns ``(entry, resumed)`` where ``resumed`` is True for a re-attach.
+
+    Hangup of *other* expired contacts is not awaited here — that used to
+    block accept until DuckDB I/O finished (~30s under lock contention).
     """
+    pending_dead: list[tuple[str, ActiveEntry, str]] = []
+    error: HTTPException | None = None
+    result: tuple[ActiveEntry, bool] | None = None
     async with _active_lock:
-        await _reap_orphans_unlocked()
         entry = _active.get(interaction_id)
-        if not entry:
-            raise HTTPException(
+        now = time.monotonic()
+        grace_s = _reconnect_grace_s()
+        decision = classify_customer_ws_attach(entry, now=now, grace_s=grace_s)
+        if decision == "missing":
+            error = HTTPException(
                 status_code=404, detail=f"active interaction not found: {interaction_id}"
             )
-        if entry.ws_attached:
-            raise HTTPException(
+        elif decision == "busy":
+            error = HTTPException(
                 status_code=409,
                 detail=f"interaction already has an active customer WebSocket: {interaction_id}",
             )
-        if entry.orch.ctx.state in ("DONE", "ABANDONED"):
-            # Finished while the client was away — nothing to resume.
+        elif decision == "ended":
             _active.pop(interaction_id, None)
-            raise HTTPException(
+            error = HTTPException(
                 status_code=404, detail=f"interaction already ended: {interaction_id}"
             )
-        resumed = entry.detached_at is not None
-        entry.ws_attached = True
-        entry.detached_at = None
-        return entry, resumed
+        elif decision == "not_resumable":
+            popped = _active.pop(interaction_id, None)
+            if popped is not None:
+                reason = (
+                    "reconnect_timeout"
+                    if popped.detached_at is not None
+                    else "orphan_timeout"
+                )
+                pending_dead.append((interaction_id, popped, reason))
+            error = HTTPException(
+                status_code=404, detail=f"active interaction not found: {interaction_id}"
+            )
+        else:
+            assert entry is not None
+            resumed = decision == "ok_resume"
+            entry.ws_attached = True
+            entry.detached_at = None
+            result = (entry, resumed)
+    if pending_dead:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_finalize_reaped(pending_dead))
+        except Exception:
+            pass
+    if error is not None:
+        raise error
+    assert result is not None
+    return result
 
 
 async def _detach_customer_ws(interaction_id: str) -> None:
@@ -396,6 +478,8 @@ async def start_interaction(
     channel: str = "web_voice",
     customer_ref: str | None = None,
     channel_session_id: str | None = None,
+    region: str | None = None,
+    locale: str | None = None,
     _auth: bool = Depends(require_api_key),
     _role: str = Depends(require_perm_dep("contact:write")),
 ) -> dict[str, Any]:
@@ -492,6 +576,8 @@ async def start_interaction(
     try:
         orch, greeting = await create_interaction(
             channel=channel, pack_id=pack_id, customer_ref=ref_hash,
+            region=(region or request.query_params.get("region")),
+            locale=(locale or request.query_params.get("locale")),
         )
     except ServiceDrainingError as e:
         raise HTTPException(
@@ -500,16 +586,36 @@ async def start_interaction(
         ) from e
     await _register(orch.ctx.interaction_id, orch)
     pack = orch.ctx.pack
+    try:
+        _server_stt = bool(
+            (os.getenv("STT_API_URL") or "").strip()
+            or (os.getenv("FASTER_WHISPER_MODEL") or "").strip()
+        )
+    except Exception:
+        _server_stt = False
+    try:
+        from src.voice.policy import consent_requirement as _cr0
+
+        _creq0 = _cr0(orch.ctx.region or "") if orch.ctx.region else {}
+    except Exception:
+        _creq0 = {}
     out = {
         "interaction_id": orch.ctx.interaction_id,
         "ws_url": f"/ws/interaction/{orch.ctx.interaction_id}",
+        "twilio_ws_url": f"/ws/twilio/{orch.ctx.interaction_id}",
         "greeting_text": greeting,
         "pack": {
             "id": pack.id,
             "display_name": pack.display_name,
             "entity_labels": pack.entity_labels,
             "pack_version": pack.pack_version,
+            "locale": getattr(pack, "locale", "en-US") or "en-US",
         },
+        "locale": getattr(orch.ctx, "locale", "en-US") or "en-US",
+        "region": getattr(orch.ctx, "region", None),
+        "voice_consent_required": bool(getattr(orch.ctx, "voice_consent_required", False)),
+        "consent_script": getattr(orch.ctx, "voice_consent_script", "") or str((_creq0 or {}).get("script") or ""),
+        "server_stt_available": _server_stt,
     }
     if phase1_active:
         out["phase1_admitted"] = True
@@ -674,12 +780,23 @@ async def takeover(
 @router.post("/{interaction_id}/handoff/accept")
 async def handoff_accept(
     interaction_id: str,
+    body: dict[str, Any] | None = None,
     _auth: bool = Depends(require_api_key),
 ) -> dict[str, Any]:
-    """Customer accepts the handoff offer: queue for supervisor pickup (audit 2.4)."""
+    """Queue a customer-requested handoff for supervisor pickup.
+
+    ``force`` is reserved for the caller-facing "Get me a human" control. A
+    caller may request a person before the automated flow has separately made
+    an offer; treating that as an error made the UI claim a handoff existed
+    while no supervisor queue row had been created.
+    """
     entry = await _get_entry(interaction_id)
+    payload = body if isinstance(body, dict) else {}
     async with entry.lock:
-        out = await entry.orch.accept_handoff()
+        out = await entry.orch.accept_handoff(
+            force=bool(payload.get("force")),
+            source="caller_control" if payload.get("force") else "handoff_offer",
+        )
     return {"interaction_id": interaction_id, **out}
 
 
@@ -956,6 +1073,14 @@ class _WSHooks(OrchestratorHooks):
             pass
 
     async def emit_customer_turn(self, text: str, meta: dict[str, Any]) -> None:
+        # Register word alignment for barge-in reconciliation (P1): the ledger
+        # must record what was audible, not the full planned prompt.
+        try:
+            entry = _active.get(self._interaction_id)
+            if entry is not None:
+                entry.orch._register_spoken_turn(text)
+        except Exception:
+            pass
         await self._to_customer(
             self._channel.send_turn(text, speaker=meta.get("speaker", "agent"), meta=meta)
         )
@@ -1010,6 +1135,33 @@ class _WSHooks(OrchestratorHooks):
             "type": "frustration_update",
             "interaction_id": self._interaction_id,
             "value": float(value),
+        })
+        # P3 fix: the caller-facing widget is an operator surface — mirror the
+        # meter here (was console-only in LiveContactConsole). Channels without
+        # a control-frame surface ignore it.
+        await self._to_customer(self._channel.send_control({
+            "type": "frustration",
+            "value": float(value),
+        }))
+
+    async def emit_turn_latency(self, payload: dict[str, Any]) -> None:
+        frame = {"type": "turn_latency", "interaction_id": self._interaction_id,
+                 **{k: _json_safe(v) for k, v in (payload or {}).items()}}
+        await self._to_customer(self._channel.send_control(frame))
+        await _broadcast_console(frame)
+
+    async def emit_consent_required(self, payload: dict[str, Any]) -> None:
+        frame = {"type": "consent_required", "interaction_id": self._interaction_id,
+                 **{k: _json_safe(v) for k, v in (payload or {}).items()}}
+        await self._to_customer(self._channel.send_control(frame))
+        await _broadcast_console(frame)
+
+    async def emit_supervisor_whisper(self, payload: dict[str, Any]) -> None:
+        # Supervisor-only: console hears the coaching packet, caller never does.
+        await _broadcast_console({
+            "type": "supervisor_whisper",
+            "interaction_id": self._interaction_id,
+            **{k: _json_safe(v) for k, v in (payload or {}).items()},
         })
 
 
@@ -1108,13 +1260,40 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
             msg = await websocket.receive_json()
             mtype = msg.get("type")
             if mtype == "user_turn":
+                # Durable replay dedup lives in ONE place: the orchestrator's
+                # _seen_client_turn (turn_dedup PK). A second pre-insert here
+                # would make every first turn look like a replay (the row it
+                # just wrote) and silently eat 100% of widget turns — so this
+                # route must NOT touch turn_dedup before handle_customer_turn.
+                # Telephony replays are sequenced separately in twilio_ws.
                 t0 = time.monotonic()
+                logger.debug("turn_recv iid=%s", interaction_id)
+                # Normalize ASR confidence: client may send overall float or dict.
+                _asr = msg.get("asr_confidence")
+                _conf = msg.get("confidence")
+                try:
+                    _conf_f = float(_conf) if _conf is not None else None
+                except (TypeError, ValueError):
+                    _conf_f = None
+                if not isinstance(_asr, dict):
+                    _asr = None
                 async with entry.lock:
                     await orch.handle_customer_turn(
                         msg.get("text", ""), final=msg.get("final", True),
-                        client_turn_id=msg.get("turn_id"),
+                        client_turn_id=msg.get("turn_id", msg.get("client_turn_id")),
+                        asr_confidence=_asr,
+                        confidence=_conf_f,
+                        region=msg.get("region"),
+                        dtmf=msg.get("dtmf"),
+                        turn_seq=msg.get("turn_seq", msg.get("seq")),
+                        drive_hint=msg.get("drive_hint", msg.get("driving")),
+                        locale=msg.get("locale"),
                     )
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
+                try:
+                    entry.turn_seq = int(entry.turn_seq or 0) + 1
+                except Exception:
+                    pass
                 from src.routing import get_circuit_breaker
                 cb = get_circuit_breaker()
                 cb.record_turn_latency(elapsed_ms)
@@ -1127,7 +1306,22 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                 if orch.ctx.state in ("DONE", "ABANDONED"):
                     break
             elif mtype == "barge_in":
-                pass
+                # P1 fix: reconcile the ledger to the audible prefix instead of
+                # claiming the full prompt was spoken.
+                try:
+                    _elapsed = msg.get("elapsed_ms", msg.get("elapsedMs", 0))
+                    async with entry.lock:
+                        _audible = await orch.handle_barge_in_interrupt(
+                            int(float(_elapsed or 0)))
+                    try:
+                        await websocket.send_json({
+                            "type": "barge_in_reconciled",
+                            "audible_text": _audible,
+                        })
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             elif mtype == "hangup":
                 hung_up = True
                 async with entry.lock:
@@ -1177,6 +1371,118 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
+    """Twilio Media Streams socket at ``/ws/twilio/{id}`` (Tier-A #8).
+
+    Uses TelephonyMediaBridge (μ-law ⇄ PCM) + drive_mode_guard on live PCM +
+    ServerSpeechStack STT, then the SAME orchestrator path as web_voice — no
+    agent changes. Barge-in clears the Twilio buffer and reconciles the ledger.
+    """
+    if not frontline_enabled():
+        await websocket.close(code=1013)
+        return
+    if websocket.client_state.name != "CONNECTED":
+        await websocket.accept()
+    try:
+        entry, _resumed = await _attach_customer_ws(interaction_id)
+    except HTTPException as e:
+        detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+        try:
+            await websocket.send_json({"type": "error", "detail": detail,
+                                       "recoverable": False})
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+    orch = entry.orch
+    try:
+        from src.channels.stt_tts import ServerSpeechStack
+        from src.voice.wiring import check_drive_mode, telephony_bridge_for
+
+        speech = ServerSpeechStack()
+    except Exception:
+        speech = None  # type: ignore
+        telephony_bridge_for = None  # type: ignore
+        check_drive_mode = None  # type: ignore
+
+    import hashlib as _hashlib
+    import time as _ttime
+    _twilio_seq = 0
+
+    async def _on_speech(pcm_16k: bytes) -> None:
+        nonlocal _twilio_seq
+        try:
+            driving = bool(check_drive_mode(pcm_chunk=pcm_16k)) if check_drive_mode else False
+            text = None
+            try:
+                # Media frames arrive as PCM here; STT stack handles text pilot frames.
+                text = speech.transcribe_chunk("") if speech else None
+            except Exception:
+                text = None
+            if text:
+                # Telephony replay guard: server-side monotonic key per frame.
+                # No client_turn_id is forwarded, so the orchestrator's web
+                # dedup never sees these keys — exactly one durable check.
+                _twilio_seq += 1
+                try:
+                    from src.voice.wiring import acquire_durable_turn_slot
+
+                    _key = "tw_" + _hashlib.sha256(
+                        f"{interaction_id}|{_twilio_seq}|{text}".encode()
+                    ).hexdigest()[:20]
+                    _own = await acquire_durable_turn_slot(
+                        interaction_id, _twilio_seq, _key, str(text))
+                    if not _own:
+                        return
+                except Exception:
+                    pass
+                async with entry.lock:
+                    await orch.handle_customer_turn(
+                        str(text), final=True,
+                        client_turn_id=None, drive_hint=driving or None,
+                    )
+        except Exception:
+            pass
+
+    async def _on_barge() -> None:
+        try:
+            async with entry.lock:
+                await orch.handle_barge_in_interrupt(600)
+        except Exception:
+            pass
+
+    bridge = None
+    try:
+        if telephony_bridge_for is not None:
+            bridge = telephony_bridge_for(websocket, interaction_id, _on_speech, _on_barge)
+            await bridge.run()
+        else:
+            await websocket.close()
+    except Exception:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@router.get("/diagnostics/voice-latency")
+async def voice_latency_diagnostics(
+    _auth: bool = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Live one-trial pipeline proof (benchmark_latency prod caller)."""
+    try:
+        from src.voice.wiring import run_single_trial_diagnostics
+
+        return await run_single_trial_diagnostics()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"diagnostics failed: {type(e).__name__}") from e
 
 
 async def console_ws(websocket: WebSocket) -> None:
@@ -1275,6 +1581,7 @@ async def console_ws(websocket: WebSocket) -> None:
 __all__ = [
     "router",
     "interaction_ws",
+    "twilio_ws",
     "console_ws",
     "_active",
     "reap_orphans",
@@ -1284,6 +1591,7 @@ __all__ = [
     "_ORPHAN_TTL_S",
     "_reconnect_grace_s",
     "_is_reapable",
+    "classify_customer_ws_attach",
     "_attach_customer_ws",
     "_detach_customer_ws",
     "_json_safe",

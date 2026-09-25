@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -63,6 +64,19 @@ ABANDONED = "ABANDONED"
 
 # Handoff SLA: supervisor pickup window before the customer is told sorry.
 HANDOFF_SLA_S = 75
+
+
+def _caller_requested_human(text: str) -> bool:
+    """Recognise an explicit request for a live person without over-matching."""
+    value = (text or "").lower()
+    if not value:
+        return False
+    person = r"(?:human|person|representative|supervisor|live agent|real person|someone)"
+    return bool(re.search(
+        rf"\b(?:talk|speak|connect|transfer|get|need|want)\b.{{0,28}}\b{person}\b"
+        rf"|\b{person}\b\s+(?:please|now|help)\b",
+        value,
+    ))
 
 # Deterministic wrap-up when FRONTLINE_MAX_TURNS is hit (not an abrupt drop).
 BUDGET_WRAP_SCRIPT = (
@@ -99,6 +113,9 @@ class OrchestratorHooks:
     emit_handoff_offer: Optional[Callable[[], Awaitable[None]]] = None
     emit_interaction_ended: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
     emit_frustration_update: Optional[Callable[[float], Awaitable[None]]] = None
+    emit_turn_latency: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
+    emit_consent_required: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
+    emit_supervisor_whisper: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
 
     async def _maybe(self, fn: Optional[Callable], *args: Any) -> None:
         if fn is not None:
@@ -128,8 +145,22 @@ class Orchestrator:
         self._pre_supervised_state: str | None = None
 
     # ── Public API ────────────────────────────────────────────────────────
-    async def start(self) -> str:
+    async def start(self, *, region: str | None = None, locale: str | None = None) -> str:
         """Emit the greeting. Returns the greeting text."""
+        try:
+            if region:
+                self.ctx.region = str(region).strip() or None
+            pack_locale = getattr(self.ctx.pack, "locale", None) or "en-US"
+            self.ctx.locale = (locale or pack_locale or "en-US").strip() or "en-US"
+            if self.ctx.region:
+                from src.voice.policy import consent_requirement as _cr2
+
+                _creq = _cr2(self.ctx.region)
+                if _creq.get("requires_explicit_voice_consent"):
+                    self.ctx.voice_consent_required = True
+                    self.ctx.voice_consent_script = str(_creq.get("script") or "")
+        except Exception:
+            pass
         self._transition(GREETING, COLLECTING)
         greeting = self.ctx.pack.greeting
         try:
@@ -159,6 +190,8 @@ class Orchestrator:
         self, text: str, final: bool = True, client_turn_id: str | None = None,
         asr_confidence: dict[str, float] | None = None,
         region: str | None = None, dtmf: str | None = None,
+        confidence: float | None = None, turn_seq: int | None = None,
+        drive_hint: bool | None = None, locale: str | None = None,
     ) -> None:
         """Process a customer turn (text from STT or text input).
 
@@ -166,7 +199,13 @@ class Orchestrator:
         turn; a seen id is dropped after recording nothing — no double
         sentiment scoring, no double elicitation answers.
         ``asr_confidence`` 2.1: {slot: 0..1} forwarded to intake readback.
+        ``confidence``: overall Web Speech confidence 0..1, retained for
+        diagnostics only. It is not entity-level evidence and must never be
+        guessed onto the next missing slot.
         ``region`` 2.4: two-party/biometric consent branching. ``dtmf`` 2.4.
+        ``turn_seq``: monotonic client sequence for durable dedup diagnostics.
+        ``drive_hint``: client-reported driving state for drive_mode_guard.
+        ``locale``: BCP-47 client locale; pack locale wins when set.
         """
         # 2.1/2.4 observability: turn latency + budget
         import time as _t
@@ -176,20 +215,59 @@ class Orchestrator:
             _obs("turn_received", 1.0)
         except Exception:
             pass
-        # 2.4: region-aware consent (overrides generic preamble when set)
+        # 2.4 + P0 fix: region-aware consent is a GATE, not a ledger note.
+        # When the region requires explicit voice consent, the contact cannot
+        # proceed to intake until the caller affirmatively consents. The script
+        # is spoken (customer turn) and surfaced to the UI (consent frame).
         if region:
+            self.ctx.region = str(region).strip() or self.ctx.region
+        if locale:
+            try:
+                pack_locale = getattr(self.ctx.pack, "locale", None) or "en-US"
+                # Pack locale is authoritative; client locale is a fallback hint.
+                if (pack_locale or "en-US") == "en-US":
+                    self.ctx.locale = str(locale).strip() or self.ctx.locale
+                else:
+                    self.ctx.locale = pack_locale
+            except Exception:
+                pass
+        if self.ctx.region:
             try:
                 from src.voice.policy import consent_requirement as _cr
-                _creq = _cr(region)
+                _creq = _cr(self.ctx.region)
                 if _creq.get("requires_explicit_voice_consent"):
-                    record_action(self._orchestrator_action(
-                        "state_transition",
-                        input_summary=f"region={region} voice consent required",
-                        output_summary=_creq.get("script", "")[:500],
-                    ))
+                    self.ctx.voice_consent_required = True
+                    self.ctx.voice_consent_script = str(_creq.get("script") or "")
+            except Exception:
+                pass
+        # Web Speech supplies a confidence for the whole utterance, not for a
+        # recognised vehicle entity. Mapping it to the next missing slot made
+        # an ordinary report such as "my car is broken" look like a dubious
+        # model year, then repeated the same bogus readback forever. Keep the
+        # score for diagnostics; only channels that supply per-slot confidence
+        # may trigger an entity readback.
+        if (not asr_confidence) and (confidence is not None):
+            try:
+                c = float(confidence)
+                if 0.0 <= c <= 1.0:
+                    self.ctx.last_asr_confidence = c
+            except Exception:
+                pass
+        elif isinstance(asr_confidence, dict) and asr_confidence:
+            try:
+                vals = [float(x) for x in asr_confidence.values()
+                        if isinstance(x, (int, float))]
+                if vals:
+                    self.ctx.last_asr_confidence = min(vals)
+            except Exception:
+                pass
+        if turn_seq is not None:
+            try:
+                self.ctx.last_turn_seq = int(turn_seq)  # diagnostics only
             except Exception:
                 pass
         if self.ctx.state in (DONE, ABANDONED):
+            logger.debug("turn early return: state=%s iid=%s", self.ctx.state, self.ctx.interaction_id)
             return
         if client_turn_id and self._seen_client_turn(client_turn_id):
             try:
@@ -243,6 +321,143 @@ class Orchestrator:
             text,
             {"speaker": "customer"},
         )
+
+        # ── P0: explicit voice-consent gate (two-party/biometric regions) ──
+        # Until consent is obtained, intake/slots/enrichment are blocked. The
+        # script is spoken once; an affirmative reply unlocks the contact.
+        if self.ctx.voice_consent_required and not self.ctx.voice_consent_obtained:
+            try:
+                from src.frontline.elicitation import looks_like_confirmation as _llc
+
+                if _llc(text) or text.strip().lower() in (
+                    "i consent", "i agree", "yes i consent", "consent",
+                ):
+                    self.ctx.voice_consent_obtained = True
+                    record_action(self._orchestrator_action(
+                        "voice_consent_obtained",
+                        input_summary=f"region={self.ctx.region} version={self.ctx.voice_consent_version}",
+                        output_summary="caller consented; contact unlocked",
+                    ))
+                    ack = "Thanks — recording your consent. Now, "
+                    try:
+                        ack += self.ctx.pack.manifest.slot_frame[0].prompt
+                    except Exception:
+                        ack += "what's going on with your vehicle?"
+                    await self.hooks._maybe(
+                        self.hooks.emit_customer_turn,
+                        ack,
+                        {"speaker": "agent", "fast_path": True, "llm_used": False},
+                    )
+                    self.ctx.record_turn("agent", ack, llm_used=False)
+                    return
+            except Exception:
+                pass
+            script = self.ctx.voice_consent_script or (
+                "This call may be recorded for quality and safety. "
+                "Say 'I consent' to continue, or type to use text instead."
+            )
+            record_action(self._orchestrator_action(
+                "voice_consent_required",
+                input_summary=f"region={self.ctx.region} gate blocks intake",
+                output_summary=script[:500],
+            ))
+            if not supervised:
+                await self.hooks._maybe(
+                    self.hooks.emit_customer_turn,
+                    script,
+                    {"speaker": "agent", "fast_path": True, "llm_used": False,
+                     "consent_required": True},
+                )
+                self.ctx.record_turn("agent", script, llm_used=False)
+            await self.hooks._maybe(
+                getattr(self.hooks, "emit_consent_required", None),
+                {"region": self.ctx.region, "script": script,
+                 "version": self.ctx.voice_consent_version},
+            )
+            return
+
+        # A spoken request should have the same effect as the caller-facing
+        # button. Previously only a prior automated offer could create the
+        # handoff row, so "talk to a human" was treated as ordinary intake
+        # text and the caller was left without a real pickup request.
+        if not supervised and _caller_requested_human(text):
+            await self.accept_handoff(force=True, source="spoken_request")
+            return
+
+        # ── Drive-mode guard (automotive safety): spoken + ledgered once ────
+        try:
+            from src.voice.wiring import check_drive_mode, drive_safety_script
+
+            _driving = bool(check_drive_mode(
+                text_hint=text, explicit_hint=bool(drive_hint) if drive_hint is not None else None,
+            ))
+            if _driving and not self.ctx.drive_mode_offered:
+                self.ctx.drive_mode = True
+                self.ctx.drive_mode_offered = True
+                _dscript = drive_safety_script()
+                record_action(self._orchestrator_action(
+                    "drive_mode_offered",
+                    input_summary="driving language or client drive_hint",
+                    output_summary=_dscript[:500],
+                ))
+                await self.hooks._maybe(self.hooks.emit_activity, {
+                    "agent": "drive_mode_guard",
+                    "action_type": "drive_mode_detected",
+                    "summary": _dscript,
+                    "ok": True,
+                })
+                if not supervised:
+                    await self.hooks._maybe(
+                        self.hooks.emit_customer_turn,
+                        _dscript,
+                        {"speaker": "agent", "fast_path": True, "llm_used": False,
+                         "drive_mode": True},
+                    )
+                    self.ctx.record_turn("agent", _dscript, llm_used=False)
+                # Do not return: driving callers still get intake, but prompts
+                # downstream stay short and the callback offer is queued.
+        except Exception:
+            pass
+
+        # ── Spoken VIN / plate capture (phonetic + ISO-3779) ───────────────
+        try:
+            from src.voice.wiring import detect_vin_in_text
+
+            _vin = detect_vin_in_text(text)
+            if _vin.get("vin") and _vin.get("valid") and not self.ctx.slots.get("vin"):
+                self.ctx.slots["vin"] = str(_vin["vin"])
+                self.ctx.vin = str(_vin["vin"])
+                record_action(self._orchestrator_action(
+                    "slot_extracted",
+                    input_summary=f"spoken VIN normalized: '{text[:120]}'",
+                    output_summary=f"vin={_vin['vin']} iso3779=valid",
+                ))
+                await self.hooks._maybe(self.hooks.emit_activity, {
+                    "agent": "intake",
+                    "action_type": "vin_captured",
+                    "summary": f"VIN {_vin['vin']} captured and check-digit verified.",
+                    "ok": True,
+                })
+                await self.hooks._maybe(
+                    self.hooks.emit_slots_update, dict(self.ctx.slots))
+            elif _vin.get("vin") and not _vin.get("valid"):
+                record_action(self._orchestrator_action(
+                    "slot_extracted",
+                    input_summary=f"spoken VIN failed check digit: {_vin.get('vin')}",
+                    output_summary=_vin.get("prompt", "")[:500],
+                ))
+                if not supervised:
+                    await self.hooks._maybe(
+                        self.hooks.emit_customer_turn,
+                        str(_vin.get("prompt") or "Please read the VIN again slowly."),
+                        {"speaker": "agent", "fast_path": True, "llm_used": False,
+                         "vin_retry": True},
+                    )
+                    self.ctx.record_turn(
+                        "agent", str(_vin.get("prompt") or ""), llm_used=False)
+                return
+        except Exception:
+            pass
 
         # Spoken confirmation of a prior diagnostic read-back.
         # Any answer (yes/no or free text) to a pending diagnostic question is
@@ -429,6 +644,28 @@ class Orchestrator:
                 {"speaker": "agent", "fast_path": True, "llm_used": False},
             )
             self.ctx.record_turn("agent", ires["question"], llm_used=False)
+            self._register_spoken_turn(ires["question"])
+            # Supervisor whisper (Tier-A): coach on the P1 without the caller hearing.
+            try:
+                from src.voice.wiring import build_supervisor_whisper
+
+                _wh = build_supervisor_whisper(
+                    self.ctx.interaction_id, dict(self.ctx.slots),
+                    severity="Critical", priority="P1", safety_tripped=True,
+                    kill_terms=[str(ires.get("kill_switch") or "")],
+                    sentiment_peak=float(self.ctx.peak_frustration or 0.0),
+                )
+                if _wh:
+                    await self.hooks._maybe(self.hooks.emit_activity, {
+                        "agent": "supervisor",
+                        "action_type": "supervisor_whisper",
+                        "summary": str(_wh.get("whisper_audio_ssml") or "")[:500],
+                        "ok": True,
+                    })
+                    await self.hooks._maybe(
+                        getattr(self.hooks, "emit_supervisor_whisper", None), _wh)
+            except Exception:
+                pass
             # Sentinel escalation in parallel
             await SentinelAgent(self.ctx).run(trigger="escalation")
             # Fire P1 safety escalation alert (non-blocking)
@@ -577,6 +814,17 @@ class Orchestrator:
         # question was just asked and we must wait for the customer's answer
         # before transitioning). This preserves the one-question-per-turn policy.
         #
+        # Tier-A confirmation_flow: full-frame readback on voice channels before
+        # enrichment (wired, not just tested). Bounded: one prompt + one repair.
+        if (
+            not question
+            and self.ctx.has_required_slots()
+            and self.ctx.state == COLLECTING
+            and not supervised
+            and self.ctx.channel in ("web_voice", "voice", "telephony", "twilio_media")
+        ):
+            if await self._confirm_frame_gate(text):
+                return
         # Slot confirmation gate (board #4): a mis-heard entity compounds
         # through cluster pick → case → corpus. One readback turn with a
         # bounded single correction round precedes enrichment.
@@ -594,6 +842,142 @@ class Orchestrator:
             and self.ctx.state == COLLECTING
         ):
             await self._enter_enriching()
+        # Live latency HUD: every turn reports elapsed vs budget (non-blocking).
+        try:
+            import time as _t3
+            from src.voice.wiring import live_turn_budget_verdict
+
+            _elapsed = (_t3.perf_counter() - _turn_start) * 1000.0
+            self.ctx.last_turn_latency_ms = float(_elapsed)
+            await self.hooks._maybe(
+                getattr(self.hooks, "emit_turn_latency", None),
+                {"elapsed_ms": round(float(_elapsed), 1),
+                 **live_turn_budget_verdict(float(_elapsed))},
+            )
+        except Exception:
+            pass
+
+    def _register_spoken_turn(self, text: str) -> None:
+        """Track the last agent utterance for barge-in reconciliation (P1)."""
+        try:
+            from src.voice.wiring import estimate_word_alignment
+
+            self.ctx.last_agent_text = str(text or "")
+            self.ctx.last_agent_word_markers = estimate_word_alignment(text or "")
+            try:
+                turns = [t for t in (self.ctx.turns or []) if t.get("speaker") == "agent"]
+                if turns:
+                    self.ctx.last_agent_action_id = str(turns[-1].get("turn_id") or "")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    async def handle_barge_in_interrupt(self, elapsed_ms: int = 0) -> str:
+        """Reconcile a barge-in against estimated TTS timestamps (P1 fix).
+
+        Returns the audible-prefix text and ledgers `spoken_turn_truncated`
+        so the immutable ledger never claims unheard audio was spoken.
+        """
+        try:
+            from src.voice.wiring import reconcile_barge_in
+
+            audible = reconcile_barge_in(
+                self.ctx.interaction_id,
+                self.ctx.last_agent_action_id,
+                self.ctx.last_agent_text or "",
+                list(self.ctx.last_agent_word_markers or []),
+                int(elapsed_ms or 0),
+            )
+            record_action(self._orchestrator_action(
+                "spoken_turn_reconciled",
+                input_summary=f"barge_in at {int(elapsed_ms or 0)}ms",
+                output_summary=(audible or "[INTERRUPTED]")[:500],
+            ))
+            await self.hooks._maybe(self.hooks.emit_activity, {
+                "agent": "voice_reconciler",
+                "action_type": "spoken_turn_truncated",
+                "summary": audible or "[INTERRUPTED]",
+                "ok": True,
+            })
+            return audible or "[INTERRUPTED]"
+        except Exception:
+            return "[INTERRUPTED]"
+
+    async def _confirm_frame_gate(self, text: str) -> bool:
+        """Full-frame confirmation via confirmation_flow (Tier-A #7).
+
+        Returns True when this turn is consumed by the confirmation prompt or
+        its repair. Bounded to one prompt + one evaluation.
+        """
+        try:
+            from src.voice.wiring import confirmation_prompt_for, evaluate_confirmation_reply
+        except Exception:
+            return False
+        if self.ctx.confirmation_phase == "done":
+            return False
+        if self.ctx.confirmation_phase == "pending":
+            try:
+                res = evaluate_confirmation_reply(
+                    dict(self.ctx.slots), channel=self.ctx.channel, text=text or "")
+            except Exception:
+                return False
+            outcome = str(res.get("outcome") or "unknown")
+            reply = str(res.get("reply") or "")
+            record_action(self._orchestrator_action(
+                "frame_confirmation_evaluated",
+                input_summary=f"outcome={outcome} reply={text[:200]}",
+                output_summary=reply[:500],
+            ))
+            if outcome in ("confirmed", "unknown", "declined_to_provide"):
+                self.ctx.confirmation_phase = "done"
+                return False
+            if outcome == "safety_preempted":
+                self.ctx.confirmation_phase = "done"
+                return False
+            if outcome == "human_requested":
+                self.ctx.confirmation_phase = "done"
+                try:
+                    await self.hooks._maybe(self.hooks.emit_handoff_offer)
+                except Exception:
+                    pass
+                return False
+            # corrected / rejected: speak the repair once, then proceed.
+            self.ctx.confirmation_phase = "done"
+            if reply and not res.get("ok"):
+                try:
+                    await self.hooks._maybe(
+                        self.hooks.emit_customer_turn, reply,
+                        {"speaker": "agent", "fast_path": True, "llm_used": False},
+                    )
+                    self.ctx.record_turn("agent", reply, llm_used=False)
+                    return True
+                except Exception:
+                    return False
+            return False
+        # collection → emit the frame prompt once.
+        try:
+            prompt = confirmation_prompt_for(dict(self.ctx.slots), channel=self.ctx.channel)
+        except Exception:
+            prompt = None
+        if not prompt:
+            return False
+        self.ctx.confirmation_phase = "pending"
+        self.ctx.confirmation_attempts = int(self.ctx.confirmation_attempts or 0) + 1
+        record_action(self._orchestrator_action(
+            "frame_confirmation_asked",
+            input_summary="full slot frame readback before enrichment",
+            output_summary=prompt[:500],
+        ))
+        await self.hooks._maybe(
+            self.hooks.emit_customer_turn, prompt,
+            {"speaker": "agent", "fast_path": True, "llm_used": False,
+             "frame_confirmation": True},
+        )
+        self.ctx.record_turn("agent", prompt, llm_used=False)
+        self._register_spoken_turn(prompt)
+        await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
+        return True
 
     def _confirmation_summary(self) -> str:
         s = self.ctx.slots or {}
@@ -893,7 +1277,9 @@ class Orchestrator:
                 return False
 
     # ── Handoff queue (audit 2.4) ──────────────────────────────────────────
-    async def accept_handoff(self) -> dict[str, Any]:
+    async def accept_handoff(
+        self, *, force: bool = False, source: str = "handoff_offer"
+    ) -> dict[str, Any]:
         """Customer accepted the handoff offer: park in HANDOFF_PENDING.
 
         Pushes a supervisor-queue row with a 60–90s SLA and notifies the
@@ -901,10 +1287,28 @@ class Orchestrator:
         the reaper sweep restores the prior state, apologises, and ledgers
         handoff_unfulfilled — the offer is never a dead end.
         """
+        if self.ctx.state == HANDOFF_PENDING:
+            # Re-clicking the visible handoff control must not make duplicate
+            # queue rows or tell the caller that their request failed.
+            return {
+                "accepted": True,
+                "already_pending": True,
+                "handoff_id": None,
+                "sla_s": HANDOFF_SLA_S,
+            }
         if self.ctx.state not in (COLLECTING, ENRICHING):
             return {"accepted": False, "reason": f"state={self.ctx.state}"}
         if not self.ctx.handoff_offered:
-            return {"accepted": False, "reason": "no offer outstanding"}
+            if not force:
+                return {"accepted": False, "reason": "no offer outstanding"}
+            # A caller pressing "Get me a human" is an explicit request, not a
+            # failed attempt to accept an offer that has not been shown yet.
+            self.ctx.handoff_offered = True
+            record_action(self._orchestrator_action(
+                "handoff_offer_emitted",
+                input_summary=f"explicit human request via {source}",
+                output_summary="caller requested a human specialist",
+            ))
         from datetime import timedelta as _td
 
         from src.data.timeutil import utc_now
@@ -940,6 +1344,9 @@ class Orchestrator:
             ),
             "ok": True,
         })
+        # Notify both caller and console that this is now a live queue item.
+        # This also keeps a spoken request visually consistent with the button.
+        await self.hooks._maybe(self.hooks.emit_handoff_offer)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             "Connecting you to a human specialist now — thanks for holding.",
@@ -1992,6 +2399,8 @@ async def create_interaction(
     pack_id: str | None = None,
     hooks: OrchestratorHooks | None = None,
     customer_ref: str | None = None,
+    region: str | None = None,
+    locale: str | None = None,
 ) -> tuple[Orchestrator, str]:
     """Create an interaction row + orchestrator. Returns (orchestrator, greeting).
 
@@ -2062,7 +2471,7 @@ async def create_interaction(
 
         orch = Orchestrator(interaction_id, pack, channel=channel, hooks=hooks)
         orch.ctx.customer_ref = customer_ref
-        greeting = await orch.start()
+        greeting = await orch.start(region=region, locale=locale)
         return orch, greeting
     except Exception:
         DRAIN.unregister(interaction_id)

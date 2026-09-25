@@ -20,6 +20,10 @@ _WS_INTERACTION = re.compile(r"^/ws/interaction/([^/]+)")
 _HTTP_INTERACTION = re.compile(r"/interactions/([^/]+)")
 _INVESTIGATION = re.compile(r"/investigations/([^/]+)")
 _CLUSTER = re.compile(r"/clusters/([^/]+)")
+_AUDIT = re.compile(r"/audits/([^/?#]+)")
+_CASE = re.compile(r"/cases/([^/?#]+)")
+_CASE_STATUS = re.compile(r"/cases/status/([^/?#]+)")
+_DSR = re.compile(r"/dsr/([^/?#]+)")
 
 
 class IdentifierGuardASGI:
@@ -44,6 +48,19 @@ class IdentifierGuardASGI:
             inv = _INVESTIGATION.search(path)
             if inv:
                 safe_token_id(inv.group(1), kind="investigation_id")
+            aud = _AUDIT.search(path)
+            if aud and aud.group(1) not in {"export", ""}:
+                safe_token_id(aud.group(1), kind="interaction_id")
+            case = _CASE.search(path)
+            if case and case.group(1) not in {"export", "status", ""}:
+                safe_token_id(case.group(1), kind="case_id")
+            # /cases/status/{case_id} — first segment is "status", validate trailing id
+            _m_status = _CASE_STATUS.search(path)
+            if _m_status:
+                safe_token_id(_m_status.group(1), kind="case_id")
+            dsr = _DSR.search(path)
+            if dsr:
+                safe_token_id(dsr.group(1), kind="interaction_id")
             cl = _CLUSTER.search(path)
             if cl and cl.group(1) not in {"rebuild", ""}:
                 safe_cluster_id(cl.group(1))

@@ -169,9 +169,27 @@ _DTMF_RE = re.compile(r"^(?:dtmf:)?([0-9*#]+)$", re.I)
 
 
 def parse_dtmf(text: str) -> str | None:
-    """DTMF fallback: 'press 1 if…' — accept '1', 'DTMF:1', '#', '*'."""
-    m = _DTMF_RE.match((text or "").strip())
-    return m.group(1) if m else None
+    """DTMF fallback: 'press 1 if…' — accept '1', 'DTMF:1', '#', '*'.
+
+    A bare multi-digit utterance such as "2019" is a vehicle year, not a
+    keypad selection — only treat it as DTMF when it carries an explicit
+    ``dtmf:`` prefix. Single keypad chars (0-9, *, #) match bare.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = _DTMF_RE.match(raw)
+    if not m:
+        return None
+    digits = m.group(1)
+    # Explicit prefix is always honoured (telephony path).
+    if raw.lower().startswith("dtmf:"):
+        return digits
+    # Bare input: single keypad press only. Anything longer (years like
+    # "2019", case numbers, phone fragments) must go through slot extraction.
+    if len(digits) == 1 and digits in "0123456789*#":
+        return digits
+    return None
 
 
 def dtmf_fallback_prompt(options: list[str]) -> str:

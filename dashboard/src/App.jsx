@@ -7,17 +7,27 @@ import Settings from "../routes/Settings.jsx";
 import CommandCenter from "../routes/CommandCenter.jsx";
 import SignIn from "../routes/SignIn.jsx";
 import UserJourneyGuide from "../routes/UserJourneyGuide.jsx";
+import AnalyticsDesk from "../routes/AnalyticsDesk.jsx";
+import IssueDesk from "../routes/IssueDesk.jsx";
 import TrustDesk from "../routes/TrustDesk.jsx";
 import PlatformDesk from "../routes/PlatformDesk.jsx";
+import EnterpriseOps from "../routes/EnterpriseOps.jsx";
+import PlatformOS from "../routes/PlatformOS.jsx";
+import TrustPipeline from "../routes/TrustPipeline.jsx";
+import QualityEconomics from "../routes/QualityEconomics.jsx";
+import InsightsBoard from "../routes/InsightsBoard.jsx";
+import FeatureStudio from "../routes/FeatureStudio.jsx";
+import PackBuilder from "../routes/PackBuilder.jsx";
 import CommandPalette from "./ui/CommandPalette.jsx";
 import { ToastProvider, useToast } from "./ui/Toast.jsx";
 import { ErrorBoundary } from "./ui/Feedback.jsx";
 import { useHotkeys, useLocalStorage } from "./ui/hooks.js";
-import { AUTH_EVENT, apiHeaders, completeGoogleHandoff, fetchMe } from "./apiAuth.js";
+import { AUTH_EVENT, apiHeaders, completeGoogleHandoff, fetchMe, hasConsoleAccess } from "./apiAuth.js";
 import AccountSignIn from "./ui/AccountSignIn.jsx";
 import { canonicalizeHash, goHash, hashQueryObject, openCases, openConsole, parseLocationHash, simulateTraffic } from "./ui/opsActions.js";
 import {
   IconAlert,
+  IconChart,
   IconFolder,
   IconGear,
   IconGrid,
@@ -43,6 +53,7 @@ const NAV_GROUPS = [
     label: "Intelligence",
     items: [
       { id: "warning", label: "Early warning", Icon: IconAlert, route: EarlyWarningBoard, keywords: "clusters risk investigations insights csat dollars copq" },
+      { id: "analytics", label: "Analytics", Icon: IconChart, route: AnalyticsDesk, keywords: "analytics telemetry data analysis charts funnel satisfaction severity" },
     ],
   },
   {
@@ -58,7 +69,16 @@ const NAV_GROUPS = [
 const ALL_NAV = NAV_GROUPS.flatMap((g) => g.items);
 const EXTRA_PAGES = [
   { id: "guide", label: "User guide", route: UserJourneyGuide, keywords: "guide walkthrough journey onboarding" },
-  { id: "signin", label: "Sign in", route: SignIn, keywords: "google oidc" },
+  { id: "signin", label: "Sign in", route: SignIn, keywords: "google oidc login" },
+  { id: "signup", label: "Sign up", route: SignIn, keywords: "create account register signup" },
+  { id: "issue", label: "Issue", route: IssueDesk, keywords: "issue cluster investigation failure" },
+  { id: "insights", label: "Insights", route: InsightsBoard, keywords: "csat product gap analytics" },
+  { id: "economics", label: "Quality economics", route: QualityEconomics, keywords: "copq dollar roi hotspot map warranty" },
+  { id: "trust", label: "Pipeline trust", route: TrustPipeline, keywords: "lineage provenance validation queue usage" },
+  { id: "enterprise", label: "Enterprise ops", route: EnterpriseOps, keywords: "incidents postmortem copilot memory scenarios" },
+  { id: "platform-os", label: "Platform OS", route: PlatformOS, keywords: "governance deployments proposals v3" },
+  { id: "studio", label: "Feature studio", route: FeatureStudio, keywords: "features sandbox prompt test" },
+  { id: "builder", label: "Pack builder", route: PackBuilder, keywords: "pack builder upload yaml" },
 ];
 const ALL_PAGES = [...ALL_NAV, ...EXTRA_PAGES];
 const THEMES = ["dark", "light"];
@@ -145,10 +165,21 @@ function Shell() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [me, setMe] = useState(null);
   const toast = useToast();
+  // Route guard: "checking" | "allowed" | "denied". Every route except
+  // signin/signup requires a signed session (or, on auth-required servers,
+  // a validated API key). Anonymous hash navigation bounces to signin.
+  const [gate, setGate] = useState("checking");
 
-  const extra = route === "signin" ? EXTRA_PAGES.find((p) => p.id === "signin") : null;
+  const extra = (route === "signin" || route === "signup")
+    ? EXTRA_PAGES.find((p) => p.id === route)
+    : null;
+  // Single-issue route: #issue/<cluster_id> (not in the nav).
+  const issueClusterId = route === "issue" || route.startsWith("issue/")
+    ? decodeURIComponent(route === "issue" ? "" : route.slice("issue/".length))
+    : null;
+  const issuePage = EXTRA_PAGES.find((p) => p.id === "issue");
   const fallback = ALL_NAV.find((n) => n.id === "command") || ALL_NAV[0];
-  const active = extra || ALL_PAGES.find((n) => n.id === route) || fallback;
+  const active = extra || (issueClusterId !== null && issuePage) || ALL_PAGES.find((n) => n.id === route) || fallback;
   const Page = active.route;
   const liveSessionRoute = active.id === "call" || active.id === "console";
   const hashQuery = hashQueryObject();
@@ -186,13 +217,47 @@ function Shell() {
   }, [loadHealth, route]);
 
   useEffect(() => {
-    if (route === "signin" || route === "guide") return;
+    if (route === "signin" || route === "signup" || route === "guide") return;
     if (route === "main") {
       setRoute("command");
       return;
     }
+    if (route === "issue" || route.startsWith("issue/")) return;
     if (!ALL_PAGES.some((n) => n.id === route)) setRoute("command");
   }, [route, setRoute]);
+
+  // Mandatory auth gate: no session/key → no console (and no guide).
+  useEffect(() => {
+    if (route === "signin" || route === "signup") {
+      setGate("allowed");
+      return undefined;
+    }
+    let cancelled = false;
+    const check = async () => {
+      // Google OIDC handoff (?handoff=) completes into a session — don't
+      // bounce mid-flow; the handoff handler fires AUTH_EVENT on completion.
+      try {
+        if (parseLocationHash().params.get("handoff")) return;
+      } catch {
+        /* fall through to the check */
+      }
+      setGate((g) => (g === "allowed" ? g : "checking"));
+      const res = await hasConsoleAccess().catch(() => ({ allowed: false }));
+      if (cancelled) return;
+      if (res.allowed) {
+        setGate("allowed");
+      } else {
+        setGate("denied");
+        setRoute("signin");
+      }
+    };
+    check();
+    window.addEventListener(AUTH_EVENT, check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(AUTH_EVENT, check);
+    };
+  }, [route]);
 
   useEffect(() => {
     const raw = window.location.hash.slice(1);
@@ -435,27 +500,71 @@ function Shell() {
   const statusTone = healthError ? "danger" : health?.status === "ok" ? "ok" : "warn";
   const statusText = healthError ? "unreachable" : health?.status || "connecting";
 
-  if (route === "signin") {
+  if (route === "signin" || route === "signup") {
     return (
       <div className="signin-shell">
         <header className="signin-top">
-          <button
-            type="button"
-            className="brand-mark signin-brand-btn"
-            onClick={() => setRoute("command")}
-          >
-            Skew <em>AI</em>
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            onClick={cycleTheme}
-            title={`Theme: ${activeTheme} (t)`}
-          >
-            {activeTheme === "light" ? "Dark" : "Light"}
-          </button>
+          <div className="signin-top-brand-group">
+            <button
+              type="button"
+              className="brand-mark signin-brand-btn"
+              onClick={() => setRoute("command")}
+            >
+              Skew <em>AI</em>
+            </button>
+            <span className="signin-brand-tag">Ops Console</span>
+            <span className="signin-top-divider" aria-hidden="true">/</span>
+            <div className="signin-top-status" title="Voice Swarm & DuckDB Audit Engine Operational">
+              <span className="status-dot-pulse" aria-hidden="true" />
+              <span>Core Observability Engine Active</span>
+            </div>
+          </div>
+
+          <div className="signin-top-actions">
+            <button
+              type="button"
+              className="signin-top-link-btn"
+              onClick={() => setRoute("guide")}
+            >
+              Architecture Guide
+            </button>
+            {me?.signed_in && (
+              <button
+                type="button"
+                className="signin-top-user-pill"
+                onClick={() => setRoute("command")}
+                title="Return to active console"
+              >
+                <span className="user-dot" />
+                <span>{me.subject || "Operator"}</span>
+                <span className="pill-arrow">→</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="theme-toggle-pill"
+              onClick={cycleTheme}
+              title={`Toggle theme (${activeTheme === "light" ? "Switch to dark" : "Switch to light"}) · Shortcut (t)`}
+            >
+              <span className="theme-toggle-icon">{activeTheme === "light" ? "☀️" : "🌙"}</span>
+              <span className="theme-toggle-label">{activeTheme === "light" ? "Light" : "Dark"}</span>
+            </button>
+          </div>
         </header>
-        <SignIn />
+        <SignIn
+          initialMode={route === "signup" ? "signup" : "signin"}
+          onNavigate={setRoute}
+        />
+      </div>
+    );
+  }
+
+  // Never flash protected content to anonymous visitors while checking.
+  if (gate !== "allowed") {
+    return (
+      <div className="gate-loading" role="status" aria-label="Checking access">
+        <div className="gate-spinner" aria-hidden="true" />
+        <p>Checking access…</p>
       </div>
     );
   }
@@ -677,7 +786,7 @@ function Shell() {
 
         <main className="main page-enter" id="main" key={active.id} tabIndex={-1}>
           <ErrorBoundary key={liveSessionRoute ? active.id : `${active.id}-${refreshKey}`}>
-            <Page refreshKey={refreshKey} health={health} hashQuery={hashQuery} />
+            <Page refreshKey={refreshKey} health={health} hashQuery={hashQuery} issueId={issueClusterId} />
           </ErrorBoundary>
         </main>
       </div>

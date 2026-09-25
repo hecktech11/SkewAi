@@ -32,11 +32,11 @@ services:
       FRONTLINE_ENABLED: "1"
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
-      # Explicit local-pilot acknowledgment (item 1): the container must bind
-      # 0.0.0.0 for port publishing, but host publishing defaults to loopback
-      # (FRONTLINE_PUBLISH_OPEN). This ACK documents the operator intent and is
-      # IGNORED in production-like mode (ENV/PILOT_HARDENED/SOC2_MODE).
-      FRONTLINE_OPEN_BIND_ACK: ${FRONTLINE_OPEN_BIND_ACK:-1}
+      # Explicit local-pilot acknowledgment: container binds 0.0.0.0 for Docker networking.
+      # Requires explicit FRONTLINE_OPEN_BIND_ACK=1 to run unauthenticated if published.
+      # Ignored in production-like mode (ENV/PILOT_HARDENED/SOC2_MODE).
+      FRONTLINE_AUTH_REQUIRED: ${FRONTLINE_AUTH_REQUIRED:-1}
+      FRONTLINE_OPEN_BIND_ACK: ${FRONTLINE_OPEN_BIND_ACK:-}
       FRONTLINE_API_KEY: ${FRONTLINE_API_KEY:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}

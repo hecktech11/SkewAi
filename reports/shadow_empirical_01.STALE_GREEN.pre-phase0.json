@@ -1,0 +1,17 @@
+{
+  "stale": true,
+  "do_not_brief": true,
+  "superseded_by": "reports/shadow_empirical_01.json",
+  "reason": "Pre-Phase-0 green: corpus transcripts contain exact lexicon terms and gazetteer strings, so recall 1.0/category 1.0 measure lexicon-shaped input only. Open-vocabulary paraphrase gap pinned in tests/frontline/test_slm_probes.py. Not a go/no-go artifact.",
+  "original_overall_verdict": "green",
+  "original_meta": {
+    "mode": "batch",
+    "pack_id": "automotive_nhtsa",
+    "sample_size": 150,
+    "seed": 42,
+    "target_cost_usd": 0.45,
+    "data_source": "data/safety_eval_corpus.jsonl",
+    "source_type": "empirical_ground_truth",
+    "synthetic_self_labels": false
+  }
+}

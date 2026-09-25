@@ -209,8 +209,20 @@ def validate_startup_security() -> dict[str, Any]:
                 )
             if session.lower() in WEAK_KEY_VALUES:
                 problems.append("Refusing weak SESSION_SECRET value in hardened mode.")
-        elif not key:
-            problems.append("SESSION_SECRET or FRONTLINE_API_KEY required for sessions.")
+            if key and session == key:
+                problems.append(
+                    "SESSION_SECRET must not match FRONTLINE_API_KEY (cannot alias service API key to session signing key)."
+                )
+        else:
+            problems.append("SESSION_SECRET must be explicitly configured in hardened/production mode.")
+        if _env_bool("FRONTLINE_BOOTSTRAP_ADMIN", False):
+            problems.append(
+                "FRONTLINE_BOOTSTRAP_ADMIN must not be enabled in hardened/production mode."
+            )
+        if _env_bool("FRONTLINE_SERVICE_IS_ADMIN", False):
+            problems.append(
+                "FRONTLINE_SERVICE_IS_ADMIN must not be enabled in hardened/production mode (service key must not escalate to full admin)."
+            )
         problems.extend(locker_key_permission_problems())
         if problems:
             status["ok"] = False
@@ -223,9 +235,9 @@ def validate_startup_security() -> dict[str, Any]:
         status["warnings"].append(
             "Running in open mode (no API key). Fine for local demos only."
         )
-    if auth_req and not session and key:
+    if auth_req and not session:
         status["warnings"].append(
-            "SESSION_SECRET unset; sessions fall back to FRONTLINE_API_KEY material."
+            "SESSION_SECRET is unset; set SESSION_SECRET for session authentication."
         )
     if not prod and key and (auth_explicit or wildcard):
         for p in key_strength_problems(key):

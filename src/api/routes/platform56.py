@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from src.api.auth import require_api_key, require_api_key_strict
 from src.api.limiter import limiter
-from src.api.rbac import get_role, require_perm, require_perm_dep
+from src.api.rbac import get_actor, get_role, require_perm, require_perm_dep
 
 router = APIRouter(
     prefix="/api/frontline",
@@ -132,13 +132,26 @@ async def callbacks_list(status: str | None = "scheduled") -> dict[str, Any]:
 
 
 @router.post("/approvals")
-async def approvals_request(body: dict[str, Any]) -> dict[str, Any]:
+async def approvals_request(
+    request: Request,
+    body: dict[str, Any],
+    actor: str = Depends(get_actor),
+) -> dict[str, Any]:
     from src.frontline.four_eyes import request_approval
+    from src.api.rbac import session_token_from_cookies
 
+    has_auth = bool(
+        request.headers.get("x-frontline-session")
+        or session_token_from_cookies(request.cookies)
+        or request.headers.get("x-api-key")
+        or request.headers.get("authorization")
+    )
+    if not has_auth or not actor or actor in {"anonymous", "operator"}:
+        raise HTTPException(status_code=401, detail="Authentication required to request approvals")
     return request_approval(
         str(body.get("action_type") or ""),
         resource_id=str(body.get("resource_id") or ""),
-        requested_by=str(body.get("requested_by") or "agent"),
+        requested_by=actor,
         reason=str(body.get("reason") or ""),
         payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
         interaction_id=body.get("interaction_id"),
@@ -147,16 +160,28 @@ async def approvals_request(body: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/approvals/{approval_id}/decide")
 async def approvals_decide(
+    request: Request,
     approval_id: str,
     body: dict[str, Any],
-    _role: str = Depends(require_perm_dep("approval:decide", open_mode_ok=True)),
+    actor: str = Depends(get_actor),
+    _role: str = Depends(require_perm_dep("approval:decide", open_mode_ok=False)),
 ) -> dict[str, Any]:
     from src.frontline.four_eyes import decide_approval
+    from src.api.rbac import session_token_from_cookies
+
+    has_auth = bool(
+        request.headers.get("x-frontline-session")
+        or session_token_from_cookies(request.cookies)
+        or request.headers.get("x-api-key")
+        or request.headers.get("authorization")
+    )
+    if not has_auth or not actor or actor in {"anonymous", "operator"}:
+        raise HTTPException(status_code=401, detail="Authentication required to decide approvals")
 
     try:
         return decide_approval(
             approval_id,
-            reviewer=str(body.get("reviewer") or ""),
+            reviewer=actor,
             approve=bool(body.get("approve", True)),
             interaction_id=body.get("interaction_id"),
         )
@@ -382,6 +407,21 @@ async def auth_oidc() -> dict[str, Any]:
     from src.api.rbac import oidc_discovery
 
     return oidc_discovery()
+
+
+@router.get("/auth/verify")
+async def auth_verify(role: str = Depends(get_role)) -> dict[str, Any]:
+    """Validate the caller credential for the dashboard route guard.
+
+    The router already enforces ``require_api_key`` (401 when auth is required
+    and the key is missing/invalid). Returns the resolved principal role so
+    the UI can tell a key-based operator apart from an anonymous visitor.
+    In open pilot mode this passes for everyone — callers must also check
+    ``auth_required`` and only trust an API key when it is true.
+    """
+    from src.api.auth import auth_required
+
+    return {"ok": True, "auth_required": auth_required(), "role": role}
 
 
 @router.get("/auth/me")

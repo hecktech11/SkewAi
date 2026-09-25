@@ -16,7 +16,7 @@ TEST_API_KEY = "test-secret-key-32-chars-minimum-auth!!"
 def auth_env(monkeypatch):
     monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
     monkeypatch.setenv("FRONTLINE_API_KEY", TEST_API_KEY)
-    monkeypatch.setenv("SESSION_SECRET", TEST_API_KEY)
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-distinct-32b!!")
     monkeypatch.delenv("FRONTLINE_OPEN_MODE", raising=False)
     monkeypatch.delenv("FRONTLINE_SERVICE_IS_ADMIN", raising=False)
 

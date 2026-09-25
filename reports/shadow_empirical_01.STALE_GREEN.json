@@ -1,49 +1,53 @@
 {
   "stale": true,
   "do_not_brief": true,
-  "superseded_by": "reports/shadow_empirical_01.json",
-  "reason": "Pre-F-009/F-010 scorecard: category leak + self-compared kappa. Not a go/no-go artifact.",
+  "superseded_by": "reports/shadow_empirical_02.json",
+  "reason": "Synthetic templated / lexicon-shaped scorecard: self-fulfilling input yields 1.000 recall / 1.000 category. Replaced by dual-stream empirical report reports/shadow_empirical_02.json driven by adversarial paraphrase.",
   "original_overall_verdict": "green",
   "original": {
-    "total_contacts": 100,
+    "total_contacts": 150,
     "overall_verdict": "green",
+    "waived_metrics": [
+      "severity_agreement_kappa",
+      "cluster_agreement_unlabeled"
+    ],
     "metrics": {
       "slots": {
         "entity_1": {
           "name": "slot_accuracy_entity_1",
-          "point_estimate": 0.93,
-          "ci_lower": 0.8625,
-          "ci_upper": 0.9657,
+          "point_estimate": 0.9533,
+          "ci_lower": 0.9068,
+          "ci_upper": 0.9772,
           "rating": "green",
           "target": ">= 0.90",
-          "detail": "93/100 matching human record"
+          "detail": "143/150 matching human record"
         },
         "entity_2": {
           "name": "slot_accuracy_entity_2",
-          "point_estimate": 0.93,
-          "ci_lower": 0.8625,
-          "ci_upper": 0.9657,
+          "point_estimate": 0.9533,
+          "ci_lower": 0.9068,
+          "ci_upper": 0.9772,
           "rating": "green",
           "target": ">= 0.90",
-          "detail": "93/100 matching human record"
+          "detail": "143/150 matching human record"
         },
         "entity_3": {
           "name": "slot_accuracy_entity_3",
-          "point_estimate": 0.93,
-          "ci_lower": 0.8625,
-          "ci_upper": 0.9657,
+          "point_estimate": 0.9533,
+          "ci_lower": 0.9068,
+          "ci_upper": 0.9772,
           "rating": "green",
           "target": ">= 0.90",
-          "detail": "93/100 matching human record"
+          "detail": "143/150 matching human record"
         },
         "category": {
           "name": "slot_accuracy_category",
-          "point_estimate": 0.96,
-          "ci_lower": 0.9016,
-          "ci_upper": 0.9843,
+          "point_estimate": 1.0,
+          "ci_lower": 0.975,
+          "ci_upper": 1.0,
           "rating": "green",
           "target": ">= 0.90",
-          "detail": "96/100 matching human record"
+          "detail": "150/150 matching human record"
         }
       },
       "kill_switch": {
@@ -68,51 +72,84 @@
       },
       "severity_agreement": {
         "name": "severity_agreement_kappa",
-        "point_estimate": 1.0,
-        "ci_lower": 1.0,
-        "ci_upper": 1.0,
-        "rating": "green",
-        "target": "kappa >= 0.70",
-        "detail": "Evaluated across 100 human supervisor ratings"
+        "point_estimate": 0.0,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "rating": "skipped",
+        "target": "kappa >= 0.70 (waived)",
+        "detail": "waived: no independent human_severity labels; not scored"
       },
       "cluster_agreement": {
         "top_1": {
-          "name": "cluster_agreement_top1",
-          "point_estimate": 0.98,
-          "ci_lower": 0.93,
-          "ci_upper": 0.9945,
-          "rating": "green",
-          "target": ">= 0.75 top-1",
-          "detail": "98/100 agreed with RCA engineer"
+          "name": "cluster_agreement_unlabeled",
+          "point_estimate": 0.0,
+          "ci_lower": 0.0,
+          "ci_upper": 0.0,
+          "rating": "skipped",
+          "target": ">= 0.75 top-1 (waived)",
+          "detail": "waived: no independent engineer_cluster_id labels; not scored"
         },
         "top_3": {
-          "name": "cluster_agreement_top3",
-          "point_estimate": 0.98,
-          "ci_lower": 0.93,
-          "ci_upper": 0.9945,
-          "rating": "green",
-          "target": ">= 0.85 top-3",
-          "detail": "98/100 engineer clusters in top-3 candidates"
+          "name": "cluster_agreement_unlabeled",
+          "point_estimate": 0.0,
+          "ci_lower": 0.0,
+          "ci_upper": 0.0,
+          "rating": "skipped",
+          "target": ">= 0.75 top-1 (waived)",
+          "detail": "waived: no independent engineer_cluster_id labels; not scored"
         }
       },
       "cost_per_contact": {
         "name": "cost_per_contact",
-        "point_estimate": 0.0234,
+        "point_estimate": 0.0235,
         "ci_lower": 0.0234,
         "ci_upper": 0.0235,
         "rating": "green",
         "target": "<= $0.45",
-        "detail": "Mean=$0.0234, 95% CI=[$0.0234, $0.0235], p95=$0.0238"
+        "detail": "Mean=$0.0235, 95% CI=[$0.0234, $0.0235], p95=$0.0238"
+      },
+      "category_composition": {
+        "human_specific": 102,
+        "human_unknown": 48,
+        "matched_subset": {
+          "name": "slot_accuracy_category_matched_subset",
+          "point_estimate": 1.0,
+          "ci_lower": 0.9637,
+          "ci_upper": 1.0,
+          "target": "diagnostic (not a gate)",
+          "detail": "102/102 on human-specific classes"
+        },
+        "residual_unknown": {
+          "name": "slot_accuracy_category_residual_unknown",
+          "point_estimate": 1.0,
+          "ci_lower": 0.9259,
+          "ci_upper": 1.0,
+          "target": "diagnostic (not a gate)",
+          "detail": "48/48 residual UNKNOWN OR OTHER (corpus mix, not extraction)"
+        },
+        "note": "48 of 150 rows are UNKNOWN OR OTHER by construction; residual default credit moves with corpus mix."
       }
     },
     "meta": {
-      "mode": "batch",
+      "mode": "live",
       "pack_id": "automotive_nhtsa",
-      "sample_size": 100,
+      "sample_size": 150,
       "seed": 42,
       "target_cost_usd": 0.45,
       "data_source": "data/safety_eval_corpus.jsonl",
-      "source_type": "empirical_ground_truth"
+      "source_type": "empirical_ground_truth",
+      "synthetic_self_labels": false,
+      "ai_source": "deterministic_intake_code",
+      "human_labels": "synthetic_scenario_assignment",
+      "honesty": {
+        "supersedes": "prior green file of the same name (pre-Phase-0; see SLM plan)",
+        "caveats": [
+          "Corpus transcripts contain exact lexicon terms and gazetteer strings; recall 1.0/category 1.0 here measure lexicon-shaped input only.",
+          "Open-vocabulary paraphrase gap is pinned separately: tests/frontline/test_slm_probes.py (kill recall 0.350, category 0.071).",
+          "Do not brief either file alone as production recall."
+        ],
+        "phase0_date": "2026-09-14"
+      }
     }
   }
 }

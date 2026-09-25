@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -425,40 +425,79 @@ app.add_api_websocket_route(
     "/ws/interaction/{interaction_id}",
     interactions.interaction_ws,
 )
+app.add_api_websocket_route(
+    "/ws/twilio/{interaction_id}",
+    interactions.twilio_ws,
+)
 app.add_api_websocket_route("/ws/console", interactions.console_ws)
 
 
 # ── Health + root (always public — no API key) ───────────────────────────────
 
 
+def _check_authenticated(request: Request) -> bool:
+    try:
+        from src.api.auth import _extract_key, check_api_key
+
+        key = _extract_key(
+            authorization=request.headers.get("authorization"),
+            x_api_key=request.headers.get("x-api-key"),
+        )
+        if key:
+            check_api_key(
+                authorization=request.headers.get("authorization"),
+                x_api_key=request.headers.get("x-api-key"),
+                allow_open=False,
+            )
+            return True
+    except Exception:
+        pass
+    try:
+        from src.api.rbac import session_token_from_cookies, verify_session
+
+        tok = session_token_from_cookies(getattr(request, "cookies", {}) or {}) or request.headers.get(
+            "x-frontline-session"
+        )
+        if tok:
+            verify_session(tok)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 @app.get("/", tags=["meta"])
-async def root() -> dict:
+async def root(request: Request) -> dict:
     # Match real policy (production-like / AUTH_REQUIRED), not key presence alone.
     from src.api.auth import auth_required as auth_is_required
+    from src.security.harden import is_production_like
 
     auth = auth_is_required()
+    is_auth = _check_authenticated(request)
     docs_on = (
         os.getenv("FRONTLINE_OPENAPI_PUBLIC", "").strip().lower()
         in {"1", "true", "yes", "on"}
-        or not is_production_like()
+        or (not is_production_like() and is_auth)
     )
-    return {
+    res: dict[str, Any] = {
         "name": "Skew AI",
         "brand": "skewai",
         "version": "2.0.0",
         "api_version": API_VERSION,
-        "active_pack": resolve_active_pack_id(),
-        "frontline_enabled": frontline_enabled(),
-        "docs": "/docs" if docs_on else None,
-        "openapi": "/openapi.json" if docs_on else None,
-        "redoc": "/redoc" if docs_on else None,
         "auth_required": auth,
         "auth": {
             "type": "api_key",
             "headers": ["X-API-Key", "Authorization: Bearer"],
             "required": auth,
         },
-        "links": {
+    }
+    if not is_production_like() or is_auth:
+        res["active_pack"] = resolve_active_pack_id()
+        res["frontline_enabled"] = frontline_enabled()
+        res["docs"] = "/docs" if docs_on else None
+        res["openapi"] = "/openapi.json" if docs_on else None
+        res["redoc"] = "/redoc" if docs_on else None
+        res["links"] = {
             "health": "/health",
             "health_ready": "/health/ready",
             "interactions": "/api/interactions",
@@ -468,12 +507,12 @@ async def root() -> dict:
             "v3_learning": "/api/v3/learning/proposals",
             "v3_experiments": "/api/v3/experiments",
             "v3_governance": "/api/v3/governance/deployments",
-        },
-    }
+        }
+    return res
 
 
 @app.get("/health", tags=["meta"])
-async def health() -> dict:
+async def health(request: Request) -> dict:
     """Deep-ish health: process up + ops DB reachability + active pack loadable."""
     from src.data.warehouse import ops_con
     from src.domains.loader import load_pack
@@ -511,8 +550,28 @@ async def health() -> dict:
     from src.jobs.registry import backend_name, worker_count
     from src.security.harden import is_production_like
 
+    auth_req = auth_is_required()
+    prod = is_production_like()
+    is_auth = _check_authenticated(request)
+
+    status = "ok" if (db_ok and pack_ok and readiness["ready"]) else "degraded"
+
+    # In production or when auth is required, unauthenticated callers receive
+    # a sanitized health response without internal architecture fingerprints.
+    if (prod or auth_req) and not is_auth:
+        from fastapi.responses import JSONResponse
+
+        public_body = {
+            "status": "ok" if readiness["ready"] else "not_ready",
+            "api_version": API_VERSION,
+            "active_pack": pack_id,
+            "auth_required": auth_req,
+        }
+        if not readiness["ready"]:
+            return JSONResponse(status_code=503, content=public_body)
+        return public_body
+
     n_workers = worker_count()
-    status = "ok" if (db_ok and pack_ok) else "degraded"
     body = {
         "status": status,
         "api_version": API_VERSION,
@@ -522,31 +581,23 @@ async def health() -> dict:
         "pack_ok": pack_ok,
         "single_worker": n_workers <= 1,
         "worker_count": n_workers,
-        # WS attach registry is process-local (sockets can't migrate), but
-        # terminal close/investigation-open are fleet-safe via distributed
-        # close claims (Redis NX when REDIS_URL is set, else shared-DB PK
-        # dedupe) + asyncio.Lock + DB re-checks — see src/jobs/registry.
         "orchestrator_registry": "in_process_ws+distributed_close_claims",
         "worker_registry": backend_name(),
         "security": {
-            "auth_required": auth_is_required(),
-            "production_like": is_production_like(),
+            "auth_required": auth_req,
+            "production_like": prod,
             "audit_log": True,
             "note": (
                 "Engineering controls only. Not a SOC 2 Type II attestation."
             ),
         },
-        # Keys may be set in env but no provider is shipped — always false until src/ai exists.
         "llm_available": settings.llm_available,
-        # Fail-closed when FRONTLINE_AUTH_REQUIRED=1 or a non-empty API key is set
-        # (unless FRONTLINE_OPEN_MODE=1). Not SOC2 / multi-tenant identity.
-        "auth_required": auth_is_required(),
-        # Honesty: v3 registry stamps do not route models or change agent policy.
+        "auth_required": auth_req,
         "v3_runtime_routing": False,
         "ml_severity_shipped": False,
         "enterprise_readiness": (
             "single_tenant_hardened"
-            if auth_is_required()
+            if auth_req
             else "single_tenant_pilot_open"
         ),
     }
@@ -559,6 +610,7 @@ async def health() -> dict:
     if detail:
         body["detail"] = detail
     body["readiness"] = readiness
+
     if not readiness["ready"]:
         from fastapi.responses import JSONResponse
 

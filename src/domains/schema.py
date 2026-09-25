@@ -197,6 +197,10 @@ class PackManifest(BaseModel):
 
     id: str = Field(..., description="Pack id, must match the directory name under domains/")
     display_name: str
+    locale: str = Field(
+        default="en-US",
+        description="BCP-47 locale for STT/TTS and prompt locale (pack-driven, not hardcoded)",
+    )
     greeting: str = Field(..., description="Canned greeting (no LLM)")
     goodbye: str = Field(..., description="Canned goodbye (no LLM)")
     refusal_topics: list[str] = Field(

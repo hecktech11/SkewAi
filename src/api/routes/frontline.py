@@ -521,6 +521,337 @@ async def get_investigation(investigation_id: str) -> dict[str, Any]:
     return invs[0]
 
 
+@router.get("/clusters/{cluster_id}/context")
+async def get_cluster_context(
+    cluster_id: int,
+    pack_id: str | None = None,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """One cluster: corpus row + backtest lead vs advisory + weekly spike
+    history (Issue page block 1 + Command Center hero lead time)."""
+    import json as _json
+
+    from src.data.warehouse import domain_con
+    from src.domains.active_pack import resolve_active_pack_id
+    from src.security.identifiers import safe_pack_id
+
+    if cluster_id < 0:
+        raise HTTPException(status_code=400, detail="invalid cluster_id")
+    pid = (pack_id or resolve_active_pack_id() or "").strip()
+    try:
+        safe_pack_id(pid)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not settings.domain_db_path(pid).is_file():
+        raise HTTPException(status_code=404, detail=f"unknown pack: {pid}")
+
+    def _load() -> dict[str, Any]:
+        with domain_con(pid, read_only=True) as con:
+            row = con.execute(
+                "SELECT cluster_id, category, record_count, top_terms, "
+                "first_seen, last_seen FROM clusters WHERE cluster_id = ?",
+                [int(cluster_id)],
+            ).fetchone()
+            if not row:
+                raise LookupError(cluster_id)
+            terms = row[3]
+            try:
+                terms = _json.loads(terms) if isinstance(terms, str) else list(terms or [])
+            except Exception:
+                terms = [str(terms)] if terms else []
+            bt = con.execute(
+                "SELECT advisory_id, lead_time_weeks, matched FROM backtest_results "
+                "WHERE cluster_id = ? ORDER BY matched DESC LIMIT 1",
+                [int(cluster_id)],
+            ).fetchone()
+            adv = None
+            if bt and bt[0]:
+                try:
+                    arow = con.execute(
+                        "SELECT advisory_id, issued_at, summary, remedy FROM advisories "
+                        "WHERE advisory_id = ?",
+                        [bt[0]],
+                    ).fetchone()
+                    if arow:
+                        adv = {"advisory_id": arow[0],
+                               "issued_at": str(arow[1]) if arow[1] else None,
+                               "summary": arow[2], "remedy": arow[3]}
+                except Exception:
+                    adv = None
+            cat = row[1]
+            weeks = con.execute(
+                "SELECT iso_week, record_count, z_score, is_anomaly FROM weekly_anomalies "
+                "WHERE category = ? ORDER BY iso_week DESC LIMIT 26",
+                [cat],
+            ).fetchall() if cat else []
+            return {
+                "cluster_id": int(row[0]),
+                "pack_id": pid,
+                "category": cat,
+                "record_count": row[2],
+                "top_terms": terms,
+                "first_seen": str(row[4]) if row[4] else None,
+                "last_seen": str(row[5]) if row[5] else None,
+                "backtest": (
+                    {"advisory_id": bt[0], "lead_time_weeks": bt[1], "matched": bool(bt[2]),
+                     "advisory": adv}
+                    if bt else None
+                ),
+                "weekly": [
+                    {"iso_week": w[0], "record_count": w[1], "z_score": w[2],
+                     "is_anomaly": bool(w[3])}
+                    for w in weeks
+                ],
+            }
+
+    try:
+        return await ops_in_thread(_load)
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"cluster not found: {cluster_id}") from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"cluster query failed: {type(e).__name__}") from e
+
+
+@router.get("/investigations/{investigation_id}/workspace")
+async def get_investigation_workspace(
+    investigation_id: str,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Full workspace: assignee, SLA, hypotheses, comments (Issue page block 5)."""
+    from src.enterprise.investigation_workspace import get_investigation as _get_inv
+    from src.security.identifiers import safe_token_id
+
+    try:
+        safe_token_id(investigation_id, kind="investigation_id")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return _get_inv(investigation_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/records")
+async def list_records(
+    pack_id: str | None = None,
+    source: str | None = None,
+    category: str | None = None,
+    entity_1: str | None = None,
+    entity_2: str | None = None,
+    entity_3: str | None = None,
+    region: str | None = None,
+    q: str | None = None,
+    limit: int = Query(default=10, ge=1, le=50),
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Corpus rows (NHTSA / WARRANTY / SERVICE evidence for the Issue page).
+
+    Read-only over the domain warehouse. Columns are fixed; only values are
+    bound parameters. Unknown pack ids 404 (never create a DB from input).
+    """
+    from src.data.warehouse import domain_con
+    from src.domains.active_pack import resolve_active_pack_id
+    from src.security.identifiers import safe_pack_id
+
+    pid = (pack_id or resolve_active_pack_id() or "").strip()
+    try:
+        safe_pack_id(pid)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not settings.domain_db_path(pid).is_file():
+        raise HTTPException(status_code=404, detail=f"unknown pack: {pid}")
+
+    filters = {
+        "source": (source or "").strip().upper() or None,
+        "category": (category or "").strip() or None,
+        "entity_1": (entity_1 or "").strip() or None,
+        "entity_2": (entity_2 or "").strip() or None,
+        "entity_3": (entity_3 or "").strip() or None,
+        "region": (region or "").strip() or None,
+    }
+    clauses = [f"{col} = ?" for col, val in filters.items() if val]
+    params: list[Any] = [val for val in filters.values() if val]
+    if q and q.strip():
+        clauses.append("text ILIKE ?")
+        params.append(f"%{q.strip()}%")
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    def _load() -> list[dict[str, Any]]:
+        with domain_con(pid, read_only=True) as con:
+            cols = [r[0] for r in con.execute("SELECT * FROM records LIMIT 0").description]
+            want = ["record_id", "occurred_at", "received_at", "entity_1", "entity_2",
+                    "entity_3", "category", "subcategory", "text", "severity_label",
+                    "region", "source", "supplier", "lot_id"]
+            sel = [c for c in want if c in cols]
+            cur = con.execute(
+                f"SELECT {', '.join(sel)} FROM records{where} "
+                "ORDER BY received_at DESC LIMIT ?",
+                [*params, int(limit)],
+            )
+            return [dict(zip(sel, r)) for r in cur.fetchall()]
+
+    try:
+        rows = await ops_in_thread(_load)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"records query failed: {type(e).__name__}") from e
+    return {"pack_id": pid, "count": len(rows), "records": rows}
+
+
+@router.get("/suppliers/capas")
+async def list_supplier_capas(
+    supplier: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Open CAPAs (corrective actions) for suppliers, newest first."""
+    from src.frontline.supplier import _ensure_ops
+
+    def _load() -> list[dict[str, Any]]:
+        with ops_con() as con:
+            try:
+                _ensure_ops(con)
+                clauses, params = [], []
+                if supplier and supplier.strip():
+                    clauses.append("supplier = ?")
+                    params.append(supplier.strip())
+                if status and status.strip():
+                    clauses.append("status = ?")
+                    params.append(status.strip().lower())
+                where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+                rows = con.execute(
+                    "SELECT capa_id, supplier, pack_id, lot_id, status, request, "
+                    f"response, opened_at, responded_at FROM supplier_capa{where} "
+                    "ORDER BY opened_at DESC LIMIT ?",
+                    [*params, int(limit)],
+                ).fetchall()
+            except Exception:
+                return []
+        return [
+            {"capa_id": r[0], "supplier": r[1], "pack_id": r[2], "lot_id": r[3],
+             "status": r[4], "request": r[5], "response": r[6],
+             "opened_at": str(r[7]) if r[7] else None,
+             "responded_at": str(r[8]) if r[8] else None}
+            for r in rows
+        ]
+
+    capas = await ops_in_thread(_load)
+    return {"count": len(capas), "capas": capas}
+
+
+@router.post("/suppliers/capas")
+@limiter.limit("30 per minute")
+async def open_supplier_capa(
+    request: Request,
+    body: dict[str, Any],
+    actor: str = Depends(get_actor),
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Open a supplier CAPA (corrective action request)."""
+    from src.frontline.supplier import open_supplier_capa as _open
+
+    supplier = str((body or {}).get("supplier") or "").strip()
+    req = str((body or {}).get("request") or "").strip()
+    if not supplier or not req:
+        raise HTTPException(status_code=400, detail="supplier and request required")
+    try:
+        return _open(
+            supplier=supplier,
+            pack_id=str((body or {}).get("pack_id") or ""),
+            request=f"[{actor}] {req}",
+            lot_id=str((body or {}).get("lot_id") or "") or None,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"capa open failed: {type(e).__name__}") from e
+
+
+@router.get("/suppliers/scorecards")
+async def get_supplier_scorecards(    pack_id: str | None = None,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Supplier failure scorecards, worst first (Issue page lot block)."""
+    from src.domains.active_pack import resolve_active_pack_id
+    from src.frontline.supplier import supplier_scorecards
+
+    pid = (pack_id or resolve_active_pack_id() or "").strip()
+    cards = supplier_scorecards(pid or None)
+    return {"pack_id": pid, "count": len(cards), "scorecards": cards}
+
+
+@router.get("/suppliers/lots")
+async def get_supplier_lots(
+    pack_id: str | None = None,
+    supplier: str | None = None,
+    category: str | None = None,
+    limit: int = Query(default=10, ge=1, le=50),
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Lots behind a failure slice: supplier × lot with failure counts and
+    top categories (joins ops record_supply to domain records in Python —
+    the two live in different DuckDB files, so no cross-DB SQL)."""
+    from src.data.warehouse import domain_con
+    from src.domains.active_pack import resolve_active_pack_id
+    from src.security.identifiers import safe_pack_id
+
+    pid = (pack_id or resolve_active_pack_id() or "").strip()
+    try:
+        safe_pack_id(pid)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not settings.domain_db_path(pid).is_file():
+        raise HTTPException(status_code=404, detail=f"unknown pack: {pid}")
+    sup = (supplier or "").strip() or None
+    cat = (category or "").strip() or None
+
+    def _load() -> list[dict[str, Any]]:
+        with ops_con() as con:
+            try:
+                con.execute("SELECT 1 FROM record_supply LIMIT 1")
+            except Exception:
+                return []
+            clauses, params = ["pack_id = ?"], [pid]
+            if sup:
+                clauses.append("supplier = ?")
+                params.append(sup)
+            srows = con.execute(
+                f"SELECT record_id, supplier, lot_id FROM record_supply "
+                f"WHERE {' AND '.join(clauses)}",
+                params,
+            ).fetchall()
+        if not srows:
+            return []
+        by_id = {r[0]: (r[1], r[2]) for r in srows}
+        with domain_con(pid, read_only=True) as dcon:
+            placeholders = ", ".join("?" for _ in by_id)
+            drows = dcon.execute(
+                f"SELECT record_id, category, entity_2, entity_3 FROM records "
+                f"WHERE record_id IN ({placeholders})",
+                list(by_id),
+            ).fetchall()
+        lots: dict[tuple[str, str], dict[str, Any]] = {}
+        for rid, category_v, e2, e3 in drows:
+            if cat and (category_v or "") != cat:
+                continue
+            s, lot = by_id.get(rid, ("?", "?"))
+            key = (str(s), str(lot))
+            agg = lots.setdefault(key, {"supplier": str(s), "lot_id": str(lot),
+                                        "failures": 0, "categories": {}})
+            agg["failures"] += 1
+            agg["categories"][str(category_v or "unknown")] = \
+                agg["categories"].get(str(category_v or "unknown"), 0) + 1
+        out = sorted(lots.values(), key=lambda r: -r["failures"])[: int(limit)]
+        for row in out:
+            top = sorted(row["categories"].items(), key=lambda kv: -kv[1])[:3]
+            row["top_categories"] = [{"category": k, "count": v} for k, v in top]
+            del row["categories"]
+        return out
+
+    lots = await ops_in_thread(_load)
+    return {"pack_id": pid, "count": len(lots), "lots": lots}
+
+
 @router.get("/investigations/{investigation_id}/comments")
 async def list_investigation_comments(
     investigation_id: str,
@@ -783,6 +1114,12 @@ async def get_audit(
     _role: str = Depends(require_perm_dep("audit:read", open_mode_ok=True)),
 ) -> dict[str, Any]:
     """Get (or rerun) a contact audit report. Rerun requires API key when configured."""
+    from src.security.identifiers import assert_under_roots, safe_token_id
+
+    try:
+        safe_token_id(interaction_id, kind="interaction_id")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if rerun:
         # Treat rerun as a write: enforce pilot secret when set.
         check_api_key(
@@ -803,8 +1140,8 @@ async def get_audit(
             "report_name": f"{interaction_id}.md" if result.report_path else None,
             "report_url": f"/api/frontline/audits/{interaction_id}",
         }
-    report_path = REPORTS_DIR / f"{interaction_id}.md"
-    if not report_path.exists():
+    report_path = assert_under_roots(REPORTS_DIR / f"{interaction_id}.md", [REPORTS_DIR])
+    if not report_path.is_file():
         raise HTTPException(status_code=404, detail="FileNotFoundError")
     return {
         "interaction_id": interaction_id,

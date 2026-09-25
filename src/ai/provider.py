@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from src.config import settings
 from src.data.timeutil import utc_now
@@ -131,6 +132,45 @@ def _http_chat(system: str, user: str, model: str) -> str:
     raise ValueError("no_provider_key")
 
 
+# Hosts that may receive a provider API key. `*_BASE_URL` is an ambient env
+# var — on a developer box it is routinely pointed at a proxy or gateway — so
+# the SSRF guard alone is not enough: it clears any *public* host, which would
+# silently ship the key to a third party. Redirecting credentialed traffic is
+# therefore an explicit operator decision, not a default.
+_OFFICIAL_LLM_HOSTS = {
+    "openai": "api.openai.com",
+    "anthropic": "api.anthropic.com",
+}
+
+
+def _allowed_llm_hosts(provider: str) -> set[str]:
+    """Official host for `provider`, plus any FRONTLINE_LLM_ALLOWED_HOSTS entries."""
+    hosts = {_OFFICIAL_LLM_HOSTS[provider]}
+    for extra in (os.getenv("FRONTLINE_LLM_ALLOWED_HOSTS") or "").split(","):
+        host = extra.strip().lower()
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _guard_llm_url(url: str, provider: str) -> str:
+    """Confirm the host may receive the key, then SSRF-check it.
+
+    Allowlist first: a disallowed host should not even reach the resolver, and
+    failing before DNS keeps the reason deterministic offline. The SSRF check
+    still runs for approved hosts — an allowlisted gateway can resolve to a
+    private or metadata address.
+    """
+    from src.security.url_guard import validate_outbound_url
+
+    host = (urlparse(url).hostname or "").lower()
+    if host not in _allowed_llm_hosts(provider):
+        # "blocked" keeps the reason greppable alongside the url_guard reasons.
+        raise ValueError(f"llm_base_url_blocked:{host}")
+    validate_outbound_url(url)
+    return url
+
+
 def _http_chat_openai(system: str, user: str, model: str) -> str:
     """Minimal OpenAI-compatible chat completions call (stdlib only)."""
     api_key = _openai_key()
@@ -138,6 +178,8 @@ def _http_chat_openai(system: str, user: str, model: str) -> str:
         raise ValueError("openai_key_missing")
     base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     url = f"{base}/chat/completions"
+
+    _guard_llm_url(url, "openai")
     body = {
         "model": model or os.getenv("FRONTLINE_LLM_MODEL", "gpt-4o-mini"),
         "messages": [
@@ -178,6 +220,8 @@ def _http_chat_anthropic(system: str, user: str, model: str) -> str:
         raise ValueError("claude_key_missing")
     base = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     url = f"{base}/v1/messages"
+
+    _guard_llm_url(url, "anthropic")
     body = {
         "model": _anthropic_model(model),
         "max_tokens": 120,

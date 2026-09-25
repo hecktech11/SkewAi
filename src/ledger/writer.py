@@ -188,12 +188,21 @@ ACTION_TYPES = {
     "reproduced",
     # Voice delivery and barge-in audit types
     "spoken_turn_truncated",
+    "spoken_turn_reconciled",
     "playback_started",
     "playback_completed",
     "playback_interrupted",
     "voice_turn_accepted",
     "slot_confirmed",
     "slot_corrected",
+    # Tier-A voice wiring (consent / drive-mode / frame confirmation / VIN)
+    "voice_consent_required",
+    "voice_consent_obtained",
+    "drive_mode_offered",
+    "frame_confirmation_asked",
+    "frame_confirmation_evaluated",
+    "vin_captured",
+    "vin_retry_asked",
 }
 
 

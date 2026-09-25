@@ -45,14 +45,19 @@ async def test_console_broadcast_frame_shapes(reset_ops_db, pack):
 
     ir._broadcast_console = fake_broadcast  # type: ignore
     try:
+        from src.channels.base import ChannelAdapter, ChannelCapabilities
         from src.channels.web_voice import WebVoiceChannel
 
         class DummyWS:
             async def send_json(self, obj):
                 pass
 
-        # Minimal channel stand-in
-        class Chan:
+        # Minimal channel stand-in. Subclasses ChannelAdapter on purpose: hooks
+        # must work against the declared contract, not one adapter's privates.
+        class Chan(ChannelAdapter):
+            def capabilities(self):
+                return ChannelCapabilities()
+
             async def send_turn(self, *a, **k):
                 pass
 
@@ -66,6 +71,9 @@ async def test_console_broadcast_frame_shapes(reset_ops_db, pack):
                 pass
 
             async def send_interaction_ended(self, *a, **k):
+                pass
+
+            async def hangup(self, *a, **k):
                 pass
 
         hooks = ir._WSHooks(Chan(), "int_fanout_test")  # type: ignore
@@ -127,3 +135,37 @@ async def test_max_turns_forces_wrap_up(reset_ops_db, seed_automotive_pack, pack
                 "SELECT status FROM cases WHERE case_id = ?", [orch.ctx.case_id]
             ).fetchone()
         assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_control_frames_survive_non_websocket_channels(reset_ops_db, pack):
+    """Control frames must not crash channels without a frame surface.
+
+    `_send` exists only on WebVoiceChannel; emitting frustration/latency/consent
+    over SMS, email or telephony used to raise AttributeError. That error was
+    built *before* `_to_customer` ran, so its try/except could not absorb it.
+    """
+    from src.channels.messaging import SmsChannel
+
+    orig = ir._broadcast_console
+    received: list[dict] = []
+
+    async def fake_broadcast(msg):
+        received.append(msg)
+
+    ir._broadcast_console = fake_broadcast  # type: ignore
+    try:
+        chan = SmsChannel(to_address="+15550001111")
+        hooks = ir._WSHooks(chan, "int_sms_control")  # type: ignore
+        await hooks.emit_frustration_update(0.7)
+        await hooks.emit_turn_latency({"ms": 120})
+        await hooks.emit_consent_required({"reason": "recording"})
+    finally:
+        ir._broadcast_console = orig  # type: ignore
+
+    # Console still gets every frame; the SMS channel simply ignores them.
+    assert {m["type"] for m in received} == {
+        "frustration_update",
+        "turn_latency",
+        "consent_required",
+    }

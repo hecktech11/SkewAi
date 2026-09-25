@@ -11,7 +11,9 @@ import { fmtCount } from "./format.js";
 
 function toPoints(data) {
   return (data || []).map((d, i) =>
-    typeof d === "number" ? { label: String(i), value: d } : { label: d.label ?? String(i), value: Number(d.value) || 0 },
+    typeof d === "number"
+      ? { label: String(i), value: d }
+      : { label: d.label ?? String(i), value: Number(d.value) || 0, tone: d.tone },
   );
 }
 
@@ -251,6 +253,125 @@ export function Gauge({ value, label, tone = "accent", size = 104 }) {
         <span className="gauge-value mono">{Math.round(ratio * 100)}%</span>
       </div>
       <div className="gauge-label">{label}</div>
+    </div>
+  );
+}
+
+function toneStroke(tone) {
+  if (tone === "danger") return "var(--danger)";
+  if (tone === "warn") return "var(--warn)";
+  if (tone === "ok") return "var(--ok)";
+  return "var(--accent)";
+}
+
+/** Donut chart for share-of-total breakdowns (verdicts, channels). */
+export function DonutChart({ data, size = 132, thickness = 20, label }) {
+  const items = (data || [])
+    .map((d) => ({ label: d.label ?? "", value: Number(d.value) || 0, tone: d.tone }))
+    .filter((d) => d.value > 0);
+  const total = items.reduce((sum, d) => sum + d.value, 0);
+  if (items.length === 0) return <div className="chart-empty">No data</div>;
+  const r = (size - thickness) / 2;
+  const c = size / 2;
+  let acc = 0;
+  return (
+    <div className="donut-flex">
+      <svg
+        width={size}
+        height={size}
+        role="img"
+        aria-label={label || `Donut chart, ${items.length} segments, total ${total}`}
+      >
+        <circle cx={c} cy={c} r={r} fill="none" stroke="var(--bg-hover)" strokeWidth={thickness} />
+        {items.map((d, i) => {
+          const frac = d.value / total;
+          const el = (
+            <circle
+              key={`${d.label}-${i}`}
+              cx={c}
+              cy={c}
+              r={r}
+              fill="none"
+              stroke={toneStroke(d.tone)}
+              strokeWidth={thickness}
+              pathLength={100}
+              strokeDasharray={`${(frac * 100).toFixed(2)} ${(100 - frac * 100).toFixed(2)}`}
+              strokeDashoffset={(-acc * 100).toFixed(2)}
+              transform={`rotate(-90 ${c} ${c})`}
+            >
+              <title>{`${d.label}: ${d.value}`}</title>
+            </circle>
+          );
+          acc += frac;
+          return el;
+        })}
+      </svg>
+      <ul className="stackbar-legend">
+        {items.map((d, i) => (
+          <li key={`${d.label}-${i}`}>
+            <span className={`legend-dot tone-${d.tone || "accent"}`} aria-hidden="true" />
+            {d.label}
+            <span className="mono legend-value">
+              {d.value} · {Math.round((d.value / total) * 100)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Two-dimensional intensity matrix (e.g. severity × status). */
+export function HeatMatrix({ rows, columns, getValue, formatValue = (v) => v, label }) {
+  const rs = rows || [];
+  const cs = columns || [];
+  if (rs.length === 0 || cs.length === 0) return <div className="chart-empty">No data</div>;
+  const max = Math.max(
+    1,
+    ...rs.flatMap((r) => cs.map((c) => Number(getValue(r.key, c.key)) || 0)),
+  );
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="heat-table">
+        <caption className="sr-only">{label || "Matrix"}</caption>
+        <thead>
+          <tr>
+            <th scope="col">
+              <span className="sr-only">Row</span>
+            </th>
+            {cs.map((c) => (
+              <th key={c.key} scope="col">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rs.map((r) => (
+            <tr key={r.key}>
+              <th scope="row">{r.label}</th>
+              {cs.map((c) => {
+                const v = Number(getValue(r.key, c.key)) || 0;
+                const intensity = Math.round((v / max) * 80);
+                return (
+                  <td
+                    key={c.key}
+                    style={{
+                      background:
+                        v > 0
+                          ? `color-mix(in srgb, var(--accent) ${intensity}%, transparent)`
+                          : undefined,
+                    }}
+                    title={`${r.label} × ${c.label}: ${v}`}
+                  >
+                    {v > 0 ? formatValue(v) : <span className="heat-zero">·</span>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

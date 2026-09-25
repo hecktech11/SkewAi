@@ -109,6 +109,11 @@ export function openWarning({ clusterId, packId, tab } = {}) {
   });
 }
 
+export function openIssue(clusterId) {
+  if (clusterId === null || clusterId === undefined || clusterId === "") return;
+  goHash(`issue/${encodeURIComponent(String(clusterId))}`);
+}
+
 export function consumeSession(key) {
   try {
     const v = sessionStorage.getItem(key);

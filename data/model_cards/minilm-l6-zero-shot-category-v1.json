@@ -1,0 +1,19 @@
+{
+  "artifact_ref": "models/minilm/model.onnx",
+  "features": [
+    "sentence_embedding_cosine_similarity",
+    "gazetteer_synonym_expansion"
+  ],
+  "limitations": "Zero-shot matching via MiniLM cosine similarity against pack taxonomy. Requires confidence floor. Closed vocabulary only.",
+  "metrics": {
+    "category_floor": 0.3,
+    "max_artifact_mb": 23.7,
+    "mode": "shadow",
+    "p50_latency_ms": 1.3,
+    "p95_latency_ms": 2.5
+  },
+  "pack_id": "automotive_nhtsa",
+  "promoted": false,
+  "trained_at": "2026-09-14T00:00:00Z",
+  "version": "minilm-l6-zero-shot-category-v1"
+}

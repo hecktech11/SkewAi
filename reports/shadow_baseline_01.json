@@ -1,109 +1,403 @@
 {
-  "total_contacts": 100,
-  "overall_verdict": "green",
+  "total_contacts": 50,
+  "overall_verdict": "red",
+  "verdict_source_stream": "adversarial_paraphrase",
+  "waived_metrics": [],
   "metrics": {
     "slots": {
       "entity_1": {
         "name": "slot_accuracy_entity_1",
-        "point_estimate": 0.95,
-        "ci_lower": 0.8882,
-        "ci_upper": 0.9785,
+        "point_estimate": 1.0,
+        "ci_lower": 0.9287,
+        "ci_upper": 1.0,
         "rating": "green",
         "target": ">= 0.90",
-        "detail": "95/100 matching human record"
+        "detail": "50/50 matching human record"
       },
       "entity_2": {
         "name": "slot_accuracy_entity_2",
-        "point_estimate": 0.94,
-        "ci_lower": 0.8752,
-        "ci_upper": 0.9722,
+        "point_estimate": 1.0,
+        "ci_lower": 0.9287,
+        "ci_upper": 1.0,
         "rating": "green",
         "target": ">= 0.90",
-        "detail": "94/100 matching human record"
+        "detail": "50/50 matching human record"
       },
       "entity_3": {
         "name": "slot_accuracy_entity_3",
-        "point_estimate": 0.96,
-        "ci_lower": 0.9016,
-        "ci_upper": 0.9843,
-        "rating": "green",
+        "point_estimate": 0.8,
+        "ci_lower": 0.6696,
+        "ci_upper": 0.8876,
+        "rating": "yellow",
         "target": ">= 0.90",
-        "detail": "96/100 matching human record"
+        "detail": "40/50 matching human record"
       },
       "category": {
         "name": "slot_accuracy_category",
-        "point_estimate": 0.94,
-        "ci_lower": 0.8752,
-        "ci_upper": 0.9722,
-        "rating": "green",
+        "point_estimate": 0.06,
+        "ci_lower": 0.0206,
+        "ci_upper": 0.1622,
+        "rating": "red",
         "target": ">= 0.90",
-        "detail": "94/100 matching human record"
+        "detail": "3/50 matching human record"
       }
     },
     "kill_switch": {
       "precision": {
         "name": "kill_switch_precision",
         "point_estimate": 1.0,
-        "ci_lower": 0.6756,
+        "ci_lower": 0.5655,
         "ci_upper": 1.0,
         "rating": "green",
         "target": ">= 0.85",
-        "detail": "TP=8, FP=0"
+        "detail": "TP=5, FP=0"
       },
       "recall": {
         "name": "kill_switch_recall",
-        "point_estimate": 1.0,
-        "ci_lower": 0.6756,
-        "ci_upper": 1.0,
-        "rating": "green",
+        "point_estimate": 0.7143,
+        "ci_lower": 0.3589,
+        "ci_upper": 0.9178,
+        "rating": "red",
         "target": ">= 0.98",
-        "detail": "TP=8, FN=0"
+        "detail": "TP=5, FN=2"
       }
     },
     "severity_agreement": {
       "name": "severity_agreement_kappa",
-      "point_estimate": 0.8946,
-      "ci_lower": 0.8193,
-      "ci_upper": 0.9699,
-      "rating": "green",
+      "point_estimate": 0.2419,
+      "ci_lower": -0.0051,
+      "ci_upper": 0.4888,
+      "rating": "red",
       "target": "kappa >= 0.70",
-      "detail": "Evaluated across 100 human supervisor ratings"
+      "detail": "Evaluated across 50 human supervisor ratings"
     },
     "cluster_agreement": {
       "top_1": {
         "name": "cluster_agreement_top1",
-        "point_estimate": 0.75,
-        "ci_lower": 0.657,
-        "ci_upper": 0.8245,
-        "rating": "green",
+        "point_estimate": 0.06,
+        "ci_lower": 0.0206,
+        "ci_upper": 0.1622,
+        "rating": "red",
         "target": ">= 0.75 top-1",
-        "detail": "75/100 agreed with RCA engineer"
+        "detail": "3/50 agreed with RCA engineer"
       },
       "top_3": {
         "name": "cluster_agreement_top3",
-        "point_estimate": 0.94,
-        "ci_lower": 0.8752,
-        "ci_upper": 0.9722,
-        "rating": "green",
+        "point_estimate": 0.28,
+        "ci_lower": 0.1747,
+        "ci_upper": 0.4167,
+        "rating": "yellow",
         "target": ">= 0.85 top-3",
-        "detail": "94/100 engineer clusters in top-3 candidates"
+        "detail": "14/50 engineer clusters in top-3 candidates"
       }
     },
     "cost_per_contact": {
       "name": "cost_per_contact",
-      "point_estimate": 0.0445,
-      "ci_lower": 0.0436,
-      "ci_upper": 0.0453,
+      "point_estimate": 0.0412,
+      "ci_lower": 0.04,
+      "ci_upper": 0.0425,
       "rating": "green",
       "target": "<= $0.45",
-      "detail": "Mean=$0.0445, 95% CI=[$0.0436, $0.0453], p95=$0.0523"
+      "detail": "Mean=$0.0412, 95% CI=[$0.0400, $0.0425], p95=$0.0478"
+    },
+    "category_composition": {
+      "human_specific": 50,
+      "human_unknown": 0,
+      "matched_subset": {
+        "name": "slot_accuracy_category_matched_subset",
+        "point_estimate": 0.06,
+        "ci_lower": 0.0206,
+        "ci_upper": 0.1622,
+        "target": "diagnostic (not a gate)",
+        "detail": "3/50 on human-specific classes"
+      },
+      "residual_unknown": {
+        "name": "slot_accuracy_category_residual_unknown",
+        "point_estimate": 0.0,
+        "ci_lower": 0.0,
+        "ci_upper": 0.0,
+        "target": "diagnostic (not a gate)",
+        "detail": "0/0 residual UNKNOWN OR OTHER (corpus mix, not extraction)"
+      },
+      "note": "0 of 50 rows are UNKNOWN OR OTHER by construction; residual default credit moves with corpus mix."
+    }
+  },
+  "streams": {
+    "synthetic_templated": {
+      "corpus": "synthetic_templated",
+      "role": "smoke_test",
+      "accuracy_claim": false,
+      "description": "Synthetic templated cohort with exact lexicon/gazetteer terms; integration smoke test only, explicitly NOT an accuracy claim.",
+      "total_contacts": 50,
+      "overall_verdict": "red",
+      "metrics": {
+        "slots": {
+          "entity_1": {
+            "name": "slot_accuracy_entity_1",
+            "point_estimate": 1.0,
+            "ci_lower": 0.9287,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.90",
+            "detail": "50/50 matching human record"
+          },
+          "entity_2": {
+            "name": "slot_accuracy_entity_2",
+            "point_estimate": 1.0,
+            "ci_lower": 0.9287,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.90",
+            "detail": "50/50 matching human record"
+          },
+          "entity_3": {
+            "name": "slot_accuracy_entity_3",
+            "point_estimate": 0.74,
+            "ci_lower": 0.6045,
+            "ci_upper": 0.8413,
+            "rating": "red",
+            "target": ">= 0.90",
+            "detail": "37/50 matching human record"
+          },
+          "category": {
+            "name": "slot_accuracy_category",
+            "point_estimate": 0.76,
+            "ci_lower": 0.6259,
+            "ci_upper": 0.857,
+            "rating": "red",
+            "target": ">= 0.90",
+            "detail": "38/50 matching human record"
+          }
+        },
+        "kill_switch": {
+          "precision": {
+            "name": "kill_switch_precision",
+            "point_estimate": 1.0,
+            "ci_lower": 0.5101,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.85",
+            "detail": "TP=4, FP=0"
+          },
+          "recall": {
+            "name": "kill_switch_recall",
+            "point_estimate": 1.0,
+            "ci_lower": 0.5101,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.98",
+            "detail": "TP=4, FN=0"
+          }
+        },
+        "severity_agreement": {
+          "name": "severity_agreement_kappa",
+          "point_estimate": 0.4657,
+          "ci_lower": 0.2594,
+          "ci_upper": 0.6721,
+          "rating": "red",
+          "target": "kappa >= 0.70",
+          "detail": "Evaluated across 50 human supervisor ratings"
+        },
+        "cluster_agreement": {
+          "top_1": {
+            "name": "cluster_agreement_top1",
+            "point_estimate": 0.76,
+            "ci_lower": 0.6259,
+            "ci_upper": 0.857,
+            "rating": "green",
+            "target": ">= 0.75 top-1",
+            "detail": "38/50 agreed with RCA engineer"
+          },
+          "top_3": {
+            "name": "cluster_agreement_top3",
+            "point_estimate": 0.78,
+            "ci_lower": 0.6476,
+            "ci_upper": 0.8725,
+            "rating": "yellow",
+            "target": ">= 0.85 top-3",
+            "detail": "39/50 engineer clusters in top-3 candidates"
+          }
+        },
+        "cost_per_contact": {
+          "name": "cost_per_contact",
+          "point_estimate": 0.0439,
+          "ci_lower": 0.0427,
+          "ci_upper": 0.0451,
+          "rating": "green",
+          "target": "<= $0.45",
+          "detail": "Mean=$0.0439, 95% CI=[$0.0427, $0.0451], p95=$0.0492"
+        },
+        "category_composition": {
+          "human_specific": 50,
+          "human_unknown": 0,
+          "matched_subset": {
+            "name": "slot_accuracy_category_matched_subset",
+            "point_estimate": 0.76,
+            "ci_lower": 0.6259,
+            "ci_upper": 0.857,
+            "target": "diagnostic (not a gate)",
+            "detail": "38/50 on human-specific classes"
+          },
+          "residual_unknown": {
+            "name": "slot_accuracy_category_residual_unknown",
+            "point_estimate": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "target": "diagnostic (not a gate)",
+            "detail": "0/0 residual UNKNOWN OR OTHER (corpus mix, not extraction)"
+          },
+          "note": "0 of 50 rows are UNKNOWN OR OTHER by construction; residual default credit moves with corpus mix."
+        }
+      }
+    },
+    "adversarial_paraphrase": {
+      "corpus": "adversarial_paraphrase",
+      "role": "accuracy_claim",
+      "accuracy_claim": true,
+      "description": "Adversarial caller paraphrase cohort without verbatim lexicon/gazetteer terms; honest system accuracy baseline.",
+      "total_contacts": 50,
+      "overall_verdict": "red",
+      "metrics": {
+        "slots": {
+          "entity_1": {
+            "name": "slot_accuracy_entity_1",
+            "point_estimate": 1.0,
+            "ci_lower": 0.9287,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.90",
+            "detail": "50/50 matching human record"
+          },
+          "entity_2": {
+            "name": "slot_accuracy_entity_2",
+            "point_estimate": 1.0,
+            "ci_lower": 0.9287,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.90",
+            "detail": "50/50 matching human record"
+          },
+          "entity_3": {
+            "name": "slot_accuracy_entity_3",
+            "point_estimate": 0.8,
+            "ci_lower": 0.6696,
+            "ci_upper": 0.8876,
+            "rating": "yellow",
+            "target": ">= 0.90",
+            "detail": "40/50 matching human record"
+          },
+          "category": {
+            "name": "slot_accuracy_category",
+            "point_estimate": 0.06,
+            "ci_lower": 0.0206,
+            "ci_upper": 0.1622,
+            "rating": "red",
+            "target": ">= 0.90",
+            "detail": "3/50 matching human record"
+          }
+        },
+        "kill_switch": {
+          "precision": {
+            "name": "kill_switch_precision",
+            "point_estimate": 1.0,
+            "ci_lower": 0.5655,
+            "ci_upper": 1.0,
+            "rating": "green",
+            "target": ">= 0.85",
+            "detail": "TP=5, FP=0"
+          },
+          "recall": {
+            "name": "kill_switch_recall",
+            "point_estimate": 0.7143,
+            "ci_lower": 0.3589,
+            "ci_upper": 0.9178,
+            "rating": "red",
+            "target": ">= 0.98",
+            "detail": "TP=5, FN=2"
+          }
+        },
+        "severity_agreement": {
+          "name": "severity_agreement_kappa",
+          "point_estimate": 0.2419,
+          "ci_lower": -0.0051,
+          "ci_upper": 0.4888,
+          "rating": "red",
+          "target": "kappa >= 0.70",
+          "detail": "Evaluated across 50 human supervisor ratings"
+        },
+        "cluster_agreement": {
+          "top_1": {
+            "name": "cluster_agreement_top1",
+            "point_estimate": 0.06,
+            "ci_lower": 0.0206,
+            "ci_upper": 0.1622,
+            "rating": "red",
+            "target": ">= 0.75 top-1",
+            "detail": "3/50 agreed with RCA engineer"
+          },
+          "top_3": {
+            "name": "cluster_agreement_top3",
+            "point_estimate": 0.28,
+            "ci_lower": 0.1747,
+            "ci_upper": 0.4167,
+            "rating": "yellow",
+            "target": ">= 0.85 top-3",
+            "detail": "14/50 engineer clusters in top-3 candidates"
+          }
+        },
+        "cost_per_contact": {
+          "name": "cost_per_contact",
+          "point_estimate": 0.0412,
+          "ci_lower": 0.04,
+          "ci_upper": 0.0425,
+          "rating": "green",
+          "target": "<= $0.45",
+          "detail": "Mean=$0.0412, 95% CI=[$0.0400, $0.0425], p95=$0.0478"
+        },
+        "category_composition": {
+          "human_specific": 50,
+          "human_unknown": 0,
+          "matched_subset": {
+            "name": "slot_accuracy_category_matched_subset",
+            "point_estimate": 0.06,
+            "ci_lower": 0.0206,
+            "ci_upper": 0.1622,
+            "target": "diagnostic (not a gate)",
+            "detail": "3/50 on human-specific classes"
+          },
+          "residual_unknown": {
+            "name": "slot_accuracy_category_residual_unknown",
+            "point_estimate": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "target": "diagnostic (not a gate)",
+            "detail": "0/0 residual UNKNOWN OR OTHER (corpus mix, not extraction)"
+          },
+          "note": "0 of 50 rows are UNKNOWN OR OTHER by construction; residual default credit moves with corpus mix."
+        }
+      }
     }
   },
   "meta": {
     "mode": "batch",
     "pack_id": "automotive_nhtsa",
-    "sample_size": 100,
+    "sample_size": 50,
     "seed": 42,
-    "target_cost_usd": 0.45
+    "target_cost_usd": 0.45,
+    "data_source": "dual_stream_validation",
+    "source_type": "offline_adversarial_paraphrase",
+    "synthetic_self_labels": true,
+    "ai_source": "deterministic_intake_code",
+    "human_labels": "synthetic_scenario_assignment",
+    "overall_verdict_stream": "adversarial_paraphrase",
+    "honesty": {
+      "streams_reported": [
+        "synthetic_templated",
+        "adversarial_paraphrase"
+      ],
+      "accuracy_claim_stream": "adversarial_paraphrase",
+      "smoke_test_stream": "synthetic_templated",
+      "note": "overall_verdict is driven exclusively by adversarial_paraphrase stream. synthetic_templated is a smoke test and cannot support an accuracy claim."
+    }
   }
 }

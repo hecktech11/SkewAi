@@ -90,6 +90,7 @@ def request_approval(
         "status": "pending",
         "action_type": action_type,
         "resource_id": resource_id,
+        "requested_by": requested_by,
     }
 
 

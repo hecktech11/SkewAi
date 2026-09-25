@@ -38,6 +38,8 @@ import {
   callPhaseHint,
   CALL_STATE,
   BARGE_IN_GRACE_MS,
+  looksLikeAgentEcho,
+  POST_TTS_COOLDOWN_MS,
 } from './dashboard/src/voiceHelpers.js';
 
 const out = {};
@@ -111,6 +113,12 @@ out.endedNested = mapInteractionEnded({
 out.acceptWhileSpeaking = shouldAcceptSpeechResult({ speaking: true, wsOpen: true });
 out.acceptListening = shouldAcceptSpeechResult({ speaking: false, wsOpen: true });
 out.acceptClosed = shouldAcceptSpeechResult({ speaking: false, wsOpen: false });
+out.acceptDuringCooldown = shouldAcceptSpeechResult({
+  speaking: false, wsOpen: true, listenReadyAt: Date.now() + 5000, now: Date.now(),
+});
+out.echoHurt = looksLikeAgentEcho('is anyone hurt', 'Is anyone hurt in this incident?');
+out.echoNo = looksLikeAgentEcho('2019 Honda CR-V', 'Is anyone hurt in this incident?');
+out.cooldownMs = POST_TTS_COOLDOWN_MS;
 
 const slots = buildSlotEntries(
   { entity_labels: { entity_1: 'Make', entity_2: 'Model' } },
@@ -150,6 +158,8 @@ def test_call_widget_imports_helpers_and_map_ended():
     assert "mapInteractionEnded" in text
     assert "mergeTranscriptTurn" in text
     assert "shouldAcceptSpeechResult" in text
+    assert "looksLikeAgentEcho" in text
+    assert "enqueueSpeak" in text
     # Must not only use nested payload
     assert "mapInteractionEnded(msg)" in text
     # P1-4: typing during greeting must reset speakPhase or STT never restarts.
@@ -177,6 +187,10 @@ def test_shipped_helpers_via_node():
     assert out["acceptWhileSpeaking"] is False
     assert out["acceptListening"] is True
     assert out["acceptClosed"] is False
+    assert out["acceptDuringCooldown"] is False
+    assert out["echoHurt"] is True
+    assert out["echoNo"] is False
+    assert out["cooldownMs"] >= 400
 
     labels = {s["label"] for s in out["slots"]}
     assert "Make" in labels

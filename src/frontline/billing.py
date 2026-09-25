@@ -237,14 +237,15 @@ def stripe_webhook(
     *,
     raw_body: bytes | None = None,
     signature: str | None = None,
+    allow_unsigned: bool = False,
 ) -> dict[str, Any]:
     """Apply a Stripe-like webhook (checkout.session.completed).
 
     Hardening (item 13):
-    - When STRIPE_WEBHOOK_SECRET is set, require a valid
-      ``t=<ts>,v1=hmac_sha256`` signature over the raw body AND a fresh
-      timestamp (``STRIPE_WEBHOOK_TOLERANCE_S``, default 300s) — replay
-      protection. Missing/stale/forged signatures raise PermissionError.
+    - Requires STRIPE_WEBHOOK_SECRET and a valid ``t=<ts>,v1=hmac_sha256``
+      signature over the raw body AND a fresh timestamp (``STRIPE_WEBHOOK_TOLERANCE_S``,
+      default 300s) — replay protection. Missing/stale/forged signatures raise
+      PermissionError across all deploy modes.
     - Never trust client-supplied plan/tenant: the plan comes from the
       checkout invoice row and the tenant must equal the invoice's tenant.
       Unknown/forged sessions raise LookupError.
@@ -292,6 +293,10 @@ def stripe_webhook(
             raise PermissionError("invalid webhook timestamp")
         if age > tolerance:
             raise PermissionError("stale webhook signature (replay rejected)")
+    elif not allow_unsigned:
+        raise PermissionError(
+            "STRIPE_WEBHOOK_SECRET must be configured to process webhooks. Refusing unsigned events."
+        )
 
     with ops_con() as con:
         _ensure(con)

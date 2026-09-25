@@ -91,6 +91,23 @@ class InteractionContext:
     pending_safety_script: str | None = None
     # customer | simulated | audit_review — live-risk and COPQ exclude non-customer.
     case_kind: str = "customer"
+    # ── Voice Tier-A wiring state ─────────────────────────────────────
+    region: str | None = None
+    locale: str = "en-US"
+    voice_consent_required: bool = False
+    voice_consent_obtained: bool = False
+    voice_consent_script: str = ""
+    voice_consent_version: str = "policy.v1"
+    drive_mode: bool = False
+    drive_mode_offered: bool = False
+    confirmation_phase: str = "collection"  # collection | pending | done
+    confirmation_attempts: int = 0
+    vin: str | None = None
+    last_agent_action_id: str | None = None
+    last_agent_text: str = ""
+    last_agent_word_markers: list[dict[str, Any]] = field(default_factory=list)
+    last_turn_latency_ms: float = 0.0
+    last_asr_confidence: float | None = None
 
     # ── Slot helpers ────────────────────────────────────────────────────
     def required_slots_remaining(self) -> list[str]:

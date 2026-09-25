@@ -64,7 +64,11 @@ export default function LiveContactConsole() {
 
   // Deep-link: Command Center can pre-select a live contact.
   useEffect(() => {
-    const pick = parseLocationHash().params.get("id") || consumeSession(SS.consoleSelect);
+    // Accept the original `interaction` deep link as well as the canonical
+    // `id` form so a requested human handoff always lands on the right live
+    // contact instead of silently selecting the first card.
+    const params = parseLocationHash().params;
+    const pick = params.get("id") || params.get("interaction") || consumeSession(SS.consoleSelect);
     if (pick) setSelectedId(pick);
     skipHashWrite.current = true;
   }, []);
@@ -333,6 +337,18 @@ export default function LiveContactConsole() {
     return Object.entries(s).map(([k, v]) => ({ label: k, value: v }));
   }
 
+  function categoriesForInteraction(it) {
+    const live = slots[it.interaction_id] || {};
+    const primary = live.category || it.category;
+    const rawSecondary = live.secondary_categories || [];
+    const secondary = Array.isArray(rawSecondary)
+      ? rawSecondary
+      : String(rawSecondary).split(",");
+    return [primary, ...secondary]
+      .map((value) => String(value || "").trim())
+      .filter((value, index, list) => value && list.indexOf(value) === index);
+  }
+
   function fmtDuration(ms) {
     if (!ms && ms !== 0) return "—";
     if (ms < 1000) return `${ms}ms`;
@@ -502,7 +518,7 @@ export default function LiveContactConsole() {
                 </div>
                 <div style={{ marginTop: 6, fontSize: 12 }}>
                   <span className="muted">category:</span>{" "}
-                  <span className="mono">{it.category || "—"}</span>
+                  <span className="mono">{categoriesForInteraction(it).join(" · ") || "—"}</span>
                 </div>
               </div>
             );

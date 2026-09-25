@@ -582,6 +582,18 @@ CREATE TABLE IF NOT EXISTS dsr_export_audit (
     ip                 VARCHAR,
     created_at         TIMESTAMP NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS frontline_users (
+    user_id            VARCHAR PRIMARY KEY,
+    name               VARCHAR NOT NULL,
+    email              VARCHAR UNIQUE NOT NULL,
+    company            VARCHAR,
+    role               VARCHAR NOT NULL,
+    password_hash      VARCHAR NOT NULL,
+    salt               VARCHAR NOT NULL,
+    created_at         TIMESTAMP NOT NULL,
+    last_login_at      TIMESTAMP
+);
 """
 
 

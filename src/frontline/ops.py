@@ -181,6 +181,37 @@ def list_case_notes(case_id: str, limit: int = 50) -> list[dict[str, Any]]:
     return rows
 
 
+def _resolve_issue_slice(pack_id: str, cluster_id: Any) -> tuple[Any, Any, Any]:
+    """Modal (category, entity_2, entity_3) across a cluster's member records.
+
+    Investigation titles are display text; fix measurement must use the
+    canonical slice or before/after match nothing.
+    """
+    try:
+        cid = int(cluster_id)
+    except (TypeError, ValueError):
+        return None, None, None
+    try:
+        from src.data.warehouse import domain_con as _dcon
+
+        with _dcon(pack_id, read_only=True) as con:
+            row = con.execute(
+                """
+                SELECT r.category, r.entity_2, r.entity_3, COUNT(*) AS n
+                FROM cluster_assignments a
+                JOIN records r ON r.record_id = a.record_id
+                WHERE a.cluster_id = ?
+                GROUP BY 1, 2, 3 ORDER BY n DESC LIMIT 1
+                """,
+                [cid],
+            ).fetchone()
+    except Exception:
+        return None, None, None
+    if not row:
+        return None, None, None
+    return row[0], row[1], row[2]
+
+
 def update_investigation(
     investigation_id: str,
     *,
@@ -222,6 +253,10 @@ def update_investigation(
         r = cur.fetchone()
         cols = [d[0] for d in cur.description]
         out = dict(zip(cols, r))
+    # Keep raw datetimes: the response ISO-formats below, but fix
+    # measurement needs real datetimes (iso strings crash to_naive_utc,
+    # which silently dropped every recorded fix).
+    _fixed_raw = out.get("last_case_at") or out.get("opened_at")
     for k, v in list(out.items()):
         if isinstance(v, datetime):
             out[k] = v.isoformat()
@@ -231,17 +266,24 @@ def update_investigation(
         try:
             from src.enterprise.fix_effectiveness import measure_effectiveness, record_fix
 
+            _pack = str(out.get("pack_id") or "automotive_nhtsa")
+            _cat, _e2, _e3 = _resolve_issue_slice(_pack, out.get("cluster_id"))
             fix = record_fix(
-                pack_id=str(out.get("pack_id") or "automotive_nhtsa"),
-                fixed_at=out.get("last_case_at") or out.get("opened_at"),
-                category=str(out.get("title") or ""),
+                pack_id=_pack,
+                fixed_at=_fixed_raw,
+                category=_cat,
+                entity_2=_e2,
+                entity_3=_e3,
+                investigation_id=investigation_id,
                 note=f"investigation {investigation_id} closed by {author}",
             )
             try:
                 meas = measure_effectiveness(
-                    pack_id=str(out.get("pack_id") or "automotive_nhtsa"),
-                    fixed_at=out.get("last_case_at") or out.get("opened_at"),
-                    category=str(out.get("title") or ""),
+                    pack_id=_pack,
+                    fixed_at=_fixed_raw,
+                    category=_cat,
+                    entity_2=_e2,
+                    entity_3=_e3,
                     window_days=30,
                 )
             except Exception:

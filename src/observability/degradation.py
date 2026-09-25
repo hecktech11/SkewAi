@@ -181,6 +181,18 @@ def build_external_sources_ladder() -> DegradationLadder:
     )
 
 
+def build_slm_ladder() -> DegradationLadder:
+    """SLM understanding fallback chain (replaces English heuristics with safe step-down)."""
+    return DegradationLadder(
+        subsystem="slm_understanding",
+        levels=[
+            DegradationLevel(0, "full", "Primary SLM encoder returns predictions"),
+            DegradationLevel(1, "rules_fallback", "SLM timeout or error; fall back to deterministic regex rules"),
+            DegradationLevel(2, "fail_closed", "Cannot extract; fall through to asking caller"),
+        ],
+    )
+
+
 # ── Global registry ─────────────────────────────────────────────────────
 
 _REGISTRY: dict[str, DegradationLadder] = {}
@@ -220,6 +232,7 @@ def init_default_ladders() -> None:
         build_semantic_search_ladder,
         build_anchor_ladder,
         build_external_sources_ladder,
+        build_slm_ladder,
     ):
         register_ladder(builder())
 
@@ -242,6 +255,7 @@ __all__ = [
     "build_semantic_search_ladder",
     "build_anchor_ladder",
     "build_external_sources_ladder",
+    "build_slm_ladder",
     "register_ladder",
     "get_ladder",
     "all_ladders_status",

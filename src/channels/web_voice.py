@@ -46,6 +46,9 @@ class WebVoiceChannel(ChannelAdapter):
     async def _send(self, payload: dict[str, Any]) -> None:
         await self._ws.send_json(payload)
 
+    async def send_control(self, payload: dict[str, Any]) -> None:
+        await self._send(payload)
+
     async def send_turn(self, text: str, *, speaker: str = "agent", meta: dict[str, Any] | None = None) -> None:
         meta = meta or {}
         await self._send({

@@ -142,6 +142,10 @@ class LoadedPack:
         return self.manifest.display_name
 
     @property
+    def locale(self) -> str:
+        return getattr(self.manifest, "locale", None) or "en-US"
+
+    @property
     def greeting(self) -> str:
         return self.manifest.greeting
 

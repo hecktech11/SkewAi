@@ -7,6 +7,7 @@ export const CALL_STATE = {
   IDLE: "idle",
   CONNECTING: "connecting",
   LISTENING: "listening",
+  THINKING: "thinking",
   AGENT_SPEAKING: "agent-speaking",
   ENDED: "ended",
 };
@@ -15,6 +16,7 @@ export const STATE_LABELS = {
   [CALL_STATE.IDLE]: "Ready to start",
   [CALL_STATE.CONNECTING]: "Connecting…",
   [CALL_STATE.LISTENING]: "Listening to you",
+  [CALL_STATE.THINKING]: "Thinking…",
   [CALL_STATE.AGENT_SPEAKING]: "Agent speaking",
   [CALL_STATE.ENDED]: "Call ended",
 };
@@ -42,6 +44,9 @@ export function callPhaseHint(state, opts = {}) {
   }
   if (state === CALL_STATE.LISTENING) {
     return "Your turn · speak or type below";
+  }
+  if (state === CALL_STATE.THINKING) {
+    return "Working on your answer… mic paused";
   }
   if (state === CALL_STATE.CONNECTING) {
     return "Opening contact · greeting next";
@@ -91,10 +96,63 @@ export function mapInteractionEnded(msg) {
  * Should SpeechRecognition process a result right now?
  * Ignore customer STT while agent TTS is playing (unless barge-in already stopped TTS).
  */
-export function shouldAcceptSpeechResult({ speaking, wsOpen }) {
+export function shouldAcceptSpeechResult({ speaking, wsOpen, listenReadyAt = 0, now = 0 }) {
   if (!wsOpen) return false;
   if (speaking) return false;
+  const ts = now || Date.now();
+  if (listenReadyAt && ts < listenReadyAt) return false;
   return true;
+}
+
+/** Settle after TTS so the mic does not hear the agent's last words as the customer. */
+export const POST_TTS_COOLDOWN_MS = 650;
+
+/** Join Chrome's split final STT chunks ("my car has" then "been stuck") into one turn. */
+export const STT_FINAL_DEBOUNCE_MS = 1400;
+
+/** Chrome throws if recognition.start() runs in the same tick as stop()/onend. */
+export const RECOG_RESTART_MS = 280;
+
+function _normUtterance(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * True when heard STT is the agent talking (speaker bleed / TTS echo).
+ * Prevents "is anyone hurt?" being captured as a customer "yes/hurt" answer.
+ */
+export function looksLikeAgentEcho(heard, agentText) {
+  const a = _normUtterance(heard);
+  const b = _normUtterance(agentText);
+  if (!a || !b || a.length < 4) return false;
+  if (b.includes(a) && a.length >= 6) return true;
+  if (a.includes(b) && b.length >= 10) return true;
+  const ta = a.split(" ").filter((w) => w.length > 3);
+  const tb = new Set(b.split(" ").filter((w) => w.length > 3));
+  if (!ta.length || !tb.size) return false;
+  let hit = 0;
+  for (const w of ta) if (tb.has(w)) hit += 1;
+  return hit / ta.length >= 0.65;
+}
+
+/**
+ * Fold consecutive SpeechRecognition finals into one utterance.
+ * Returns { buffer, flush } — flush is the joined text when debounce elapsed.
+ */
+export function coalesceSpeechFinals(buffer, nextText, now, debounceMs = STT_FINAL_DEBOUNCE_MS) {
+  const piece = String(nextText || "").trim();
+  const ts = now || Date.now();
+  const wait = debounceMs == null ? STT_FINAL_DEBOUNCE_MS : debounceMs;
+  if (!piece) {
+    return { buffer: buffer || { text: "", at: 0 }, flush: null };
+  }
+  const prev = buffer && buffer.text ? buffer : { text: "", at: 0 };
+  const joined = prev.text ? `${prev.text} ${piece}` : piece;
+  return { buffer: { text: joined, at: ts }, flush: null, wait };
 }
 
 /** Default settle before barge-in can cancel TTS (ms). */

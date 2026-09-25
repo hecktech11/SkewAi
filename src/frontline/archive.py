@@ -27,10 +27,13 @@ def build_audit_archive(interaction_id: str, *, out_dir: Path | None = None) -> 
     data["actions_count"] = len(actions)
 
     report_path = REPORTS_DIR / f"{iid}.md"
+    from src.security.identifiers import assert_under_roots as _assert_roots
+
+    report_path = _assert_roots(report_path, [REPORTS_DIR])
     report_text = ""
-    if report_path.exists():
+    if report_path.is_file():
         report_text = report_path.read_text(encoding="utf-8")
-    data["audit_report_path"] = str(report_path) if report_path.exists() else None
+    data["audit_report_path"] = str(report_path) if report_path.is_file() else None
     data["audit_report_sha256"] = (
         hashlib.sha256(report_text.encode("utf-8")).hexdigest() if report_text else None
     )

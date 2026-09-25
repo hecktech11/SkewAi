@@ -99,6 +99,11 @@ def test_safety_state_lives_in_slots_not_attr(pack):
 def test_claude_key_is_not_sent_to_openai(monkeypatch):
     monkeypatch.setenv("FRONTLINE_LLM_ENABLED", "1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # The base-URL overrides are ambient on developer machines; a test that
+    # asserts the default endpoint must not inherit them.
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("FRONTLINE_LLM_ALLOWED_HOSTS", raising=False)
     monkeypatch.setenv("CLAUDE_API_KEY", "sk-ant-secret-should-not-leave")
     from src.ai import provider as prov
 
@@ -138,6 +143,9 @@ def test_claude_key_is_not_sent_to_openai(monkeypatch):
 def test_openai_path_does_not_fall_back_to_claude_key(monkeypatch):
     from src.ai import provider as prov
 
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("FRONTLINE_LLM_ALLOWED_HOSTS", raising=False)
     monkeypatch.setattr(prov, "_openai_key", lambda: "sk-openai")
     monkeypatch.setattr(prov, "_claude_key", lambda: "sk-ant-secret")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")

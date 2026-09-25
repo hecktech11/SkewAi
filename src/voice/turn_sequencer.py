@@ -9,6 +9,15 @@ from typing import Any, Optional, Set
 from src.security.exceptions import DuplicateTurnException
 
 
+def _is_pk_collision(exc: BaseException) -> bool:
+    """True only when the error proves the row already exists (true replay)."""
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(k in msg for k in (
+        "duplicate", "unique", "primary key", "constraint",
+        "already exists", "conflict",
+    ))
+
+
 class TelephonyTurnSequencer:
     """
     Prevents race conditions and duplicate turns caused by cellular network
@@ -44,7 +53,10 @@ class TelephonyTurnSequencer:
             if turn_payload_hash in self.processed_turn_hashes:
                 return False
 
-            # Durable database deduplication check if warehouse is active
+            # Durable database deduplication check if warehouse is active.
+            # Fail-OPEN: only a proven primary-key collision means duplicate.
+            # Any other DB error (lock contention, missing table) must let the
+            # customer's turn through — dropping input is worse than a replay.
             if turn_payload_hash:
                 try:
                     from src.data.warehouse import ops_con
@@ -57,9 +69,17 @@ class TelephonyTurnSequencer:
                             """,
                             [self.interaction_id, turn_payload_hash, datetime.now(timezone.utc)],
                         )
-                except Exception:
-                    # If primary key collision or duplicate insertion fails
-                    return False
+                except Exception as e:
+                    if _is_pk_collision(e):
+                        return False
+                    try:
+                        from src.observability.metrics import inc as _inc
+
+                        _inc("turn_dedup_db_error_fail_open")
+                    except Exception:
+                        pass
+                    # Fall through to in-memory marking: still dedup this
+                    # process's own retries while letting the turn through.
 
             # Mark processed
             self.last_committed_seq = max(self.last_committed_seq, turn_seq)

@@ -483,7 +483,7 @@ async def audit_interaction(
 
     for action in actions:
         verdict = _audit_single_action(
-            pack_id, action, customer_entities, as_of=as_of
+            pack_id, action, customer_entities, as_of=as_of, turns=turns
         )
         result.snapshot_verified += verdict.evidence_confirmed_snapshot
         result.live_verified += verdict.evidence_confirmed_live
@@ -590,6 +590,7 @@ def _audit_single_action(
     customer_entities: dict[str, str | None],
     *,
     as_of: str | None = None,
+    turns: list[dict[str, Any]] | None = None,
 ) -> ActionVerdict:
     """Audit one agent_actions row.
 
@@ -662,7 +663,9 @@ def _audit_single_action(
 
     planted = load_bound_claims(action_id)
     if planted:
-        claim_audit = audit_bound_claims(planted, snapshots_for_action(action_id))
+        claim_audit = audit_bound_claims(
+            planted, snapshots_for_action(action_id), turns=turns
+        )
         if not claim_audit.ok:
             verdict.unsupported_claims = list(claim_audit.rejected)
             verdict.verdict = "mismatch"

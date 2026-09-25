@@ -79,3 +79,14 @@ class ChannelAdapter(ABC):
     async def hangup(self) -> None:
         """Terminate the channel (customer hung up / server closed)."""
         ...
+
+    async def send_control(self, payload: dict[str, Any]) -> None:
+        """Deliver an out-of-band control/telemetry frame (frustration, latency,
+        consent prompts).
+
+        Concrete-by-default: only channels with a structured frame surface (a
+        WebSocket widget) can carry these. SMS, email and telephony have no
+        place to put them, so the base ignores them rather than forcing every
+        adapter to stub the method out.
+        """
+        return None

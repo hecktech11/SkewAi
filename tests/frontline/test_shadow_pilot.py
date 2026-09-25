@@ -190,18 +190,30 @@ def test_fleet_scan_emerging_novel_clusters(reset_ops_db, pack):
 
 
 def test_shadow_pilot_batch_runner(tmp_path):
+    """Phase 0 honesty: the batch harness executes real intake code, so the
+    synthetic cohort scores RED (category 0.76, cluster top-1 below gate).
+    The old assertion pinned the rng-simulated GREEN baseline — that file is
+    tombstoned, not re-blessed. Structure, CIs, determinism and the honest
+    meta flags are what this test now guards."""
     from src.frontline.shadow_pilot import format_scorecard_table, run_shadow_pilot
 
     out_file = str(tmp_path / "shadow_test.json")
     report = run_shadow_pilot(mode="batch", sample_size=50, out_path=out_file, seed=42)
 
     assert report["total_contacts"] == 50
-    assert report["overall_verdict"] == "green"
+    assert report["overall_verdict"] == "red"
+    assert report["meta"]["ai_source"] == "deterministic_intake_code"
+    assert report["meta"]["human_labels"] == "synthetic_scenario_assignment"
+    assert report["meta"]["synthetic_self_labels"] is True
     assert "slots" in report["metrics"]
     assert "kill_switch" in report["metrics"]
     assert "severity_agreement" in report["metrics"]
     assert "cluster_agreement" in report["metrics"]
     assert "cost_per_contact" in report["metrics"]
+
+    # Deterministic: same seed, same honest numbers across dual streams.
+    assert report["streams"]["synthetic_templated"]["metrics"]["slots"]["category"]["point_estimate"] == 0.76
+    assert report["metrics"]["slots"]["category"]["point_estimate"] == 0.06
 
     # Assert 95% Wilson intervals are bounded
     for slot_name, slot_res in report["metrics"]["slots"].items():
@@ -209,7 +221,7 @@ def test_shadow_pilot_batch_runner(tmp_path):
 
     table_text = format_scorecard_table(report)
     assert "SHADOW PILOT EVALUATION SCORECARD" in table_text
-    assert "[GREEN]" in table_text
+    assert "[RED]" in table_text
 
     import json
     with open(out_file, "r") as f:
@@ -302,4 +314,3 @@ def test_shadow_pilot_empirical_runner(tmp_path):
 
     table_text = format_scorecard_table(report)
     assert "EMPIRICAL_GROUND_TRUTH" in table_text
-

@@ -88,6 +88,53 @@ export async function fetchMe() {
   return r.json();
 }
 
+/** Public server health (no auth). Used by the route guard. */
+export async function fetchHealth() {
+  try {
+    const r = await fetch("/health");
+    if (!r.ok) return { status: "down" };
+    return r.json();
+  } catch {
+    return { status: "down" };
+  }
+}
+
+/** Validate the stored API key against the server (401 when bad). */
+export async function verifyCredential() {
+  try {
+    const r = await fetch("/api/frontline/auth/verify", {
+      headers: apiHeaders(),
+      credentials: "same-origin",
+    });
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true, ...(await r.json()) };
+  } catch {
+    return { ok: false, offline: true };
+  }
+}
+
+/**
+ * Single check used by the App route guard. A signed session always passes.
+ * Otherwise a stored API key passes only when the server runs auth-required
+ * and accepts it. Anonymous visitors fail closed (open pilot mode included —
+ * there the only way in is sign up / sign in).
+ */
+export async function hasConsoleAccess() {
+  let me = { signed_in: false };
+  let health = {};
+  try {
+    [me, health] = await Promise.all([fetchMe(), fetchHealth()]);
+  } catch {
+    /* both default to deny */
+  }
+  if (me?.signed_in) return { allowed: true, via: "session", me, health };
+  if (getStoredApiKey() && health?.auth_required) {
+    const v = await verifyCredential();
+    if (v.ok) return { allowed: true, via: "api-key", me, health };
+  }
+  return { allowed: false, me, health };
+}
+
 export async function signOut() {
   // Logout MUST invalidate the session everywhere the client holds it:
   // memory key, opt-in disk copy, subject label, AND the server session
@@ -185,3 +232,147 @@ export function sendWsAuth(ws) {
     /* ignore */
   }
 }
+
+/**
+ * Register a new operator / user account.
+ * Ready for backend integration via POST /api/frontline/auth/signup.
+ * Gracefully falls back to structured preview mode if the backend route is not yet wired.
+ */
+export async function registerUser({ name, email, company, role, password }) {
+  try {
+    const r = await fetch("/api/frontline/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...apiHeaders() },
+      credentials: "same-origin",
+      body: JSON.stringify({ name, email, company, role, password }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.subject || data.email) {
+        _write(SUBJECT_STORAGE, data.subject || data.email || email);
+      }
+      notifyAuthChange();
+      return { success: true, data, mode: "api" };
+    }
+    if (r.status === 404 || r.status === 405 || r.status === 501) {
+      // Backend route pending integration: preserve session in preview mode
+      _write(SUBJECT_STORAGE, email);
+      notifyAuthChange();
+      return {
+        success: true,
+        mock: true,
+        message: `Account created for ${name} (${email}).`,
+        user: { name, email, company, role },
+      };
+    }
+    const errText = await r.text();
+    let detail = "Registration failed";
+    try {
+      const j = JSON.parse(errText);
+      detail = j.detail || j.title || j.message || detail;
+    } catch {
+      detail = errText || detail;
+    }
+    if (r.status === 409) {
+      throw new Error("An account with this email already exists. Try signing in instead.");
+    }
+    if (r.status === 429) {
+      throw new Error("Too many attempts. Please wait a minute and try again.");
+    }
+    throw new Error(detail);
+  } catch (err) {
+    if (
+      String(err.message).includes("Failed to fetch") ||
+      String(err.message).includes("NetworkError")
+    ) {
+      _write(SUBJECT_STORAGE, email);
+      notifyAuthChange();
+      return {
+        success: true,
+        mock: true,
+        message: `Account staged for ${name} (${email}).`,
+        user: { name, email, company, role },
+      };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Sign in with email and password.
+ * Ready for backend integration via POST /api/frontline/auth/login.
+ */
+export async function loginWithPassword({ email, password, remember = false }) {
+  try {
+    const r = await fetch("/api/frontline/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...apiHeaders() },
+      credentials: "same-origin",
+      body: JSON.stringify({ email, password }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.subject || data.email) {
+        _write(SUBJECT_STORAGE, data.subject || data.email || email);
+      }
+      if (data.api_key) {
+        setApiKey(data.api_key, { remember });
+      }
+      notifyAuthChange();
+      return { success: true, data };
+    }
+    if (r.status === 404 || r.status === 405 || r.status === 501) {
+      _write(SUBJECT_STORAGE, email);
+      notifyAuthChange();
+      return {
+        success: true,
+        mock: true,
+        message: "Signed in (local preview).",
+        user: { email },
+      };
+    }
+    const errText = await r.text();
+    let detail = "Invalid credentials";
+    try {
+      const j = JSON.parse(errText);
+      detail = j.detail || j.title || j.message || detail;
+    } catch {
+      detail = errText || detail;
+    }
+    if (r.status === 429) {
+      throw new Error("Too many attempts. Please wait a minute and try again.");
+    }
+    throw new Error(detail);
+  } catch (err) {
+    if (
+      String(err.message).includes("Failed to fetch") ||
+      String(err.message).includes("NetworkError")
+    ) {
+      _write(SUBJECT_STORAGE, email);
+      notifyAuthChange();
+      return {
+        success: true,
+        mock: true,
+        message: "Signed in (offline preview).",
+        user: { email },
+      };
+    }
+    throw err;
+  }
+}
+
+/**
+ * @deprecated Fake client-side login (no server session). It cannot pass the
+ * App route guard — use real signup/sign-in or a validated API key instead.
+ * Kept exported so older imports don't crash.
+ */
+export function signInAsPilotDemo({ name = "Alex Mercer", email = "alex.mercer@skew.ai", role = "Platform & ML Engineer" } = {}) {
+  _write(SUBJECT_STORAGE, email);
+  notifyAuthChange();
+  return {
+    success: true,
+    pilot: true,
+    user: { name, email, role },
+  };
+}
+

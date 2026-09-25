@@ -257,18 +257,22 @@ async def marketplace_install(pack_id: str, role: str = Depends(get_role)) -> di
 
 
 @router.get("/billing/usage")
-async def usage(tenant_id: str = "default") -> dict[str, Any]:
+async def usage(tenant_id: str | None = None) -> dict[str, Any]:
     from src.frontline.billing import usage_dashboard
+    from src.ops.tenant import get_tenant
 
-    return usage_dashboard(tenant_id)
+    actual_tenant = get_tenant() or tenant_id or "default"
+    return usage_dashboard(actual_tenant)
 
 
 @router.post("/billing/checkout")
 async def billing_checkout(body: dict[str, Any]) -> dict[str, Any]:
     from src.frontline.billing import stripe_checkout
+    from src.ops.tenant import get_tenant
 
+    actual_tenant = get_tenant() or str(body.get("tenant_id") or "default")
     return stripe_checkout(
-        str(body.get("tenant_id") or "default"),
+        actual_tenant,
         plan=str(body.get("plan") or "pilot"),
         amount_cents=int(body.get("amount_cents") or 9900),
     )
@@ -300,11 +304,13 @@ async def billing_webhook(request: Request, body: dict[str, Any]) -> dict[str, A
 async def seats_assign(body: dict[str, Any], role: str = Depends(get_role)) -> dict[str, Any]:
     from src.api.rbac import require_perm
     from src.frontline.billing import assign_seat
+    from src.ops.tenant import get_tenant
 
     require_perm(role, "seat:admin")
+    actual_tenant = get_tenant() or str(body.get("tenant_id") or "default")
     try:
         return assign_seat(
-            str(body.get("tenant_id") or "default"),
+            actual_tenant,
             str(body.get("user_id") or "user"),
             str(body.get("role") or "agent"),
         )

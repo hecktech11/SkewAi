@@ -24,6 +24,7 @@ remaining slots, notify Sentinel, read the pack's static escalation script.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -46,11 +47,24 @@ _CATEGORY_SYNONYMS: dict[str, str] = {
     # ── Automotive (NHTSA) ──
     "brakes": "SERVICE BRAKES",
     "brake": "SERVICE BRAKES",
+    "brake pedal": "SERVICE BRAKES",
+    # Common Web Speech substitutions.  These are intentionally contextual:
+    # a bare "break"/"broke" must not be reclassified as a brake fault.
+    "brake is not moving": "SERVICE BRAKES",
+    "brake is also not moving": "SERVICE BRAKES",
+    "break is not moving": "SERVICE BRAKES",
+    "break is also not moving": "SERVICE BRAKES",
+    "breath is not moving": "SERVICE BRAKES",
+    "breath is also not moving": "SERVICE BRAKES",
     "abs": "SERVICE BRAKES",
     "engine": "ENGINE",
     "motor": "ENGINE",
     "transmission": "POWER TRAIN",
     "gearbox": "POWER TRAIN",
+    "gear": "POWER TRAIN",
+    "gear stuck": "POWER TRAIN",
+    "gear is stuck": "POWER TRAIN",
+    "gear is also stuck": "POWER TRAIN",
     "power train": "POWER TRAIN",
     "fuel": "FUEL SYSTEM",
     "gas tank": "FUEL SYSTEM",
@@ -61,6 +75,13 @@ _CATEGORY_SYNONYMS: dict[str, str] = {
     "electrical": "ELECTRICAL SYSTEM",
     "wiring": "ELECTRICAL SYSTEM",
     "battery": "ELECTRICAL SYSTEM",
+    "dashboard": "ELECTRICAL SYSTEM",
+    "instrument cluster": "ELECTRICAL SYSTEM",
+    "instrument panel": "ELECTRICAL SYSTEM",
+    "music system": "ELECTRICAL SYSTEM",
+    "infotainment": "ELECTRICAL SYSTEM",
+    "stereo": "ELECTRICAL SYSTEM",
+    "radio": "ELECTRICAL SYSTEM",
     "lights": "EXTERIOR LIGHTING",
     "headlights": "EXTERIOR LIGHTING",
     "taillights": "EXTERIOR LIGHTING",
@@ -199,9 +220,21 @@ def _category_hit_suppressed(text: str, start: int, end: int, syn: str) -> bool:
     lower = text.lower()
     if _overlaps_span(start, end, _skip_spans(lower)):
         return True
-    if _term_hedged_or_negated(text, syn, hedges=False):
+    # Negation belongs to the current clause.  Looking across commas meant
+    # "steering is not working, the brakes are not moving" suppressed the
+    # brake fault because it inherited the first clause's "not".
+    clause_start = max(
+        lower.rfind(",", 0, start),
+        lower.rfind(";", 0, start),
+        lower.rfind(".", 0, start),
+        lower.rfind("!", 0, start),
+        lower.rfind("?", 0, start),
+    ) + 1
+    clause_prefix = lower[clause_start:start]
+    clause_tokens = re.findall(r"[a-z0-9'-]+", clause_prefix)
+    if any(token in _NEGATORS for token in clause_tokens[-_HEDGE_WINDOW_TOKENS:]):
         return True
-    prefix = lower[:start]
+    prefix = clause_prefix
     tail = prefix[-48:]
     if re.search(r"\bwondering if\b", tail):
         return True
@@ -260,7 +293,12 @@ def match_category_synonym(
     return hits[0][3]
 
 
-def extract_pack_category(text: str, ctx: InteractionContext | None = None) -> str | None:
+def extract_pack_category(
+    text: str,
+    ctx: InteractionContext | None = None,
+    *,
+    rules_only: bool = False,
+) -> str | None:
     """Shared category extractor for live intake and shadow scoring."""
     allowed = None
     gaz_val = None
@@ -270,15 +308,26 @@ def extract_pack_category(text: str, ctx: InteractionContext | None = None) -> s
         gaz_val = _extract_via_gazetteer(text, ctx, "category")
     syn = match_category_synonym(text, allowed=allowed)
     if syn:
-        return syn
-    if not gaz_val:
-        return None
-    lower = text.lower()
-    key = gaz_val.lower()
-    m = re.search(rf"\b{re.escape(key)}\b", lower)
-    if m and _category_hit_suppressed(text, m.start(), m.end(), key):
-        return None
-    return gaz_val
+        rules_cat = syn
+    elif not gaz_val:
+        rules_cat = None
+    else:
+        lower = text.lower()
+        key = gaz_val.lower()
+        m = re.search(rf"\b{re.escape(key)}\b", lower)
+        if m and _category_hit_suppressed(text, m.start(), m.end(), key):
+            rules_cat = None
+        else:
+            rules_cat = gaz_val
+
+    if not rules_only and ctx is not None:
+        try:
+            from src.ml_runtime.category_zeroshot import extract_category_with_mode
+            cat, _source, _meta = extract_category_with_mode(text, ctx, rules_cat)
+            return cat
+        except Exception:
+            return rules_cat
+    return rules_cat
 
 
 def _extract_year(text: str, year_range: tuple[int, int] | None) -> str | None:
@@ -296,6 +345,52 @@ def _extract_via_gazetteer(text: str, ctx: InteractionContext, slot_name: str) -
     if gaz is None:
         return None
     return gaz.match_substring(text)
+
+
+# Filler utterances that must never fill the free-text description slot.
+# Voice STT often delivers bare greetings ("hello hello hello"), single-word
+# acknowledgements ("yes", "okay"), or mic-check loops. Accepting those as the
+# symptom description pollutes the slot frame: the real "what's happening?"
+# question is then skipped and the contact closes with junk evidence.
+_FILLER_TOKENS = frozenset({
+    "hello", "hi", "hey", "hii", "helo",
+    "yes", "yeah", "yep", "yup", "yea", "no", "nope", "nah",
+    "ok", "okay", "k", "thanks", "thank", "you", "please",
+    "good", "great", "fine", "well", "sure", "right",
+    "testing", "test", "mic", "mike", "check", "hello?",
+})
+
+
+def _is_filler_description(text: str) -> bool:
+    """True when `text` carries no symptom content (greeting/ack/mic-check)."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    # Strip punctuation, collapse whitespace — "hello hello hello" -> tokens.
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", stripped.lower())
+    tokens = [t for t in cleaned.split() if t]
+    if not tokens:
+        return True
+    # Single repeated token ("hello hello hello hello") is mic-check, not a symptom.
+    if len(set(tokens)) == 1:
+        return True
+    # Very short utterances composed only of filler vocabulary.
+    if len(tokens) <= 3 and all(t in _FILLER_TOKENS for t in tokens):
+        return True
+    # Bare acknowledgement with no content ("yes", "okay thanks").
+    if len(" ".join(tokens)) < 8 and all(t in _FILLER_TOKENS for t in tokens):
+        return True
+    return False
+
+
+def _extract_description(text: str) -> str | None:
+    """Free-text description that rejects filler so the symptom question survives."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    if _is_filler_description(stripped):
+        return None
+    return stripped
 
 
 # ── Kill-switch ─────────────────────────────────────────────────────────────
@@ -372,6 +467,79 @@ def escalate_on_for_prompt(prompt: str) -> str | None:
     if any(w in p for w in ("hurt", "injur", "danger", "taken", "stolen", "emergency")):
         return "yes"
     return None
+
+
+# Injury-state vocabulary for question-conditioned polarity (defect #2 fix).
+# Scoped ONLY to interpreting replies to safety questions — never a
+# kill-switch input, never a category signal, never added to the pack
+# lexicons. A stopgap until the SLM (§4 of the SLM plan); do not extend as a
+# substitute for open-vocabulary understanding (§7).
+_INJURY_STATE_TERMS = frozenset({
+    "hurt", "hurts", "injured", "injury", "injuries",
+    "bleeding", "bleed", "cut", "wound", "wounded",
+    "sore", "limping", "limp", "pain", "painful",
+    "dizzy", "unconscious", "trapped", "ambulance", "hospital",
+    "broke", "broken", "fracture", "fractured", "swollen", "bruise", "bruised",
+})
+
+# Speaker-wellbeing assertions ("we're fine") — polarity is the opposite of
+# whatever would escalate the question being answered.
+_WELLBEING_TERMS = frozenset({
+    "fine", "okay", "ok", "good", "safe", "alright", "well", "great",
+    "all good", "no injuries", "no injury",
+})
+
+
+def _has_term(text: str, terms: frozenset[str]) -> bool:
+    for term in terms:
+        if " " in term:
+            if term in text:
+                return True
+        elif re.search(rf"\b{re.escape(term)}\b", text):
+            return True
+    return False
+
+
+def classify_answer(question: str, text: str) -> str | None:
+    """Polarity of a reply CONDITIONED on the safety question asked.
+
+    The legacy ``classify_yes_no`` never sees the question, so *"im fine"*
+    answering *"Is anyone hurt?"* resolved to ``yes`` (false P1), and injury
+    reports without yes/no tokens (*"my son has a cut"*) resolved to ``None``
+    (re-asked on a live call). Rules, in order:
+
+    1. explicit leading yes/no token → literal, question-independent;
+    2. negated-injury phrasing → ``no``;
+    3. injury-state assertion → the polarity that escalates *this* question
+       (injury reported against any safety question stays on the safe side);
+    4. speaker-wellbeing assertion → the opposite of the escalate polarity
+       (``im fine`` = ``no`` to "hurt?", ``yes`` to "safe location?");
+    5. anything else → legacy ``classify_yes_no`` (unchanged behavior).
+    """
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    if re.match(r"^(no|nope|nah|negative)\b", t):
+        return "no"
+    if re.match(r"^(yes|yeah|yep|yup|yea|affirmative)\b", t):
+        return "yes"
+    if re.search(r"\b(nobody|no one|no-one|none)\b.{0,32}\b(hurt|hurts|injured|harmed|bleeding)\b", t):
+        return "no"
+    if re.search(r"\b(not|n't|isnt|isn't)\s+(hurt|injured|bleeding|safe)\b", t):
+        return "no"
+    if re.search(r"\b(unsafe|in danger|not safe)\b", t):
+        return "no"
+    if re.search(r"\bno\s+(injur\w*|hurt|harmed|bleeding|blood)\b", t):
+        return "no"
+    if _has_term(t, _INJURY_STATE_TERMS):
+        return escalate_on_for_prompt(question) or "yes"
+    if _has_term(t, _WELLBEING_TERMS):
+        esc = escalate_on_for_prompt(question)
+        if esc == "yes":
+            return "no"
+        if esc == "no":
+            return "yes"
+    return classify_yes_no(text)
 
 
 def _parse_asked_indices(raw: Any) -> set[int]:
@@ -517,8 +685,86 @@ class IntakeAgent(Agent):
                             "kill_switch": None, "slots_filled_now": False,
                             "readback": True, "readback_slot": _slot,
                             "asr_confidence": _c}
-            _dtmf = parse_dtmf(customer_turn or "")
-            if _dtmf and not ctx.has_required_slots():
+            # DTMF menu is stateful: offering the menu sets a flag; the NEXT
+            # digit is a selection, not another menu offer (fixes infinite
+            # "press 1 ... press 1 ..." loop). Year-like input never reaches
+            # here: parse_dtmf rejects bare multi-digit, and we double-guard
+            # with an explicit year check so "2023" always fills entity_1.
+            _raw_turn = (customer_turn or "").strip()
+            _year_first = _extract_year(_raw_turn, self._year_range_for_entity_1())
+            _dtmf = parse_dtmf(_raw_turn)
+            if _year_first and _dtmf and len(_raw_turn) > 1:
+                _dtmf = None  # year wins over keypad on any multi-char input
+            if _dtmf and ctx.slots.get("__dtmf_offered__"):
+                ctx.slots.pop("__dtmf_offered__", None)
+                if _dtmf == "1":
+                    # "continue": fall through to normal slot extraction below
+                    # so the current question is re-asked with progress kept.
+                    record_action(self._action(
+                        action_type="slot_extracted",
+                        input_summary=f"dtmf selection: '{_dtmf}' (continue)",
+                        output_summary="dtmf menu accepted; resuming slot collection",
+                    ))
+                    _dtmf = None
+                elif _dtmf == "2":
+                    record_action(self._action(
+                        action_type="handoff_offer_emitted",
+                        input_summary=f"dtmf selection: '{_dtmf}' (speak to someone)",
+                        output_summary="escalate_to_human",
+                    ))
+                    try:
+                        from src.frontline.validation_queue import enqueue_insight
+
+                        enqueue_insight(
+                            kind="dtmf_handoff",
+                            interaction_id=ctx.interaction_id,
+                            summary="caller pressed 2 for a specialist",
+                        )
+                    except Exception:
+                        pass
+                    return {"extracted": {}, "question": (
+                        "Connecting you to a human specialist now — thanks for holding."
+                    ), "fast_path": True, "kill_switch": None,
+                        "slots_filled_now": False,
+                        "escalate_low_confidence": True,
+                        "low_confidence_slot": "dtmf_menu",
+                        "dtmf": _dtmf}
+                else:
+                    # Unknown key: re-offer once, then fall through.
+                    record_action(self._action(
+                        action_type="slot_extracted",
+                        input_summary=f"dtmf selection: '{_dtmf}' (unknown key)",
+                        output_summary="re-offering dtmf menu once",
+                    ))
+                    return {"extracted": {}, "question": dtmf_fallback_prompt(["continue", "speak to someone"]),
+                            "fast_path": True, "kill_switch": None,
+                            "slots_filled_now": False, "dtmf": _dtmf}
+            # No menu pending: a bare "2" is an explicit human request (one
+            # press, immediate handoff). A bare "1" just falls through to
+            # normal collection so the current question repeats naturally —
+            # never an infinite menu loop.
+            if _dtmf == "2" and not ctx.has_required_slots():
+                record_action(self._action(
+                    action_type="handoff_offer_emitted",
+                    input_summary="dtmf: bare '2' (speak to someone)",
+                    output_summary="escalate_to_human",
+                ))
+                return {"extracted": {}, "question": (
+                    "Connecting you to a human specialist now — thanks for holding."
+                ), "fast_path": True, "kill_switch": None,
+                    "slots_filled_now": False,
+                    "escalate_low_confidence": True,
+                    "low_confidence_slot": "dtmf_menu",
+                    "dtmf": _dtmf}
+            if _dtmf == "1":
+                record_action(self._action(
+                    action_type="slot_extracted",
+                    input_summary="dtmf: bare '1' (continue)",
+                    output_summary="ignoring bare key; resuming slot collection",
+                ))
+                _dtmf = None
+            if _dtmf and not ctx.has_required_slots() and not _year_first:
+                ctx.slots["__dtmf_offered__"] = "1"
                 record_action(self._action(
                     action_type="slot_extracted",
                     input_summary=f"dtmf fallback: '{_dtmf}'",
@@ -559,10 +805,20 @@ class IntakeAgent(Agent):
         # ── Bind the pending safety-question answer BEFORE the lexicon ───
         # The pack asks "Is anyone hurt?" then used to ignore the reply.
         # Affirmative/negative answers are interpreted against escalate_on.
+        safety_answered = False
         if customer_turn and not ctx.safety_flags.get("escalation"):
+            pending_before = ctx.slots.get(_SAFETY_PENDING_KEY)
+            asked_before = ctx.slots.get(_SAFETY_ASKED_KEY)
             safety_hit = self._evaluate_pending_safety_answer(customer_turn)
             if safety_hit:
                 return safety_hit
+            # A non-escalating safety reply ("nobody is hurt") was consumed:
+            # it must not double as the symptom description.
+            if pending_before is not None and str(pending_before).strip() != "":
+                pending_after = ctx.slots.get(_SAFETY_PENDING_KEY)
+                asked_after = ctx.slots.get(_SAFETY_ASKED_KEY)
+                if pending_after != pending_before or asked_after != asked_before:
+                    safety_answered = True
 
         # ── Kill-switch check FIRST ──────────────────────────────────────
         kill_term = _check_kill_switch(customer_turn, ctx) if customer_turn else None
@@ -609,20 +865,63 @@ class IntakeAgent(Agent):
 
         # ── Slot extraction from the customer turn ────────────────────────
         if customer_turn:
+            # First pass: structured slots (year/gazetteer/regex). The
+            # free-text description runs second so a one-word entity answer
+            # ("CR-V", "Honda", "2019") cannot also become the symptom.
             for slot in ctx.pack.manifest.slot_frame:
+                if slot.name == "description":
+                    continue
                 if ctx.slots.get(slot.name):
+                    # A caller can report more than one affected system. Keep
+                    # the first category as the routing primary, while adding
+                    # every later category to the live case context.
+                    if slot.name == "category":
+                        self._merge_secondary_categories(
+                            customer_turn, str(ctx.slots.get("category") or "")
+                        )
                     continue  # already filled
                 value = self._extract_slot(slot, customer_turn)
                 if value:
                     extracted[slot.name] = value
                     ctx.slots[slot.name] = value
+            # Second pass: description needs real symptom content — not a
+            # safety reply, not filler, and not a bare entity echo.
+            if not safety_answered and not ctx.slots.get("description"):
+                desc = self._extract_slot(
+                    next(s for s in ctx.pack.manifest.slot_frame if s.name == "description"),
+                    customer_turn,
+                )
+                if desc:
+                    # Bare entity answers ("CR-V") must not double as symptoms.
+                    # Require symptom-length content unless every other
+                    # required slot is already filled (then any text is the
+                    # answer to "what's happening?").
+                    others_pending = any(
+                        s.name != "description" and not ctx.slots.get(s.name)
+                        for s in ctx.pack.manifest.slot_frame
+                    )
+                    toks = [t for t in re.sub(r"[^a-z0-9\s]", " ", desc.lower()).split() if t]
+                    if not others_pending or (len(desc.strip()) >= 8 and len(toks) >= 2):
+                        extracted["description"] = desc
+                        ctx.slots["description"] = desc
 
             if extracted:
+                claims = []
+                if "category" in extracted and ctx.slots.get("__category_source__") == "slm":
+                    span_info = ctx.slots.get("__category_span__") or {}
+                    if span_info.get("span_text"):
+                        claims.append({
+                            "claim_text": span_info["span_text"],
+                            "evidence_id": "turn_customer",
+                            "span_start": span_info.get("span_start", 0),
+                            "span_end": span_info.get("span_end", 0),
+                        })
                 record_action(self._action(
                     action_type="slot_extracted",
                     input_summary=f"customer turn: '{customer_turn[:200]}'",
                     output_summary=f"extracted: {extracted}",
                     evidence_ids=[],
+                    claims=claims,
                 ))
 
         # ── Pick the next question ────────────────────────────────────────
@@ -725,28 +1024,8 @@ class IntakeAgent(Agent):
                     "escalate_low_confidence": True,
                     "low_confidence_slot": next_slot.name,
                 }
+            # Task 4: Retired LLM phrasing site on live turn path. Use deterministic pack prompt directly.
             q_text = next_slot.prompt
-            try:
-                from src.ai.narration import phrase_intake_question
-                from src.ai.prompts import stamp_prompt_use
-
-                last = ""
-                if ctx.turns:
-                    last = str(ctx.turns[-1].get("text") or "")
-                res = phrase_intake_question(
-                    slot_label=next_slot.name,
-                    template=next_slot.prompt,
-                    customer_last=last,
-                )
-                q_text = res.text or next_slot.prompt
-                stamp_prompt_use(
-                    ctx.interaction_id,
-                    prompt_name="intake_phrasing",
-                    model_id=res.model_id,
-                    used_llm=res.used_llm,
-                )
-            except Exception:
-                q_text = next_slot.prompt
             record_action(self._action(
                 action_type="question_asked",
                 input_summary=f"missing required slot '{next_slot.name}' (attempt {attempts})",
@@ -817,6 +1096,31 @@ class IntakeAgent(Agent):
         except Exception:
             return
 
+    def _year_range_for_entity_1(self):
+        try:
+            for s in self.ctx.pack.required_slots():
+                if s.name == "entity_1" and getattr(s, "validation", "") == "year-range":
+                    return getattr(s, "year_range", None)
+        except Exception:
+            pass
+        return (1990, 2026)
+
+    def _merge_secondary_categories(self, text: str, primary: str | None) -> None:
+        """Preserve every affected system without replacing the primary."""
+        gaz = self.ctx.pack.gazetteer_for_slot("category")
+        allowed = gaz.lookup if gaz is not None else None
+        observed = [canonical for _s, _e, _syn, canonical in
+                    _category_synonym_hits(text, allowed=allowed)]
+        existing = self.ctx.slots.get("secondary_categories") or []
+        if not isinstance(existing, list):
+            existing = [str(existing)]
+        merged: list[str] = []
+        for candidate in [*existing, *observed]:
+            if candidate and candidate != primary and candidate not in merged:
+                merged.append(candidate)
+        if merged:
+            self.ctx.slots["secondary_categories"] = merged
+
     # ── Slot extraction ──────────────────────────────────────────────
     def _extract_slot(self, slot, text: str) -> str | None:
         if slot.validation == "year-range":
@@ -827,15 +1131,37 @@ class IntakeAgent(Agent):
                 gaz = self.ctx.pack.gazetteer_for_slot(slot.name)
                 allowed = gaz.lookup if gaz is not None else None
                 matched_categories: list[str] = []
-                primary = extract_pack_category(text, self.ctx)
+                try:
+                    from src.ml_runtime.category_zeroshot import extract_category_with_mode
+
+                    syn = match_category_synonym(text, allowed=allowed)
+                    if syn:
+                        rules_cat = syn
+                    else:
+                        gaz_val = _extract_via_gazetteer(text, self.ctx, "category")
+                        if gaz_val:
+                            lower = text.lower()
+                            key = gaz_val.lower()
+                            m = re.search(rf"\b{re.escape(key)}\b", lower)
+                            if m and _category_hit_suppressed(text, m.start(), m.end(), key):
+                                rules_cat = None
+                            else:
+                                rules_cat = gaz_val
+                        else:
+                            rules_cat = None
+
+                    primary, source, meta = extract_category_with_mode(text, self.ctx, rules_cat)
+                    self.ctx.slots["__category_source__"] = source
+                except Exception:
+                    primary = extract_pack_category(text, self.ctx)
+                    self.ctx.slots["__category_source__"] = "rules" if primary else "none"
                 if primary:
                     matched_categories.append(primary)
                 for _s, _e, _syn, canonical in _category_synonym_hits(text, allowed=allowed):
                     if canonical not in matched_categories:
                         matched_categories.append(canonical)
                 if matched_categories:
-                    if len(matched_categories) > 1:
-                        self.ctx.slots["secondary_categories"] = matched_categories[1:]
+                    self._merge_secondary_categories(text, matched_categories[0])
                     return matched_categories[0]
                 return None
             return _extract_via_gazetteer(text, self.ctx, slot.name)
@@ -845,7 +1171,7 @@ class IntakeAgent(Agent):
                 return m.group(1) if m.groups() else m.group(0)
             return None
         if slot.validation == "free-text":
-            return text.strip() if text.strip() else None
+            return _extract_description(text)
         return None
 
     # ── Dialogue policy ──────────────────────────────────────────────────
@@ -870,7 +1196,9 @@ class IntakeAgent(Agent):
             ctx.slots.pop(_SAFETY_PENDING_KEY, None)
             return None
         prompt = questions[idx]
-        polarity = classify_yes_no(text)
+        # Defect #2 fix: polarity is conditioned on the question asked —
+        # legacy classify_yes_no never saw it ("im fine" → false P1).
+        polarity = classify_answer(prompt, text)
         escalate_on = escalate_on_for_prompt(prompt)
         if polarity is None:
             # Keep pending; _next_safety_question will re-ask this index.

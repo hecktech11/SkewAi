@@ -52,11 +52,14 @@ def auth_required() -> bool:
 
     Production-like deploys (ENV=production|staging, PILOT_HARDENED, SOC2_MODE)
     always require auth even if FRONTLINE_OPEN_MODE is mistakenly set.
+    Non-loopback binds (0.0.0.0, ::) require auth by default unless explicitly waived.
     """
     try:
-        from src.security.harden import is_production_like
+        from src.security.harden import is_production_like, is_wildcard_bind
 
         if is_production_like():
+            return True
+        if is_wildcard_bind() and not _env_bool("FRONTLINE_OPEN_BIND_ACK", False):
             return True
     except Exception:
         pass

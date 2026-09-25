@@ -22,7 +22,13 @@ def set_tenant(tenant_id: str) -> contextvars.Token:
 
 
 def get_tenant() -> str:
-    return _current_tenant.get() or "default"
+    val = _current_tenant.get()
+    if val and val != "default":
+        return val
+    import os
+
+    env_t = os.getenv("FRONTLINE_TENANT_ID", "").strip()
+    return env_t or val or "default"
 
 
 def reset_tenant(token: contextvars.Token) -> None:

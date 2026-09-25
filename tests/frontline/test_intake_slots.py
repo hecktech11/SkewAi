@@ -168,6 +168,30 @@ def test_extract_slot_category_longest_match_and_speed_control(pack):
     )
 
 
+async def test_multisystem_voice_report_preserves_each_affected_system(pack):
+    """Speech-to-text variants must not collapse a multi-fault report."""
+    ctx = _ctx(pack)
+    agent = IntakeAgent(ctx)
+    await agent.run(
+        customer_turn=(
+            "The steering is not working, the breath is also not moving, "
+            "gear is also stuck, and the dashboard music system is not playing."
+        )
+    )
+    categories = {ctx.slots.get("category"), *(ctx.slots.get("secondary_categories") or [])}
+    assert {
+        "SERVICE BRAKES",
+        "STEERING",
+        "POWER TRAIN",
+        "ELECTRICAL SYSTEM",
+    } <= categories
+
+    # Later issues remain visible after the primary routing category is set.
+    await agent.run(customer_turn="The radio is also not working.")
+    assert "ELECTRICAL SYSTEM" in set(ctx.slots.get("secondary_categories") or []) or \
+        ctx.slots.get("category") == "ELECTRICAL SYSTEM"
+
+
 async def test_description_is_free_text(pack):
     """The description slot captures the full customer turn verbatim."""
     ctx = _ctx(pack)

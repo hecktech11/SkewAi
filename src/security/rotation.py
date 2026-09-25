@@ -88,21 +88,36 @@ def _hmac_hex(secret: str, msg: str) -> str:
 
 
 def sign_session(msg: str, *, primary: str | None = None) -> str:
-    secret = primary or (os.getenv("SESSION_SECRET") or "")
+    secret = (primary or (os.getenv("SESSION_SECRET") or "")).strip()
+    api_key = (os.getenv("FRONTLINE_API_KEY") or "").strip()
+    if secret and api_key and secret == api_key:
+        raise RuntimeError("SESSION_SECRET must not match FRONTLINE_API_KEY")
     if not secret:
+        from src.api.auth import auth_required
         from src.security.harden import is_production_like
 
-        if is_production_like():
-            raise RuntimeError("SESSION_SECRET required in production-like mode")
-        secret = os.getenv("FRONTLINE_API_KEY") or ""
+        if is_production_like() or auth_required():
+            raise RuntimeError("SESSION_SECRET required when authentication is enabled")
+        secret = "dev-only"
     return _hmac_hex(secret, msg)
 
 
 def verify_session(msg: str, sig: str, *, primary: str | None = None,
                    secondary: str | None = None) -> bool:
     """Accept primary OR previous secret during rotation overlap."""
-    prev = secondary if secondary is not None else os.getenv("SESSION_SECRET_PREVIOUS", "")
-    cands = [primary or (os.getenv("SESSION_SECRET") or os.getenv("FRONTLINE_API_KEY") or "")]
+    prev = (secondary if secondary is not None else os.getenv("SESSION_SECRET_PREVIOUS", "")).strip()
+    primary_sec = (primary or (os.getenv("SESSION_SECRET") or "")).strip()
+    api_key = (os.getenv("FRONTLINE_API_KEY") or "").strip()
+    if primary_sec and api_key and primary_sec == api_key:
+        return False
+    if not primary_sec:
+        from src.api.auth import auth_required
+        from src.security.harden import is_production_like
+
+        if is_production_like() or auth_required():
+            return False
+        primary_sec = "dev-only"
+    cands = [primary_sec]
     if prev:
         cands.append(prev)
     return any(hmac.compare_digest(_hmac_hex(s, msg), sig) for s in cands if s)
