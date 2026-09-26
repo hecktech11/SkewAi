@@ -54,16 +54,30 @@ PII_TEXT_FIELDS = frozenset({
     "summary",
     "input_summary",
     "output_summary",
+    "body",
 })
 
 
 def redact_dict(row: dict[str, Any], fields: frozenset[str] = PII_TEXT_FIELDS) -> dict[str, Any]:
-    """Return a copy of *row* with PII redacted in known free-text fields."""
-    out = dict(row)
-    for key in fields:
-        val = out.get(key)
-        if isinstance(val, str) and val:
+    """Return a copy of *row* with PII redacted in known free-text fields.
+
+    Walks nested dicts and lists so a header, a case, a note, or an explain
+    payload cannot hide a free-text field one level down. Only the named
+    fields are rewritten; identifiers and status columns pass through.
+    """
+    out: dict[str, Any] = {}
+    for key, val in row.items():
+        if isinstance(val, dict):
+            out[key] = redact_dict(val, fields)
+        elif isinstance(val, list):
+            out[key] = [
+                redact_dict(item, fields) if isinstance(item, dict) else item
+                for item in val
+            ]
+        elif isinstance(val, str) and val and key in fields:
             out[key] = redact_pii(val)
+        else:
+            out[key] = val
     return out
 
 
