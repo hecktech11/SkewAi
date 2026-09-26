@@ -165,6 +165,56 @@ def export_interaction(interaction_id: str, *, redact_pii: bool = False) -> dict
     return out
 
 
+def erasure_succeeded(counts: dict[str, Any]) -> bool:
+    """False when a step failed or a plaintext copy was still present afterward."""
+    if int(counts.get("leftovers") or 0) > 0:
+        return False
+    for value in counts.values():
+        if value == -1 or value == "failed":
+            return False
+    return True
+
+
+def _relation_exists(con: Any, name: str) -> bool:
+    row = con.execute(
+        """
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = ?
+        LIMIT 1
+        """,
+        [name],
+    ).fetchone()
+    return row is not None
+
+
+def _plaintext_leftovers(con: Any, interaction_id: str, stamp: str) -> int:
+    """Rows whose erasable free text is not the tombstone we just wrote."""
+    leftover = 0
+    for summary, draft in con.execute(
+        "SELECT description_summary, followup_draft FROM cases WHERE interaction_id = ?",
+        [interaction_id],
+    ).fetchall():
+        if summary != stamp or draft != stamp:
+            leftover += 1
+    for (body,) in con.execute(
+        """
+        SELECT body FROM case_notes
+        WHERE case_id IN (SELECT case_id FROM cases WHERE interaction_id = ?)
+        """,
+        [interaction_id],
+    ).fetchall():
+        if body != stamp:
+            leftover += 1
+    if _relation_exists(con, "contact_issues"):
+        for (description,) in con.execute(
+            "SELECT description FROM contact_issues WHERE interaction_id = ?",
+            [interaction_id],
+        ).fetchall():
+            if description != stamp:
+                leftover += 1
+    return leftover
+
+
 def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str, Any]:
     """Delete linked ops rows for one interaction.
 
@@ -208,14 +258,17 @@ def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str,
         deleted["case_notes_batches"] = n
         from src.security.sql_ident import safe_column, safe_table
 
-        for table, col in (
+        tables = [
             ("cases", "interaction_id"),
             ("agent_actions", "interaction_id"),
             ("interaction_turns", "interaction_id"),
             ("interaction_version_stamps", "interaction_id"),
             ("risk_snapshots", "interaction_id"),
             ("interactions", "interaction_id"),
-        ):
+        ]
+        if _relation_exists(con, "contact_issues"):
+            tables.append(("contact_issues", "interaction_id"))
+        for table, col in tables:
             try:
                 t = safe_table(table)
                 c = safe_column(col)
@@ -226,7 +279,7 @@ def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str,
                 deleted[table] = int(before)
             except Exception:
                 deleted[table] = -1
-    return {"interaction_id": iid, "deleted": deleted, "ok": True}
+    return {"interaction_id": iid, "deleted": deleted, "ok": erasure_succeeded(deleted)}
 
 
 def tombstone_interaction(interaction_id: str) -> dict[str, Any]:
@@ -340,22 +393,67 @@ def tombstone_interaction(interaction_id: str) -> dict[str, Any]:
                 "SELECT COUNT(*) FROM cases WHERE interaction_id = ?", [iid]
             ).fetchone()[0]
             con.execute(
-                "UPDATE cases SET description_summary = ? WHERE interaction_id = ?",
-                [stamp, iid],
+                "UPDATE cases SET description_summary = ?, followup_draft = ? "
+                "WHERE interaction_id = ?",
+                [stamp, stamp, iid],
             )
             out["cases.description_tombstoned"] = int(n)
+            out["cases.followup_tombstoned"] = int(n)
         except Exception:
             out["cases.description_tombstoned"] = -1
+            out["cases.followup_tombstoned"] = -1
+        try:
+            n = con.execute(
+                """
+                SELECT COUNT(*) FROM case_notes
+                WHERE case_id IN (SELECT case_id FROM cases WHERE interaction_id = ?)
+                """,
+                [iid],
+            ).fetchone()[0]
+            con.execute(
+                """
+                UPDATE case_notes SET body = ?
+                WHERE case_id IN (SELECT case_id FROM cases WHERE interaction_id = ?)
+                """,
+                [stamp, iid],
+            )
+            out["case_notes.body_tombstoned"] = int(n)
+        except Exception:
+            out["case_notes.body_tombstoned"] = -1
+        if _relation_exists(con, "contact_issues"):
+            try:
+                n = con.execute(
+                    "SELECT COUNT(*) FROM contact_issues WHERE interaction_id = ?",
+                    [iid],
+                ).fetchone()[0]
+                con.execute(
+                    "UPDATE contact_issues SET description = ? WHERE interaction_id = ?",
+                    [stamp, iid],
+                )
+                out["contact_issues.description_tombstoned"] = int(n)
+            except Exception:
+                out["contact_issues.description_tombstoned"] = -1
+        else:
+            out["contact_issues.description_tombstoned"] = 0
+        out["leftovers"] = _plaintext_leftovers(con, iid, stamp)
+    ok = erasure_succeeded(out)
     try:
         from src.security.audit_log import security_event
 
         security_event(
-            "dsr.tombstone", outcome="success", resource=iid,
+            "dsr.tombstone",
+            outcome="success" if ok else "failure",
+            resource=iid,
             detail={"tombstoned": out},
         )
     except Exception:
         pass
-    return {"interaction_id": iid, "mode": "tombstone", "tombstoned": out, "ok": True}
+    return {"interaction_id": iid, "mode": "tombstone", "tombstoned": out, "ok": ok}
 
 
-__all__ = ["export_interaction", "delete_interaction", "tombstone_interaction"]
+__all__ = [
+    "export_interaction",
+    "delete_interaction",
+    "tombstone_interaction",
+    "erasure_succeeded",
+]
