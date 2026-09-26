@@ -7,7 +7,7 @@ can feed a tiny CSV without touching the pilot domain file.
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -70,45 +70,75 @@ def _parse_ts(val: Any) -> datetime | None:
             return datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]))
         except ValueError:
             return None
-    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%m/%d/%Y", "%Y%m%d"):
+    # 1. ISO-8601 with or without timezone (handles T and space, timezone offsets, Z)
+    try:
+        iso_str = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except ValueError:
+        pass
+    # 2. Strptime formats with timezone offset
+    for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S %z"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except ValueError:
+            continue
+    # 3. Naive standard formats
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%Y%m%d"):
         try:
             return datetime.strptime(s[:19], fmt)
         except ValueError:
             continue
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
+    return None
 
 
-def _cell(row: dict[str, str], spec: Any, headers: set[str]) -> str:
+def _cell(row: dict[str, str], spec: Any, headers: set[str], field: str = "") -> str:
     """Resolve a mapping spec.
 
-    - CSV column name → cell value;
-    - ``"quoted"`` → literal constant;
+    - CSV column name → cell value (case-insensitive fallback);
+    - ``"quoted"`` or ``'quoted'`` → literal constant;
     - ``{COL_A}|{COL_B}`` template → joined column values (used for the
       canonical cross-source ``entity_key``);
-    - anything else → literal (e.g. source: NHTSA) when not a header.
+    - ``source`` field → literal string when not a header;
+    - any other field where spec is not in headers → "" (do not fabricate values from column names).
     """
     if spec is None:
         return ""
     if not isinstance(spec, str):
         return str(spec).strip()
     key = spec.strip()
-    if key.startswith('"') and key.endswith('"') and len(key) >= 2:
+    if (key.startswith('"') and key.endswith('"') and len(key) >= 2) or (
+        key.startswith("'") and key.endswith("'") and len(key) >= 2
+    ):
         return key[1:-1]
     if "{" in key and "}" in key:
         import re as _re
 
+        header_ci = {h.lower(): h for h in headers}
+
         def _sub(m: "_re.Match[str]") -> str:
             col = m.group(1).strip()
-            return (row.get(col) or "").strip() if col in headers else ""
+            if col in headers:
+                return (row.get(col) or "").strip()
+            if col.lower() in header_ci:
+                return (row.get(header_ci[col.lower()]) or "").strip()
+            return ""
 
         return _re.sub(r"\{([^{}]+)\}", _sub, key).strip()
     if key in headers:
         return (row.get(key) or "").strip()
-    # Literal (e.g. source: NHTSA) when it is not a header.
-    return key
+    header_ci = {h.lower(): h for h in headers}
+    if key.lower() in header_ci:
+        return (row.get(header_ci[key.lower()]) or "").strip()
+    # Literal (e.g. source: NHTSA) only allowed for source field or quoted strings
+    if field == "source":
+        return key
+    return ""
 
 
 def map_row(row: dict[str, Any], records_map: dict[str, Any]) -> dict[str, Any] | None:
@@ -121,19 +151,26 @@ def map_row(row: dict[str, Any], records_map: dict[str, Any]) -> dict[str, Any] 
         if spec is None:
             out[field] = ""
             continue
-        out[field] = _cell(raw_row, spec, headers)
+        out[field] = _cell(raw_row, spec, headers, field=field)
     rid = (out.get("record_id") or "").strip()
     text = (out.get("text") or "").strip()
     if not rid or not text:
         return None
     out["record_id"] = rid
     out["text"] = text
-    out["received_at"] = _parse_ts(out.get("received_at")) or utc_now()
+
+    # Validate received_at: if mapping declared a received_at column, require valid parsed timestamp
+    raw_rec = out.get("received_at")
+    declared_rec = records_map.get("received_at")
+    if declared_rec:
+        parsed_rec = _parse_ts(raw_rec)
+        if parsed_rec is None:
+            return None
+        out["received_at"] = parsed_rec
+    else:
+        out["received_at"] = _parse_ts(raw_rec) or utc_now()
+
     out["occurred_at"] = _parse_ts(out.get("occurred_at"))
-    # Canonical join key: normalized, empty when undeclared/unresolvable.
-    # Declared per-source via mapping.yaml `entity_key` (e.g.
-    # "{MAKETXT}|{MODELTXT}|{MODEL_YR}"); never invented from thin air —
-    # templates referencing absent columns resolve to "".
     out["entity_key"] = _norm_entity_key(out.get("entity_key"))
     return out
 

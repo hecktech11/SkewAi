@@ -35,27 +35,43 @@ def _norm_entity(val: Any) -> str:
     return str(val or "").strip().upper()
 
 
-def _cluster_entities(con, cluster_id: Any) -> tuple[set[str], set[str]]:
-    """Distinct normalized (entity_2 values, entity_3 values) of cluster members.
+class ClusterEntities(tuple):
+    """Container for distinct entity sets and individual record entity tuples."""
+
+    def __new__(cls, e2: set[str], e3: set[str], tuples: list[tuple[str, str]]):
+        obj = super().__new__(cls, (e2, e3))
+        obj.e2 = e2
+        obj.e3 = e3
+        obj.tuples = tuples
+        return obj
+
+
+def _cluster_entities(
+    con, cluster_id: Any, as_of_ts: datetime | None = None
+) -> ClusterEntities:
+    """Distinct normalized (entity_2 values, entity_3 values) and tuples of cluster members as of as_of_ts.
 
     Record-level overlap: the advisory's scoped entities must appear among the
-    cluster's actual member records — never inferred from the cluster row.
+    cluster's actual member records known as of the cutoff — never inferred from the cluster row (R13).
     """
+    sql = """
+        SELECT r.entity_2, r.entity_3
+        FROM records r
+        JOIN cluster_assignments a ON a.record_id = r.record_id
+        WHERE a.cluster_id = ?
+    """
+    params: list[Any] = [cluster_id]
+    if as_of_ts is not None:
+        sql += " AND r.received_at <= ?"
+        params.append(as_of_ts)
     try:
-        rows = con.execute(
-            """
-            SELECT r.entity_2, r.entity_3
-            FROM records r
-            JOIN cluster_assignments a ON a.record_id = r.record_id
-            WHERE a.cluster_id = ?
-            """,
-            [cluster_id],
-        ).fetchall()
+        rows = con.execute(sql, params).fetchall()
     except Exception:
-        return set(), set()
-    e2 = {_norm_entity(r[0]) for r in rows if _norm_entity(r[0])}
-    e3 = {_norm_entity(r[1]) for r in rows if _norm_entity(r[1])}
-    return e2, e3
+        rows = []
+    member_tuples = [(_norm_entity(r[0]), _norm_entity(r[1])) for r in rows]
+    e2 = {t[0] for t in member_tuples if t[0]}
+    e3 = {t[1] for t in member_tuples if t[1]}
+    return ClusterEntities(e2, e3, member_tuples)
 
 
 def _entity_gate(
@@ -63,18 +79,22 @@ def _entity_gate(
     member_e3: set[str],
     scope_e2: Any,
     scope_e3: Any,
+    member_tuples: list[tuple[str, str]] | None = None,
 ) -> tuple[bool, list[str]]:
     """Entity-overlap gate (item 2): category alone is never sufficient when
     the advisory narrows to an entity.
 
     Returns (ok, basis_parts). Every non-empty advisory entity scope must have
     at least one exact (case-insensitive) hit among cluster member records.
-    Category-wide advisories (no entity scope) pass on category + temporal
-    evidence; the match_basis records that explicitly.
+    When both entity_2 and entity_3 are scoped, they must co-occur in at least
+    one member record tuple (R13).
     """
     parts: list[str] = []
     want_e2 = _norm_entity(scope_e2)
     want_e3 = _norm_entity(scope_e3)
+    if not want_e2 and not want_e3:
+        return True, ["scope=category_wide"]
+
     if want_e2:
         if want_e2 not in member_e2:
             return False, []
@@ -83,6 +103,15 @@ def _entity_gate(
         if want_e3 not in member_e3:
             return False, []
         parts.append("entity_3")
+
+    if want_e2 and want_e3 and member_tuples is not None:
+        has_matching_record = any(
+            m2 == want_e2 and m3 == want_e3 for m2, m3 in member_tuples
+        )
+        if not has_matching_record:
+            return False, []
+
+    return True, parts
     return True, parts
 
 
@@ -203,7 +232,8 @@ def run_backtest(pack_id: str, *, as_of: Any | None = None) -> list[dict[str, An
                 continue
 
             # Member entities for the overlap gate (record-level, item 2).
-            member_e2, member_e3 = _cluster_entities(con, cluster_id)
+            member_ents = _cluster_entities(con, cluster_id, as_of_ts)
+            member_e2, member_e3 = member_ents.e2, member_ents.e3
 
             for adv in advisories:
                 advisory_id, issued_at, scope_cat, scope_e2, scope_e3 = adv
@@ -214,7 +244,7 @@ def run_backtest(pack_id: str, *, as_of: Any | None = None) -> list[dict[str, An
                 if scope_cat and category and scope_cat != category:
                     continue
                 entity_ok, entity_parts = _entity_gate(
-                    member_e2, member_e3, scope_e2, scope_e3
+                    member_e2, member_e3, scope_e2, scope_e3, member_tuples=member_ents.tuples
                 )
                 if not entity_ok:
                     # Same category, disjoint entities => explicit MISS, never
@@ -272,25 +302,26 @@ def run_backtest(pack_id: str, *, as_of: Any | None = None) -> list[dict[str, An
         # Replace this pack's rows only (never wipe other packs — item 43).
         # Scoped by pack_id; legacy rows without pack_id are cleaned by this
         # pack's cluster_ids so one pack's rerun never deletes another's data.
-        if written:
+        # Unconditionally replace pack results so empty reruns do not leave stale rows (R23).
+        try:
+            con.execute(
+                "DELETE FROM backtest_results WHERE pack_id = ?",
+                [pack_id],
+            )
+        except Exception:
+            pass
+        cluster_ids = [cl[0] for cl in clusters]
+        if cluster_ids:
+            placeholders = ",".join("?" for _ in cluster_ids)
             try:
                 con.execute(
-                    "DELETE FROM backtest_results WHERE pack_id = ?",
-                    [pack_id],
+                    "DELETE FROM backtest_results WHERE pack_id IS NULL "
+                    f"AND cluster_id IN ({placeholders})",
+                    cluster_ids,
                 )
             except Exception:
                 pass
-            cluster_ids = [cl[0] for cl in clusters]
-            if cluster_ids:
-                placeholders = ",".join("?" for _ in cluster_ids)
-                try:
-                    con.execute(
-                        "DELETE FROM backtest_results WHERE pack_id IS NULL "
-                        f"AND cluster_id IN ({placeholders})",
-                        cluster_ids,
-                    )
-                except Exception:
-                    pass
+        if written:
             for cluster_id, advisory_id, lead, matched, basis in written:
                 con.execute(
                     """

@@ -262,6 +262,10 @@ def narrate(
 
     ``site`` is one of: intake_phrasing | investigator_brief | followup_draft.
     """
+    from src.security.pii import redact_pii
+
+    system = redact_pii(system)
+    user = redact_pii(user)
     ph = _prompt_hash(system, user)
     ok_spend, reason = can_spend()
     if not ok_spend:

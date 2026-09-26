@@ -22,15 +22,18 @@ from src.ml_runtime.embeddings import embed_text, embedding_dim
 class HashEmbedder:
     """Explicit provider for the historical 512-d blake2b hashing trick."""
 
-    def __init__(self) -> None:
+    def __init__(self, pack_id: str | None = None) -> None:
         if embedding_dim() != OUTPUT_DIMENSION:
             raise RuntimeError(
                 f"hash embedder expected dim {OUTPUT_DIMENSION}, got {embedding_dim()}"
             )
+        self.pack_id = pack_id
 
     @property
     def version(self) -> str:
-        return HASH_EMBEDDING_VERSION
+        from src.ml_runtime.embeddings import hash_embedding_version
+
+        return hash_embedding_version(self.pack_id)
 
     @property
     def native_dimension(self) -> int:
@@ -62,12 +65,13 @@ class HashEmbedder:
 
     def embed_many(self, texts: Sequence[str]) -> list[EmbeddedVector]:
         out: list[EmbeddedVector] = []
+        ver = self.version
         for text in texts:
-            values = embed_text(text or "")
+            values = embed_text(text or "", pack_id=self.pack_id)
             out.append(
                 as_embedded(
                     values,
-                    HASH_EMBEDDING_VERSION,
+                    ver,
                     native_dimension=OUTPUT_DIMENSION,
                     output_dimension=OUTPUT_DIMENSION,
                     model_key="blake2b-512-v1",

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from src.api.export import export_to_csv
 from src.api.main import app
-from src.api.rbac import require_perm, verify_session
+from src.api.rbac import issue_session, require_perm, verify_session
 
 
 def _signup(client: TestClient, role: str) -> dict:
@@ -216,3 +216,21 @@ def test_supplier_capa_open_and_list(reset_ops_db, monkeypatch):
         r = client.get("/api/frontline/suppliers/capas?supplier=TestCo", headers=headers)
         assert r.status_code == 200
         assert any(c["capa_id"] == body["capa_id"] for c in r.json()["capas"])
+
+
+def test_cookie_session_authenticates_protected_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R10: Cookie-only login can authenticate protected HTTP flows without API key header."""
+    _hard_key(monkeypatch)
+    session = issue_session("tester", "agent")["token"]
+    with TestClient(app) as client:
+        # Without cookie or API key -> 401
+        r = client.get("/api/frontline/auth/me")
+        assert r.status_code == 401
+
+        # With session cookie only -> 200
+        client.cookies.set("frontline_session", session)
+        r = client.get("/api/frontline/auth/me")
+        assert r.status_code == 200
+        data = r.json()
+        assert data.get("signed_in") is True
+        assert data.get("subject") == "tester"

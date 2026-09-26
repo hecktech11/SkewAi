@@ -94,6 +94,8 @@ PERMS: dict[str, frozenset[str]] = {
             "biometrics:match",
             "routing:control",
             "ops:read",
+            "ledger:read",
+            "audit:read",
         }
     ),
     "auditor": frozenset({"case:read", "audit:read", "ledger:read", "dsr:export", "ops:read"}),
@@ -506,6 +508,15 @@ def role_from_websocket(websocket: Any) -> str:
     without it, a validated DSR key fell through to the shared service
     principal, which carries the ``takeover`` permission (R04).
     """
+    try:
+        from src.api.auth import ws_principal
+
+        p = ws_principal(websocket)
+        if p is not None and p.credential == "session" and p.role:
+            return p.role
+    except Exception:
+        pass
+
     session = ""
     try:
         session = (websocket.headers.get("x-frontline-session") or "").strip()

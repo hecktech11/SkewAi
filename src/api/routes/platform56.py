@@ -329,6 +329,7 @@ async def jobs_enqueue(
         "jobs.enqueue",
         outcome="success",
         role=role,
+        actor=actor,
         detail={"job_type": str(jt), "job_id": result.get("job_id")},
     )
     return result

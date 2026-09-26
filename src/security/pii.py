@@ -380,11 +380,31 @@ def _decode_legacy_xor(dek: bytes, nonce: bytes, cipher_bytes: bytes, subject_id
     Unauthenticated by construction — there is no tag to check, which is exactly
     why it is reachable only through its own prefix. Migrate these rows with
     ``migrate_legacy_xor_token`` and this path goes away.
+
+    Guard: the legacy XOR format stored only short identifiers (≤ 64 bytes) with
+    no authentication tag. AES-GCM ciphertext always contains a 16-byte GCM tag
+    appended to the plaintext bytes. If the cipher payload after the nonce is
+    longer than the legacy maximum, it is almost certainly an AES-GCM payload
+    whose prefix was mutated from ``enc:v1:`` to ``enc:x1:`` — reject it.
     """
+    # Legacy XOR never produced ciphertext longer than the plaintext itself
+    # (no authentication tag), and plaintext was limited to short identifiers.
     if len(cipher_bytes) > 64:
         raise PiiIntegrityError(
             f"legacy PII token for subject {subject_id!r} exceeds the "
             "64-byte keystream the legacy format could produce"
+        )
+    # AES-GCM tag is 16 bytes — any ciphertext that is long enough to
+    # contain meaningful plaintext + a 16-byte tag is suspicious.  The
+    # absolute minimum AES-GCM output for a 1-byte plaintext is 17 bytes.
+    # Legacy XOR tokens for real-world identifiers (phone, email) are
+    # typically ≤ 40 bytes.  We accept up to 48 bytes to give headroom
+    # but reject anything above that as a potential prefix-swap attack.
+    _MAX_LEGACY_PAYLOAD = 48
+    if len(cipher_bytes) > _MAX_LEGACY_PAYLOAD:
+        raise PiiIntegrityError(
+            f"legacy PII token for subject {subject_id!r} has {len(cipher_bytes)}-byte "
+            f"payload (max {_MAX_LEGACY_PAYLOAD}); possible enc:v1: → enc:x1: prefix swap"
         )
     _log.warning("pii_legacy_xor_token_read subject=%s (unauthenticated format)", subject_id)
     stream_key = hashlib.blake2b(
