@@ -456,8 +456,47 @@ def require_perm_dep(perm: str, *, open_mode_ok: bool = False):
     return _dep
 
 
+def _websocket_api_key(websocket: Any) -> str:
+    """The API key this connection actually authenticated with.
+
+    Prefers the principal stored by ``authenticate_websocket`` (the only place
+    a first-frame key is ever seen) and falls back to the handshake headers for
+    connections authenticated by the ``require_ws_api_key`` dependency.
+    """
+    try:
+        from src.api.auth import ws_principal
+
+        principal = ws_principal(websocket)
+        if principal is not None and principal.api_key:
+            return principal.api_key
+    except Exception:
+        pass
+    try:
+        headers = websocket.headers
+    except Exception:
+        return ""
+    try:
+        key = (headers.get("x-api-key") or "").strip()
+        if key:
+            return key
+        auth = (headers.get("authorization") or "").strip()
+    except Exception:
+        return ""
+    if not auth:
+        return ""
+    parts = auth.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return auth
+
+
 def role_from_websocket(websocket: Any) -> str:
-    """Resolve RBAC role from a WebSocket (session cookie / header)."""
+    """Resolve RBAC role from a WebSocket (session cookie / header / credential).
+
+    The authenticated credential is passed through to ``role_from_headers``:
+    without it, a validated DSR key fell through to the shared service
+    principal, which carries the ``takeover`` permission (R04).
+    """
     session = ""
     try:
         session = (websocket.headers.get("x-frontline-session") or "").strip()
@@ -473,7 +512,11 @@ def role_from_websocket(websocket: Any) -> str:
         role_hdr = websocket.headers.get("x-frontline-role")
     except Exception:
         role_hdr = None
-    return role_from_headers(role_hdr, session or None)
+    return role_from_headers(
+        role_hdr,
+        session or None,
+        api_key=_websocket_api_key(websocket) or None,
+    )
 
 
 def oidc_discovery() -> dict[str, Any]:
