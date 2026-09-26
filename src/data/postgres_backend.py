@@ -259,49 +259,13 @@ def alembic_ready() -> bool:
 
 @contextmanager
 def ops_connection(read_only: bool = False) -> Iterator[Any]:
-    """Yield a DB connection for ops. Postgres when DSN set, else DuckDB."""
+    """Yield a DB connection for ops. Rejects PostgreSQL as unsupported in this release; yields DuckDB."""
     if ops_backend() == "postgres":
-        try:
-            import psycopg
-
-            dsn = os.environ["FRONTLINE_OPS_DSN"]
-            conn = psycopg.connect(dsn)
-            try:
-                yield conn
-                if not read_only:
-                    conn.commit()
-            finally:
-                conn.close()
-            return
-        except Exception as e:
-            # Fail closed in production-like mode (item 32): a Postgres
-            # outage must surface, never hide behind a silent DuckDB
-            # fallback. Local/dev keeps the forgiving fallback.
-            try:
-                from src.security.harden import is_production_like
-
-                prod = is_production_like()
-            except Exception:
-                prod = False
-            if prod:
-                raise
-            try:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "postgres backend unavailable, dev fallback to duckdb: %s", e
-                )
-            except Exception:
-                pass
-            try:
-                from src.observability.metrics import inc as _inc
-
-                _inc("postgres_fallback", reason=type(e).__name__)
-            except Exception:
-                pass
-            with duckdb_ops_con(read_only=read_only) as con:
-                yield _Tagged(con, backend="duckdb", postgres_error=str(e))
-            return
+        raise RuntimeError(
+            "FRONTLINE_OPS_DSN is configured, but PostgreSQL mode is unsupported in this release: "
+            "the dialect layer and schema migrations require DuckDB. "
+            "Unset FRONTLINE_OPS_DSN."
+        )
     with duckdb_ops_con(read_only=read_only) as con:
         yield _Tagged(con, backend="duckdb")
 

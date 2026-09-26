@@ -501,6 +501,23 @@ def _websocket_api_key(websocket: Any) -> str:
     return auth
 
 
+def actor_from_websocket(websocket: Any) -> str:
+    """Authenticated subject for audit and ownership checks. Never a client-supplied name."""
+    try:
+        from src.api.auth import ws_principal
+
+        principal = ws_principal(websocket)
+        if principal is not None and principal.session:
+            return str(principal.session.get("sub") or principal.role or "operator")[:80]
+        if principal is not None and principal.subject:
+            return str(principal.subject)[:80]
+        if principal is not None and principal.credential == "service":
+            return "service"
+    except Exception:
+        pass
+    return role_from_websocket(websocket)[:80]
+
+
 def role_from_websocket(websocket: Any) -> str:
     """Resolve RBAC role from a WebSocket (session cookie / header / credential).
 

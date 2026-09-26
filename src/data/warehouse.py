@@ -59,9 +59,11 @@ def ops_con(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     from src.data.postgres_backend import is_production_backend, ops_connection
 
     if is_production_backend():
-        with ops_connection(read_only=read_only) as pcon:
-            yield pcon
-        return
+        raise RuntimeError(
+            "FRONTLINE_OPS_DSN is configured, but PostgreSQL mode is unsupported in this release: "
+            "the dialect layer and schema migrations require DuckDB. "
+            "Unset FRONTLINE_OPS_DSN."
+        )
 
     global _ops_initialized
     path = settings.frontline_db_path

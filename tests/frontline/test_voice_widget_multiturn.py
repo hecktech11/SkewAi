@@ -61,14 +61,14 @@ def test_widget_keeps_the_call_live_for_handoff_and_speaks_supervisor_replies():
     text = CALL.read_text(encoding="utf-8")
     # Microphone permission starts in parallel with contact setup, rather than
     # leaving the caller on a Connecting screen until getUserMedia returns.
-    assert "const micReady = setupMic()" in text
+    assert "const micReady = setupMic" in text
     assert "void micReady.finally" in text
     # The requested console opens separately, so navigating to it cannot run
     # CallWidget's unmount cleanup and end the customer contact.
     assert 'window.open(target, "_blank", "noopener")' in text
     assert "?id=${encodeURIComponent(iid)}" in text
     # A supervisor's typed reply remains audible to the caller.
-    assert 'msg.speaker === "supervisor") setInfo("A human specialist is responding")' in text
+    assert 'speaker === "supervisor") setInfo("A human specialist is responding")' in text
     # The caller control asks the server to create a real queue entry.
     assert "body: JSON.stringify({ force: true })" in text
 

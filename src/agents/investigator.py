@@ -224,12 +224,9 @@ class InvestigatorAgent(Agent):
                 # (item 23): category/entity_2 projection over ALL records —
                 # never the 40-row candidate shortlist.
                 try:
-                    pop_rows = con.execute(
-                        "SELECT category, entity_2 FROM records"
-                    ).fetchall()
-                    population = [
-                        {"category": r[0], "entity_2": r[1]} for r in pop_rows
-                    ] or candidates
+                    from src.ml_runtime.association import get_pack_population_index
+
+                    population = get_pack_population_index(con, pack_id=pack_id)
                 except Exception:
                     population = candidates
 

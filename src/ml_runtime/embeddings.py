@@ -29,6 +29,9 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 _TOKEN_VOTE = 2.0
 _BIGRAM_VOTE = 0.5
 
+import json
+from pathlib import Path
+
 # Corpus IDF table: feature ("tok:x" / "bi:xy") -> idf weight. Empty means
 # "unfitted": embed_text falls back to uniform weights (deterministic).
 _IDF: dict[str, float] = {}
@@ -37,9 +40,54 @@ _PACK_IDF: dict[str, dict[str, float]] = {}
 _PACK_IDF_DOCS: dict[str, int] = {}
 
 
+def _idf_file_path(pack_id: str) -> Path | None:
+    try:
+        from src.config import settings
+
+        return settings.domain_db_dir / f"idf_{pack_id}.json"
+    except Exception:
+        return Path("data/domains") / f"idf_{pack_id}.json"
+
+
+def _load_persisted_idf(pack_id: str) -> dict[str, float] | None:
+    path = _idf_file_path(pack_id)
+    if path and path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                if "weights" in data and isinstance(data["weights"], dict):
+                    if "docs" in data:
+                        _PACK_IDF_DOCS[pack_id] = int(data["docs"])
+                    return {str(k): float(v) for k, v in data["weights"].items()}
+                return {str(k): float(v) for k, v in data.items()}
+        except Exception:
+            pass
+    return None
+
+
+def _persist_idf(pack_id: str, idf: dict[str, float], docs: int = 0) -> None:
+    path = _idf_file_path(pack_id)
+    if path:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"docs": docs, "weights": idf}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _get_pack_idf(pack_id: str) -> dict[str, float] | None:
+    table = _PACK_IDF.get(pack_id)
+    if not table:
+        table = _load_persisted_idf(pack_id)
+        if table:
+            _PACK_IDF[pack_id] = table
+    return table
+
+
 def idf_digest(pack_id: str | None = None) -> str:
     """Return an 8-char hex digest of the active IDF table (or 'uniform')."""
-    table = _PACK_IDF.get(pack_id) if pack_id else _IDF
+    table = _get_pack_idf(pack_id) if pack_id else _IDF
     if not table:
         return "uniform"
     items = sorted(table.items())
@@ -86,6 +134,7 @@ def fit_idf(
     if pack_id:
         _PACK_IDF[pack_id] = fitted
         _PACK_IDF_DOCS[pack_id] = n
+        _persist_idf(pack_id, fitted, n)
     else:
         _IDF = fitted
         _IDF_DOCS = n
@@ -98,6 +147,12 @@ def reset_idf(pack_id: str | None = None) -> None:
     if pack_id:
         _PACK_IDF.pop(pack_id, None)
         _PACK_IDF_DOCS.pop(pack_id, None)
+        p = _idf_file_path(pack_id)
+        if p and p.is_file():
+            try:
+                p.unlink()
+            except Exception:
+                pass
     else:
         _IDF = {}
         _IDF_DOCS = 0
@@ -106,7 +161,7 @@ def reset_idf(pack_id: str | None = None) -> None:
 
 
 def idf_status(pack_id: str | None = None) -> dict[str, Any]:
-    table = _PACK_IDF.get(pack_id) if pack_id else _IDF
+    table = _get_pack_idf(pack_id) if pack_id else _IDF
     docs = _PACK_IDF_DOCS.get(pack_id, 0) if pack_id else _IDF_DOCS
     return {"features": len(table or {}), "docs": docs, "digest": idf_digest(pack_id)}
 
@@ -131,7 +186,7 @@ def embed_text(text: str, dim: int = _DIM, pack_id: str | None = None) -> list[f
         return vec
     from collections import Counter
 
-    idf_table = _PACK_IDF.get(pack_id) if pack_id else _IDF
+    idf_table = _get_pack_idf(pack_id) if pack_id else _IDF
     counts = Counter(tokens)
     for tok, tf_raw in counts.items():
         tf = 1.0 + math.log(tf_raw)  # sublinear: repetition damps out

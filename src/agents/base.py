@@ -25,6 +25,10 @@ from src.domains.loader import LoadedPack
 from src.ledger import AgentAction
 
 
+class TurnPersistenceError(RuntimeError):
+    """A turn was not durably stored. Callers must not treat it as accepted."""
+
+
 def _ctx_utc_now() -> datetime:
     from src.data.timeutil import utc_now
 
@@ -108,6 +112,14 @@ class InteractionContext:
     last_agent_word_markers: list[dict[str, Any]] = field(default_factory=list)
     last_turn_latency_ms: float = 0.0
     last_asr_confidence: float | None = None
+    # Versioned human-control snapshot. Bumped on takeover and release.
+    control_generation: int = 0
+    # Utterances already handed to the channel, keyed by utterance id.
+    # Playback identity stays on the one currently speaking so a later
+    # generated turn cannot be reconciled as if the caller heard it.
+    emitted_utterances: dict[str, dict[str, Any]] = field(default_factory=dict)
+    playing_utterance_id: str | None = None
+    human_message_ids: set[str] = field(default_factory=set)
 
     # ── Slot helpers ────────────────────────────────────────────────────
     def required_slots_remaining(self) -> list[str]:
@@ -139,14 +151,17 @@ class InteractionContext:
             "ts": _ctx_utc_now(),
             **extra,
         }
-        self.turns.append(turn)
-        # Durable mid-contact write (P1): survive process crash before finalize.
-        try:
-            from src.data.turns import persist_turn
+        # Durable write before the turn is visible in memory. A failed insert
+        # must not look like an accepted turn to resume, the console, or retry.
+        from src.data.turns import persist_turn
 
+        try:
             persist_turn(self.interaction_id, turn)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise TurnPersistenceError(
+                f"turn {turn.get('turn_id')} was not stored"
+            ) from exc
+        self.turns.append(turn)
         return turn
 
 
