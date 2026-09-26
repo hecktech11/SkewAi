@@ -273,6 +273,7 @@ export default function CallWidget() {
 
   function startRecognitionSafe() {
     if (mutedRef.current || voiceDeniedRef.current) return;
+    if (callEndedRef.current || pendingTerminalRef.current) return;
     if (!recogRef.current) return;
     if (speakingRef.current) return;
     if (drainingSpeakRef.current) return;
@@ -785,26 +786,45 @@ export default function CallWidget() {
   }
 
   async function setupMic(gen) {
+    let stream = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (gen !== callGenRef.current || callEndedRef.current) {
         stream.getTracks().forEach((t) => t.stop());
         return false;
       }
-      micStreamRef.current = stream;
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const src = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
       src.connect(analyser);
+      if (gen !== callGenRef.current || callEndedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        ctx.close().catch(() => {});
+        return false;
+      }
+      micStreamRef.current = stream;
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
       setMicGranted(true);
       return true;
     } catch {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (gen !== callGenRef.current || callEndedRef.current) return false;
       setMicGranted(false);
       setInfo("Microphone blocked — use the text box to talk");
       return false;
+    }
+  }
+
+  function retrySpeechInput() {
+    voiceDeniedRef.current = false;
+    setVoiceDenied(false);
+    setError(null);
+    setInfo("Trying speech recognition again");
+    if (!recogRef.current) setupSpeechRecognition();
+    if (stateRef.current === CALL_STATE.LISTENING && !pendingTerminalRef.current) {
+      startRecognitionSafe();
     }
   }
 
@@ -827,6 +847,7 @@ export default function CallWidget() {
       }
       sttBufferRef.current = { text: "", at: 0 };
       lastInterimRef.current = { text: "", at: 0 };
+      setTranscript((rows) => (Array.isArray(rows) ? rows.filter((t) => !t.interim) : rows));
       stopRecognition();
     } else if (stateRef.current === CALL_STATE.LISTENING) startRecognitionSafe();
   }
@@ -1166,6 +1187,7 @@ export default function CallWidget() {
     e.preventDefault();
     const text = textFallback.trim();
     if (!text) return;
+    if (callEndedRef.current || pendingTerminalRef.current) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setError("Not connected — start a call first");
       return;
@@ -1205,6 +1227,7 @@ export default function CallWidget() {
   }
 
   function sendConsent() {
+    if (callEndedRef.current || pendingTerminalRef.current) return;
     wsSeqRef.current += 1;
     const txt = "I consent";
     const sent = sendWs({
@@ -1357,6 +1380,14 @@ export default function CallWidget() {
       {(!hasSR || voiceDenied) && !canStart && (
         <div className="banner banner-warn" role="status">
           Speech recognition is unavailable — type your replies below. This call sends text only and does not upload audio.
+          {voiceDenied && hasSR ? (
+            <>
+              {" "}
+              <button type="button" className="ghost" onClick={retrySpeechInput}>
+                Try microphone again
+              </button>
+            </>
+          ) : null}
         </div>
       )}
 
