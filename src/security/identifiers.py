@@ -120,11 +120,10 @@ def safe_out_dir(out_dir: str | Path | None, *, default: Path) -> Path:
     return assert_under_roots(raw if raw.is_absolute() else (REPO_ROOT / raw), roots)
 
 
-def safe_csv_path(csv_path: str | Path) -> Path:
-    """Jail CSV reads under the repo (or PACK_INSTALL_ROOT / BUILDER_UPLOAD_DIR)."""
+def _ingest_roots() -> list[Path]:
+    """Allow-roots for caller-supplied ingest files."""
     from src.config import REPO_ROOT
 
-    raw = Path(str(csv_path))
     roots = [REPO_ROOT]
     for env_name in ("PACK_INSTALL_ROOT", "BUILDER_UPLOAD_DIR", "FRONTLINE_INGEST_ROOT"):
         extra = (os.getenv(env_name) or "").strip()
@@ -134,10 +133,31 @@ def safe_csv_path(csv_path: str | Path) -> Path:
         import tempfile
 
         roots.append(Path(tempfile.gettempdir()))
+    return roots
+
+
+def safe_csv_path(csv_path: str | Path) -> Path:
+    """Jail CSV reads under the repo (or PACK_INSTALL_ROOT / BUILDER_UPLOAD_DIR)."""
+    from src.config import REPO_ROOT
+
+    raw = Path(str(csv_path))
+    roots = _ingest_roots()
     p = raw if raw.is_absolute() else (REPO_ROOT / raw)
     resolved = assert_under_roots(p, roots)
     if resolved.suffix.lower() != ".csv":
         raise InvalidIdentifier("csv_path must be a .csv file")
+    return resolved
+
+
+def safe_mapping_path(mapping_path: str | Path) -> Path:
+    """Jail mapping YAML reads under the same roots as ``safe_csv_path``."""
+    from src.config import REPO_ROOT
+
+    raw = Path(str(mapping_path))
+    p = raw if raw.is_absolute() else (REPO_ROOT / raw)
+    resolved = assert_under_roots(p, _ingest_roots())
+    if resolved.suffix.lower() not in {".yaml", ".yml"}:
+        raise InvalidIdentifier("mapping_path must be a .yaml file")
     return resolved
 
 
@@ -149,4 +169,5 @@ __all__ = [
     "assert_under_roots",
     "safe_out_dir",
     "safe_csv_path",
+    "safe_mapping_path",
 ]
