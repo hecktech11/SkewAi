@@ -64,6 +64,54 @@ class PopulationIndex:
         )
 
 
+import time
+
+_POPULATION_CACHE: dict[str, tuple[float, PopulationIndex]] = {}
+
+
+def get_pack_population_index(con: Any, pack_id: str = "") -> PopulationIndex:
+    """Return precomputed or cached PopulationIndex directly using grouped SQL counts.
+
+    Avoids O(N) full-corpus row fetches per contact (R21).
+    """
+    now = time.monotonic()
+    if pack_id and pack_id in _POPULATION_CACHE:
+        ts, p_idx = _POPULATION_CACHE[pack_id]
+        if now - ts < 300.0:
+            return p_idx
+
+    n_cat: dict[str, int] = {}
+    n_ent: dict[str, int] = {}
+    n_both: dict[tuple[str, str], int] = {}
+    total_n = 0
+    try:
+        rows = con.execute(
+            "SELECT category, entity_2, COUNT(*) FROM records GROUP BY category, entity_2"
+        ).fetchall()
+        for cat_raw, ent_raw, count in rows:
+            c = _norm(cat_raw)
+            e = _norm(ent_raw)
+            cnt = int(count)
+            total_n += cnt
+            if c:
+                n_cat[c] = n_cat.get(c, 0) + cnt
+            if e:
+                n_ent[e] = n_ent.get(e, 0) + cnt
+            if c and e:
+                n_both[(c, e)] = n_both.get((c, e), 0) + cnt
+    except Exception:
+        total_n = 1
+
+    idx = PopulationIndex([])
+    idx.n = max(1, total_n)
+    idx.n_cat = n_cat
+    idx.n_ent = n_ent
+    idx.n_both = n_both
+    if pack_id:
+        _POPULATION_CACHE[pack_id] = (now, idx)
+    return idx
+
+
 def lift_for_pair(
     query: dict[str, Any],
     candidate: dict[str, Any],

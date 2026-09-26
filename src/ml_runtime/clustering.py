@@ -618,7 +618,6 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                         )
                     except Exception:
                         pass
-                    continue
                 con.execute(
                     """
                     INSERT INTO cluster_assignments (record_id, cluster_id, distance)
@@ -688,6 +687,14 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
 
                 if best_lab is not None:
                     cid = 1000 + best_lab
+                    con.execute(
+                        """
+                        INSERT INTO cluster_assignments (record_id, cluster_id, distance)
+                        VALUES (?, ?, ?)
+                        """,
+                        [rem_rid, cid, best_dist],
+                    )
+                    written += 1
                     if best_dist > _cut:
                         try:
                             con.execute(
@@ -699,15 +706,6 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                             )
                         except Exception:
                             pass
-                    else:
-                        con.execute(
-                            """
-                            INSERT INTO cluster_assignments (record_id, cluster_id, distance)
-                            VALUES (?, ?, ?)
-                            """,
-                            [rem_rid, cid, best_dist],
-                        )
-                        written += 1
 
             # Update cluster and version member counts with the newly assigned records
             for lab in by_lab:

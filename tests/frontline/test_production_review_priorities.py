@@ -408,8 +408,8 @@ def test_learning_review_uses_verified_actor(reset_ops_db, monkeypatch):
 # ── N07: Mutable prefix swap guard ───────────────────────────────────────────
 
 
-def test_legacy_xor_rejects_oversized_payload(reset_ops_db):
-    """Tokens with > 48-byte cipher payload are rejected by the XOR decoder."""
+def test_legacy_xor_rejects_prefix_downgrade_in_live_reads(reset_ops_db):
+    """Live reads accept enc:v1: only; any token with enc:x1: prefix (even short 28-char) is rejected (N07)."""
     import base64
     import secrets
 
@@ -420,16 +420,16 @@ def test_legacy_xor_rejects_oversized_payload(reset_ops_db):
     )
 
     SubjectKeyStore.clear()
-    subject = "subj_xor_oversize"
+    subject = "subj_xor_prefix_downgrade"
     SubjectKeyStore.get_or_create_dek(subject)
 
-    # Create a fake legacy token with a 50-byte payload (nonce + cipher > 48)
+    # Even a short payload (e.g. 16 bytes / 28 chars) is rejected in live reads
     nonce = secrets.token_bytes(12)
-    fake_cipher = secrets.token_bytes(50)  # > 48 threshold
+    fake_cipher = secrets.token_bytes(16)
     payload = nonce + fake_cipher
     fake_token = LEGACY_XOR_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
 
-    with pytest.raises(PiiIntegrityError, match="prefix swap"):
+    with pytest.raises(PiiIntegrityError, match="not permitted in live reads"):
         decrypt_subject_pii(subject, fake_token)
 
 
@@ -633,3 +633,184 @@ def test_jobs_enqueue_security_event_includes_actor(reset_ops_db, monkeypatch):
             assert evt.get("actor") == "job_submitter", (
                 f"Expected actor='job_submitter', got actor={evt.get('actor')!r}"
             )
+
+
+# ── R16 / R07: Reject PostgreSQL mode as unsupported ─────────────────────────
+
+
+def test_postgres_mode_rejected_as_unsupported(monkeypatch):
+    """Setting FRONTLINE_OPS_DSN must raise RuntimeError rejecting PostgreSQL as unsupported in all environments."""
+    monkeypatch.setenv("FRONTLINE_OPS_DSN", "postgresql://user:pass@localhost:5432/db")
+    from src.data.postgres_backend import ops_connection
+    from src.data.warehouse import ops_con
+
+    with pytest.raises(RuntimeError, match="unsupported in this release"):
+        with ops_con():
+            pass
+
+    with pytest.raises(RuntimeError, match="unsupported in this release"):
+        with ops_connection():
+            pass
+
+
+# ── R15: All eligible records assigned to clusters ───────────────────────────
+
+
+def test_clustering_assigns_all_eligible_records(monkeypatch, tmp_path):
+    """rebuild_clusters assigns all eligible records to cluster_assignments, even if distant (>0.85)."""
+    import datetime
+    from src.data.warehouse import apply_domain_schema, domain_con
+    from src.ml_runtime.clustering import rebuild_clusters
+    from src.ml_runtime.embeddings import embedding_dim
+
+    pack = "test_r15_pack"
+    db_file = tmp_path / f"{pack}.duckdb"
+    monkeypatch.setenv(f"FRONTLINE_{pack.upper()}_DB", str(db_file))
+    dim = embedding_dim()
+
+    with domain_con(pack, read_only=False) as con:
+        apply_domain_schema(con)
+        base_time = datetime.datetime(2025, 1, 1, 12, 0, 0)
+        # 10 records: 5 close to each other, 5 with orthogonal/distinct vectors
+        rows = []
+        for i in range(10):
+            v = [0.1] * dim if i < 5 else [0.9 if j == (i % dim) else 0.0 for j in range(dim)]
+            rows.append(
+                (
+                    f"rec_{i}",
+                    f"Complaint about brake issue {i}",
+                    "BRAKES",
+                    "Acme",
+                    "Sedan",
+                    v,
+                    (base_time + datetime.timedelta(minutes=i)).isoformat(),
+                )
+            )
+        con.executemany(
+            """
+            INSERT INTO records (record_id, text, category, entity_2, entity_3, embedding, received_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    res = rebuild_clusters(pack, k=2)
+    assert res["clusters"] >= 1
+    with domain_con(pack, read_only=True) as con:
+        assigned_count = con.execute("SELECT COUNT(*) FROM cluster_assignments").fetchone()[0]
+        assert assigned_count == 10, f"Expected all 10 records to be assigned, got {assigned_count}"
+
+
+# ── R12: Pack IDF persistence across process restarts ────────────────────────
+
+
+def test_pack_idf_persistence_across_restarts(tmp_path, monkeypatch):
+    """fit_idf persists weights to disk, reloaded across process memory clears."""
+    from src.ml_runtime import embeddings
+
+    pack_id = "test_r12_pack"
+    embeddings.reset_idf(pack_id)
+
+    texts = [
+        "brake fluid leakage in rear caliper",
+        "brake pedal feels spongy and soft",
+        "transmission slipping between gears",
+    ]
+    fitted = embeddings.fit_idf(texts, pack_id=pack_id)
+    assert len(fitted) > 0
+    dig_before = embeddings.idf_digest(pack_id)
+    assert dig_before != "uniform"
+
+    # Simulate process restart by clearing in-memory dicts
+    embeddings._PACK_IDF.pop(pack_id, None)
+    embeddings._PACK_IDF_DOCS.pop(pack_id, None)
+    assert pack_id not in embeddings._PACK_IDF
+
+    # idf_digest and embed_text should reload from disk
+    dig_after = embeddings.idf_digest(pack_id)
+    assert dig_after == dig_before
+    assert pack_id in embeddings._PACK_IDF
+
+    status = embeddings.idf_status(pack_id)
+    assert status["features"] == len(fitted)
+    assert status["docs"] == 3
+
+    # reset_idf should clean up the file
+    embeddings.reset_idf(pack_id)
+    assert embeddings.idf_digest(pack_id) == "uniform"
+
+
+# ── R21: Grouped SQL population index and caching ────────────────────────────
+
+
+def test_population_index_sql_grouping_cache(tmp_path):
+    """get_pack_population_index uses SQL GROUP BY and caches result."""
+    import duckdb
+    from src.ml_runtime.association import _POPULATION_CACHE, get_pack_population_index
+
+    con = duckdb.connect(":memory:")
+    con.execute(
+        """
+        CREATE TABLE records (
+            category VARCHAR,
+            entity_2 VARCHAR
+        )
+        """
+    )
+    con.executemany(
+        "INSERT INTO records VALUES (?, ?)",
+        [
+            ("BRAKES", "Civic"),
+            ("BRAKES", "Civic"),
+            ("BRAKES", "Accord"),
+            ("ENGINE", "Civic"),
+        ],
+    )
+
+    pack_id = "test_pop_cache_pack"
+    _POPULATION_CACHE.pop(pack_id, None)
+
+    idx1 = get_pack_population_index(con, pack_id=pack_id)
+    assert idx1.n == 4
+    assert idx1.n_cat.get("BRAKES") == 3
+    assert idx1.n_cat.get("ENGINE") == 1
+    assert idx1.n_ent.get("CIVIC") == 3
+    assert idx1.n_ent.get("ACCORD") == 1
+    assert idx1.n_both.get(("BRAKES", "CIVIC")) == 2
+
+    assert pack_id in _POPULATION_CACHE
+
+    # Second call returns cached index
+    idx2 = get_pack_population_index(con, pack_id=pack_id)
+    assert idx2 is idx1
+
+
+# ── R22: Hard timeout enforcement on category model embedding ─────────────────
+
+
+def test_category_zeroshot_hard_timeout_enforcement():
+    """predict_category_zero_shot times out when embedding takes longer than timeout_ms."""
+    import time
+    from src.ml_runtime.category_zeroshot import predict_category_zero_shot
+
+    class SlowEmbedder:
+        def embed(self, text: str):
+            time.sleep(0.1)  # 100ms
+            raise RuntimeError("Should have timed out")
+
+    centroids = {
+        "brakes": [0.1] * 384,
+        "engine": [0.2] * 384,
+    }
+
+    t0 = time.monotonic()
+    res = predict_category_zero_shot(
+        "test text",
+        centroids,
+        embedder=SlowEmbedder(),
+        timeout_ms=10.0,  # 10ms budget
+    )
+    elapsed = time.monotonic() - t0
+    # Should return cleanly without raising, with category=None and within bounded time
+    assert res.category is None
+    assert elapsed < 0.2

@@ -327,20 +327,27 @@ def encrypt_subject_pii(subject_id: str, plaintext: str) -> str:
     return TOKEN_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def decrypt_subject_pii(subject_id: str, token: str) -> str:
+def decrypt_subject_pii(subject_id: str, token: str, *, allow_legacy: bool = False) -> str:
     """Decrypt PII.
 
     Raises KeyError if the key has been shredded, PiiIntegrityError if the
     ciphertext does not authenticate. An AES-GCM authentication failure is never
-    retried with the legacy decoder: the two formats used to share the
-    ``enc:v1:`` prefix, so flipping one byte of stored ciphertext downgraded the
-    read to an unauthenticated keystream and returned attacker-influenced text
-    instead of an error (R30). Legacy rows must be relabelled ``enc:x1:`` first.
+    retried with the legacy decoder (R30).
+
+    Live reads accept authenticated ``enc:v1:`` ciphertext only (N07).
+    Unauthenticated legacy ``enc:x1:`` tokens are rejected during normal operation
+    and are only permitted during explicit offline migration (``allow_legacy=True``).
     """
     if not token:
         return token
     legacy = token.startswith(LEGACY_XOR_PREFIX)
-    if not legacy and not token.startswith(TOKEN_PREFIX):
+    if legacy:
+        if not allow_legacy:
+            raise PiiIntegrityError(
+                f"unauthenticated legacy XOR token '{LEGACY_XOR_PREFIX}...' is not permitted in live reads; "
+                "run offline migration scripts/migrate_legacy_xor_tokens.py"
+            )
+    elif not token.startswith(TOKEN_PREFIX):
         return token
     if not SubjectKeyStore.has_dek(subject_id):
         raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
@@ -434,7 +441,9 @@ def migrate_legacy_xor_token(subject_id: str, token: str) -> str:
     """Re-encrypt an ``enc:x1:`` row as authenticated ``enc:v1:`` ciphertext."""
     if not token.startswith(LEGACY_XOR_PREFIX):
         raise ValueError(f"expected a {LEGACY_XOR_PREFIX} token")
-    return encrypt_subject_pii(subject_id, decrypt_subject_pii(subject_id, token))
+    return encrypt_subject_pii(
+        subject_id, decrypt_subject_pii(subject_id, token, allow_legacy=True)
+    )
 
 
 ERASED_TEXT = "[ERASED]"
