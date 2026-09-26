@@ -445,6 +445,15 @@ def require_perm(role: str, perm: str, *, open_mode_ok: bool = False) -> None:
     raise HTTPException(status_code=403, detail=f"role {role} lacks {perm}")
 
 
+def has_perm(role: str, perm: str, *, open_mode_ok: bool = False) -> bool:
+    """Return True if *role* is granted *perm*, False otherwise."""
+    try:
+        require_perm(role, perm, open_mode_ok=open_mode_ok)
+        return True
+    except HTTPException:
+        return False
+
+
 def require_perm_dep(perm: str, *, open_mode_ok: bool = False):
     """FastAPI dependency that resolves the role and enforces *perm*."""
 

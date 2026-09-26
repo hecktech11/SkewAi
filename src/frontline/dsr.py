@@ -212,7 +212,87 @@ def _plaintext_leftovers(con: Any, interaction_id: str, stamp: str) -> int:
         ).fetchall():
             if description != stamp:
                 leftover += 1
+    for (desc,) in con.execute(
+        "SELECT description FROM interactions WHERE interaction_id = ?",
+        [interaction_id],
+    ).fetchall():
+        if desc is not None and desc != "":
+            leftover += 1
     return leftover
+
+
+_erasure_barrier: set[str] = set()
+_erasure_lock = threading.Lock()
+
+
+def is_interaction_erased(interaction_id: str, con: Any = None) -> bool:
+    """Return True if the interaction has been tombstoned, erased, or shredded."""
+    with _erasure_lock:
+        if interaction_id in _erasure_barrier:
+            return True
+
+    from src.security.pii import SubjectKeyStore
+
+    if not SubjectKeyStore.has_dek(interaction_id):
+        if interaction_id in getattr(SubjectKeyStore, "_shredded", set()):
+            return True
+
+    def _check(c):
+        try:
+            row = c.execute(
+                "SELECT erased, description FROM interactions WHERE interaction_id = ?",
+                [interaction_id],
+            ).fetchone()
+            if row is not None:
+                erased, desc = row[0], row[1]
+                if erased:
+                    return True
+                if desc and "[ERASED" in str(desc):
+                    return True
+            turn_row = c.execute(
+                "SELECT 1 FROM interaction_turns WHERE interaction_id = ? AND (erased = TRUE OR text LIKE '[ERASED%') LIMIT 1",
+                [interaction_id],
+            ).fetchone()
+            if turn_row:
+                return True
+        except Exception:
+            pass
+        return False
+
+    if con is not None:
+        if _check(con):
+            with _erasure_lock:
+                _erasure_barrier.add(interaction_id)
+            return True
+    else:
+        try:
+            with ops_con(read_only=True) as read_con:
+                if _check(read_con):
+                    with _erasure_lock:
+                        _erasure_barrier.add(interaction_id)
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
+def invalidate_active_orchestrator(interaction_id: str) -> None:
+    """Invalidate in-memory slots and description for an active contact."""
+    with _erasure_lock:
+        _erasure_barrier.add(interaction_id)
+    try:
+        from src.api.routes.interactions import _active
+
+        entry = _active.get(interaction_id)
+        if entry is not None:
+            if hasattr(entry, "orch") and entry.orch is not None:
+                entry.orch._erased = True
+                if hasattr(entry.orch, "ctx") and entry.orch.ctx is not None:
+                    entry.orch.ctx.slots.clear()
+                    entry.orch.ctx.slots["description"] = ""
+    except Exception:
+        pass
 
 
 def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str, Any]:
@@ -242,7 +322,11 @@ def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str,
     if mode == "tombstone":
         return tombstone_interaction(interaction_id)
     iid = interaction_id
-    deleted: dict[str, int] = {}
+    invalidate_active_orchestrator(iid)
+    from src.frontline.archive import purge_audit_archives
+
+    archives_purged = purge_audit_archives(iid)
+    deleted: dict[str, int] = {"archives_purged": archives_purged}
     with ops_con() as con:
         # case notes first
         case_ids = [
@@ -298,11 +382,14 @@ def tombstone_interaction(interaction_id: str) -> dict[str, Any]:
     and foreign-key-shaped joins don't silently shift.
     """
     from src.data.timeutil import utc_now
+    from src.frontline.archive import purge_audit_archives
     from src.qubot.evidence_pin import _ensure_pin_table
 
     iid = interaction_id
+    invalidate_active_orchestrator(iid)
+    archives_purged = purge_audit_archives(iid)
     stamp = f"[ERASED {utc_now().date().isoformat()} per erasure request]"
-    out: dict[str, int] = {}
+    out: dict[str, int] = {"archives_purged": archives_purged}
     with ops_con() as con:
         _ensure_pin_table(con)
         try:
@@ -379,12 +466,20 @@ def tombstone_interaction(interaction_id: str) -> dict[str, Any]:
         except Exception:
             out["pins.tombstoned"] = -1
         try:
-            con.execute(
-                "UPDATE interactions SET description = NULL, category = NULL,"
-                " entity_1 = NULL, entity_2 = NULL, entity_3 = NULL"
-                " WHERE interaction_id = ?",
-                [iid],
-            )
+            try:
+                con.execute(
+                    "UPDATE interactions SET erased = TRUE, description = NULL, category = NULL,"
+                    " entity_1 = NULL, entity_2 = NULL, entity_3 = NULL"
+                    " WHERE interaction_id = ?",
+                    [iid],
+                )
+            except Exception:
+                con.execute(
+                    "UPDATE interactions SET description = NULL, category = NULL,"
+                    " entity_1 = NULL, entity_2 = NULL, entity_3 = NULL"
+                    " WHERE interaction_id = ?",
+                    [iid],
+                )
             out["interaction.slots_cleared"] = 1
         except Exception:
             out["interaction.slots_cleared"] = -1
@@ -456,4 +551,6 @@ __all__ = [
     "delete_interaction",
     "tombstone_interaction",
     "erasure_succeeded",
+    "is_interaction_erased",
+    "invalidate_active_orchestrator",
 ]

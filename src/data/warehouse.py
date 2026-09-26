@@ -352,52 +352,83 @@ def apply_domain_schema(con) -> None:
 
 
 def apply_ops_schema(con) -> None:
+    index_stmts: list[str] = []
     for stmt in _strip_sql_comments(OPS_SCHEMA_SQL).strip().split(";"):
         s = stmt.strip()
-        if s:
+        if not s:
+            continue
+        if s.upper().startswith("CREATE INDEX"):
+            index_stmts.append(s)
+            continue
+        try:
             con.execute(s)
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
     # Forward-compatible columns (older DuckDB files created before hash-chain).
     from src.security.sql_ident import SAFE_ALTER_COLUMNS, safe_ident, safe_table
 
-    for col, typ in (
-        ("prev_hash", "VARCHAR"),
-        ("row_hash", "VARCHAR"),
-    ):
-        try:
-            c = safe_ident(col, SAFE_ALTER_COLUMNS, kind="column")
-            t = safe_table("agent_actions")
-            # typ is a fixed constant from this loop, not user input
-            con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
-        except Exception:
-            pass
-    for col, typ in (
-        ("assignee", "VARCHAR"),
-        ("sla_due_at", "TIMESTAMP"),
-    ):
-        try:
-            c = safe_ident(col, SAFE_ALTER_COLUMNS, kind="column")
-            t = safe_table("investigations")
-            con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
-        except Exception:
-            pass
     for table, cols in (
-        ("cases", (("case_kind", "VARCHAR"), ("customer_ref", "VARCHAR"))),
         (
             "interactions",
-            (("customer_ref", "VARCHAR"), ("degraded_ledger", "BOOLEAN"),
-             ("csat", "INTEGER"), ("customer_resolved", "BOOLEAN"),
-             ("enrichment_partial", "BOOLEAN")),
+            (
+                ("pack_version", "VARCHAR"),
+                ("entity_1", "VARCHAR"),
+                ("entity_2", "VARCHAR"),
+                ("entity_3", "VARCHAR"),
+                ("category", "VARCHAR"),
+                ("description", "TEXT"),
+                ("enrichment_partial", "BOOLEAN DEFAULT FALSE"),
+                ("supervised", "BOOLEAN DEFAULT FALSE"),
+                ("peak_frustration", "DOUBLE"),
+                ("last_frustration", "DOUBLE"),
+                ("peak_frustration_turn", "INTEGER"),
+                ("llm_calls", "INTEGER DEFAULT 0"),
+                ("customer_ref", "VARCHAR"),
+                ("degraded_ledger", "BOOLEAN DEFAULT FALSE"),
+                ("csat", "INTEGER"),
+                ("customer_resolved", "BOOLEAN"),
+                ("erased", "BOOLEAN DEFAULT FALSE"),
+                ("schema_version", "INTEGER DEFAULT 1"),
+            ),
+        ),
+        (
+            "cases",
+            (
+                ("case_kind", "VARCHAR DEFAULT 'customer'"),
+                ("customer_ref", "VARCHAR"),
+                ("description_summary", "TEXT"),
+                ("followup_draft", "TEXT"),
+                ("similar_record_count", "INTEGER DEFAULT 0"),
+                ("schema_version", "INTEGER DEFAULT 1"),
+            ),
         ),
         (
             "agent_actions",
             (
-                ("erased", "BOOLEAN"),
+                ("prev_hash", "VARCHAR"),
+                ("row_hash", "VARCHAR"),
+                ("erased", "BOOLEAN DEFAULT FALSE"),
                 ("hash_version", "INTEGER DEFAULT 1"),
                 ("content_hash", "VARCHAR"),
                 ("claims", "VARCHAR"),
             ),
         ),
-        ("interaction_turns", (("erased", "BOOLEAN"),)),
+        (
+            "interaction_turns",
+            (
+                ("erased", "BOOLEAN DEFAULT FALSE"),
+            ),
+        ),
+        (
+            "investigations",
+            (
+                ("assignee", "VARCHAR"),
+                ("sla_due_at", "TIMESTAMP"),
+            ),
+        ),
     ):
         for col, typ in cols:
             try:
@@ -405,19 +436,25 @@ def apply_ops_schema(con) -> None:
                 t = safe_table(table)
                 con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
             except Exception:
-                pass
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
     # Version-dependent indexes AFTER the ALTERs above: creating them in the
     # static DDL would hard-fail apply on pre-column databases (and a failed
     # apply must never wedge the warehouse).
-    for _idx_ddl in (
-        "CREATE INDEX IF NOT EXISTS idx_cases_customer"
-        " ON cases(customer_ref, category, created_at)",
+    extra_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_cases_customer ON cases(customer_ref, category, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_cases_kind ON cases(case_kind, status)",
-    ):
+    ]
+    for _idx_ddl in index_stmts + extra_indexes:
         try:
             con.execute(_idx_ddl)
         except Exception:
-            pass
+            try:
+                con.rollback()
+            except Exception:
+                pass
     # LLM daily spend ledger (Phase 1 narration cap).
     try:
         con.execute(
