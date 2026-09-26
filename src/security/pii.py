@@ -80,7 +80,65 @@ def redact_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 import base64
 import hashlib
+import logging
 import secrets
+import threading
+
+_log = logging.getLogger("skewai.pii")
+
+#: Prefix of an authenticated (AES-GCM) at-rest token.
+TOKEN_PREFIX = "enc:v1:"
+
+
+class PiiEncryptionError(RuntimeError):
+    """PII could not be encrypted.
+
+    Raised instead of handing the plaintext back: a caller that receives its own
+    input has no way to tell success from failure, and every caller here writes
+    the result straight into a warehouse column.
+    """
+
+
+#: Written in place of text that could not be encrypted. Never the plaintext —
+#: an unencrypted description is indistinguishable on read from a decrypted one.
+UNENCRYPTED_PLACEHOLDER = "[ENCRYPTION_UNAVAILABLE]"
+
+_health_lock = threading.Lock()
+_encrypt_failures = 0
+_encrypt_last_error = ""
+
+
+def _record_encryption_failure(kind: str) -> None:
+    global _encrypt_failures, _encrypt_last_error
+    with _health_lock:
+        _encrypt_failures += 1
+        _encrypt_last_error = kind
+
+
+def encryption_health() -> dict[str, Any]:
+    """Whether at-rest PII encryption is working.
+
+    Any non-zero ``failures`` means customer text was dropped rather than
+    stored, so operators need this on the health surface — silently writing
+    plaintext instead used to make the same outage invisible.
+    """
+    with _health_lock:
+        failures = _encrypt_failures
+        last = _encrypt_last_error
+    return {
+        "healthy": failures == 0,
+        "failures": failures,
+        "last_error": last,
+        "placeholder": UNENCRYPTED_PLACEHOLDER,
+    }
+
+
+def reset_encryption_health() -> None:
+    """Clear the failure counters (tests / after an operator acknowledges)."""
+    global _encrypt_failures, _encrypt_last_error
+    with _health_lock:
+        _encrypt_failures = 0
+        _encrypt_last_error = ""
 
 
 def _ensure_dek_table(con) -> None:
@@ -249,13 +307,58 @@ ERASED_TEXT = "[ERASED]"
 
 
 def encrypt_subject_text(subject_id: str, plaintext: str) -> str:
-    """Encrypt free text; on failure return the original so persist cannot stall."""
+    """Encrypt free text under the subject's DEK, or raise.
+
+    Fails closed. This used to return *plaintext* on any exception "so persist
+    cannot stall", which meant a locked ``subject_deks`` table, a shredded DEK,
+    or a missing ``cryptography`` wheel wrote the customer's own words into
+    ``cases.description_summary`` in the clear. Nothing downstream can tell that
+    row from a decrypted one, so the leak never surfaces (R29).
+    """
     if not plaintext:
         return plaintext
     try:
-        return encrypt_subject_pii(subject_id, plaintext)
-    except Exception:
+        token = encrypt_subject_pii(subject_id, plaintext)
+    except Exception as exc:
+        _record_encryption_failure(type(exc).__name__)
+        raise PiiEncryptionError(
+            f"could not encrypt PII for subject {subject_id!r}: {type(exc).__name__}"
+        ) from exc
+    if not isinstance(token, str) or not token.startswith(TOKEN_PREFIX):
+        # A non-token result is the same leak by another route.
+        _record_encryption_failure("unencrypted_result")
+        raise PiiEncryptionError(
+            f"encryption for subject {subject_id!r} did not produce a {TOKEN_PREFIX} token"
+        )
+    return token
+
+
+def store_subject_text(subject_id: str, plaintext: str, *, field: str) -> str:
+    """Value to persist in a PII free-text column — ciphertext or a marker.
+
+    When encryption is unavailable the row is still written (dropping a safety
+    complaint is worse than dropping its description) but the customer's words
+    are not persisted in the clear. ``encryption_health()`` and the
+    ``pii.encrypt_failed`` security event tell operators what was lost.
+    """
+    if not plaintext:
         return plaintext
+    try:
+        return encrypt_subject_text(subject_id, plaintext)
+    except PiiEncryptionError as exc:
+        _log.error("pii_encrypt_failed field=%s subject=%s: %s", field, subject_id, exc)
+        try:
+            from src.security.audit_log import security_event
+
+            security_event(
+                "pii.encrypt_failed",
+                outcome="failure",
+                resource=f"{field}:{subject_id}",
+                detail={"error": str(exc), "chars_dropped": len(plaintext)},
+            )
+        except Exception:
+            pass
+        return UNENCRYPTED_PLACEHOLDER
 
 
 def reveal_subject_text(subject_id: str, text: str | None) -> str:
@@ -290,9 +393,15 @@ __all__ = [
     "redact_dict",
     "redact_turns",
     "SubjectKeyStore",
+    "PiiEncryptionError",
+    "TOKEN_PREFIX",
+    "UNENCRYPTED_PLACEHOLDER",
+    "encryption_health",
+    "reset_encryption_health",
     "encrypt_subject_pii",
     "decrypt_subject_pii",
     "encrypt_subject_text",
+    "store_subject_text",
     "reveal_subject_text",
     "decrypt_case_row",
     "decrypt_case_rows",

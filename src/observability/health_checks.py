@@ -192,6 +192,31 @@ def check_crypto_key_store_size(*, max_keys: int = 10000) -> HealthSignal:
     )
 
 
+def check_pii_encryption() -> HealthSignal:
+    """At-rest PII encryption. Any failure means customer text was dropped.
+
+    Encryption fails closed (R29), so a non-zero count is not a cosmetic
+    warning: those descriptions were replaced by a marker and are gone.
+    """
+    from src.security.pii import encryption_health
+
+    h = encryption_health()
+    failures = int(h.get("failures", 0))
+    if failures >= 10:
+        status = "critical"
+    elif failures >= 1:
+        status = "degraded"
+    else:
+        status = "healthy"
+    return HealthSignal(
+        name="pii_encryption",
+        status=status,
+        metric_value=float(failures),
+        threshold=10.0,
+        detail=f"encrypt_failures={failures}, last_error={h.get('last_error') or 'none'}",
+    )
+
+
 def check_embedding_runtime() -> HealthSignal:
     """Active embedding mode, readiness, and version (no artifact paths)."""
     try:
@@ -234,6 +259,7 @@ def run_all_checks(*, pack_id: str | None = None) -> list[HealthSignal]:
         check_ops_db_writable,
         lambda: check_dead_letter_backlog(),
         lambda: check_crypto_key_store_size(),
+        check_pii_encryption,
     ]
     if pack_id:
         checks.append(lambda: check_anomaly_freshness(pack_id))
@@ -309,6 +335,7 @@ __all__ = [
     'check_ops_db_writable',
     'check_dead_letter_backlog',
     'check_crypto_key_store_size',
+    'check_pii_encryption',
     'run_all_checks',
     'health_summary',
     'check_embedding_runtime',
