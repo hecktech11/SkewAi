@@ -41,6 +41,15 @@ class DegradationLadder:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _degradation_log: list[dict[str, Any]] = field(default_factory=list)
 
+    def _rung(self, level: int) -> DegradationLevel | None:
+        """Locate a rung by number. Does not take _lock — the levels list is
+        immutable after construction, so callers holding _lock may use this
+        instead of re-entering it through the `current` property."""
+        for lev in self.levels:
+            if lev.level == level:
+                return lev
+        return None
+
     @property
     def current_level(self) -> int:
         with self._lock:
@@ -49,46 +58,44 @@ class DegradationLadder:
     @property
     def current(self) -> DegradationLevel | None:
         with self._lock:
-            for lev in self.levels:
-                if lev.level == self._current_level:
-                    return lev
-        return None
+            return self._rung(self._current_level)
 
     def degrade(self, *, reason: str) -> DegradationLevel | None:
         """Move to the next lower level. Monotonic-down within a contact."""
         with self._lock:
             next_level = self._current_level + 1
-            target = None
-            for lev in self.levels:
-                if lev.level == next_level:
-                    target = lev
-                    break
+            target = self._rung(next_level)
             if target is None:
-                # Already at bottom
-                logger.warning(
-                    "degradation_ladder_bottomed_out",
-                    extra={"subsystem": self.subsystem, "reason": reason},
-                )
-                return self.current
-            self._current_level = next_level
-            self._degradation_log.append({
-                "subsystem": self.subsystem,
-                "from_level": next_level - 1,
-                "to_level": next_level,
-                "level_name": target.name,
-                "reason": reason,
-                "ts": datetime.utcnow().isoformat(),
-            })
-            logger.warning(
-                "degradation_ladder_step",
-                extra={
+                # Already at bottom. Read the rung directly: `self.current`
+                # would try to re-acquire this non-reentrant lock.
+                bottom = self._rung(self._current_level)
+            else:
+                self._current_level = next_level
+                self._degradation_log.append({
                     "subsystem": self.subsystem,
-                    "ladder_level": next_level,
+                    "from_level": next_level - 1,
+                    "to_level": next_level,
                     "level_name": target.name,
                     "reason": reason,
-                },
+                    "ts": datetime.utcnow().isoformat(),
+                })
+        # Log outside the critical section: handlers can be slow or re-enter.
+        if target is None:
+            logger.warning(
+                "degradation_ladder_bottomed_out",
+                extra={"subsystem": self.subsystem, "reason": reason},
             )
-            return target
+            return bottom
+        logger.warning(
+            "degradation_ladder_step",
+            extra={
+                "subsystem": self.subsystem,
+                "ladder_level": next_level,
+                "level_name": target.name,
+                "reason": reason,
+            },
+        )
+        return target
 
     def reset(self) -> None:
         """Reset to level 0 (between contacts only)."""
@@ -97,14 +104,17 @@ class DegradationLadder:
 
     def status(self) -> dict[str, Any]:
         """Console-visible status."""
-        cur = self.current
+        with self._lock:
+            level = self._current_level
+            cur = self._rung(level)
+            log = list(self._degradation_log)
         return {
             "subsystem": self.subsystem,
-            "current_level": self._current_level,
+            "current_level": level,
             "level_name": cur.name if cur else "unknown",
             "description": cur.description if cur else "",
             "max_level": max((l.level for l in self.levels), default=0),
-            "degradation_log": list(self._degradation_log),
+            "degradation_log": log,
         }
 
     def is_operational(self) -> bool:
