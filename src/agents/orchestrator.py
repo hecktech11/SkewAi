@@ -78,6 +78,24 @@ def _caller_requested_human(text: str) -> bool:
         value,
     ))
 
+
+def _pack_captures_vin(pack: Any) -> bool:
+    """VIN/plate capture is an automotive capability, not a global voice step."""
+    pid = str(getattr(pack, "id", "") or "")
+    if pid.startswith("automotive"):
+        return True
+    try:
+        names = {s.name for s in pack.manifest.slot_frame}
+    except Exception:
+        names = set()
+    if "vin" in names or "plate" in names:
+        return True
+    try:
+        labels = " ".join(str(v).lower() for v in pack.entity_labels.values())
+    except Exception:
+        labels = ""
+    return "vin" in labels or "vehicle" in labels and "year" in labels
+
 # Deterministic wrap-up when FRONTLINE_MAX_TURNS is hit (not an abrupt drop).
 BUDGET_WRAP_SCRIPT = (
     "We've captured what we have and will file this now so nothing is lost."
@@ -116,6 +134,7 @@ class OrchestratorHooks:
     emit_turn_latency: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
     emit_consent_required: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
     emit_supervisor_whisper: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
+    emit_control_state: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None
 
     async def _maybe(self, fn: Optional[Callable], *args: Any) -> None:
         if fn is not None:
@@ -314,12 +333,18 @@ class Orchestrator:
             return
         text = v.text
 
-        # Record the customer turn
-        self.ctx.record_turn("customer", text)
+        # Record the customer turn only after it is durable. A failed insert
+        # releases the dedup slot so the same client id can be retried.
+        try:
+            customer_turn = self.ctx.record_turn("customer", text)
+        except Exception:
+            if client_turn_id:
+                self._forget_client_turn(str(client_turn_id))
+            raise
         await self.hooks._maybe(
             getattr(self.hooks, "emit_heard_turn", None),
             text,
-            {"speaker": "customer"},
+            {"speaker": "customer", "turn_id": customer_turn.get("turn_id")},
         )
 
         # ── P0: explicit voice-consent gate (two-party/biometric regions) ──
@@ -338,17 +363,20 @@ class Orchestrator:
                         input_summary=f"region={self.ctx.region} version={self.ctx.voice_consent_version}",
                         output_summary="caller consented; contact unlocked",
                     ))
+                    # Consent state is recorded while a human owns the call.
+                    # The acknowledgement is AI speech and must not resume intake.
+                    if self.ctx.state == SUPERVISED or self.ctx.supervised:
+                        return
                     ack = "Thanks — recording your consent. Now, "
                     try:
                         ack += self.ctx.pack.manifest.slot_frame[0].prompt
                     except Exception:
                         ack += "what's going on with your vehicle?"
-                    await self.hooks._maybe(
-                        self.hooks.emit_customer_turn,
+                    await self._emit_spoken(
                         ack,
-                        {"speaker": "agent", "fast_path": True, "llm_used": False},
+                        action_type="question_asked",
+                        input_summary="consent acknowledged; next slot",
                     )
-                    self.ctx.record_turn("agent", ack, llm_used=False)
                     return
             except Exception:
                 pass
@@ -420,10 +448,15 @@ class Orchestrator:
             pass
 
         # ── Spoken VIN / plate capture (phonetic + ISO-3779) ───────────────
+        # Only packs that declare vehicle identity run this. A finance account
+        # number is a 17-digit string and must stay on the finance intake path.
         try:
             from src.voice.wiring import detect_vin_in_text
 
-            _vin = detect_vin_in_text(text)
+            if not _pack_captures_vin(self.ctx.pack):
+                _vin = {}
+            else:
+                _vin = detect_vin_in_text(text)
             if _vin.get("vin") and _vin.get("valid") and not self.ctx.slots.get("vin"):
                 self.ctx.slots["vin"] = str(_vin["vin"])
                 self.ctx.vin = str(_vin["vin"])
@@ -857,41 +890,100 @@ class Orchestrator:
         except Exception:
             pass
 
-    def _register_spoken_turn(self, text: str) -> None:
-        """Track the last agent utterance for barge-in reconciliation (P1)."""
+    def note_emitted_utterance(
+        self,
+        text: str,
+        *,
+        utterance_id: str = "",
+        action_id: str = "",
+        turn_id: str = "",
+    ) -> str:
+        """Remember one generated utterance without stealing the one in playback.
+
+        Returns the utterance id stored. A later generation is kept in the map
+        but does not replace ``playing_utterance_id`` or the audible text.
+        """
         try:
             from src.voice.wiring import estimate_word_alignment
 
-            self.ctx.last_agent_text = str(text or "")
-            self.ctx.last_agent_word_markers = estimate_word_alignment(text or "")
-            try:
-                turns = [t for t in (self.ctx.turns or []) if t.get("speaker") == "agent"]
-                if turns:
-                    self.ctx.last_agent_action_id = str(turns[-1].get("turn_id") or "")
-            except Exception:
-                pass
+            markers = estimate_word_alignment(text or "")
         except Exception:
-            pass
+            markers = []
+        aid = (action_id or "").strip() or self._action_id_matching_text(text)
+        uid = (utterance_id or turn_id or aid or "").strip()
+        if not uid:
+            uid = f"utt_{len(self.ctx.emitted_utterances) + 1}"
+        # A transcript turn id is not a ledger action id.
+        if aid and turn_id and aid == turn_id:
+            aid = self._action_id_matching_text(text)
+        self.ctx.emitted_utterances[uid] = {
+            "text": str(text or ""),
+            "action_id": aid,
+            "turn_id": turn_id or "",
+            "markers": markers,
+        }
+        if self.ctx.playing_utterance_id and self.ctx.playing_utterance_id != uid:
+            return uid
+        self.ctx.playing_utterance_id = uid
+        self.ctx.last_agent_text = str(text or "")
+        self.ctx.last_agent_action_id = aid or None
+        self.ctx.last_agent_word_markers = list(markers or [])
+        return uid
 
-    async def handle_barge_in_interrupt(self, elapsed_ms: int = 0) -> str:
-        """Reconcile a barge-in against estimated TTS timestamps (P1 fix).
+    def _action_id_matching_text(self, text: str) -> str:
+        needle = (text or "").strip()[:80]
+        if len(needle) < 8:
+            return ""
+        try:
+            from src.ledger import list_actions
 
-        Returns the audible-prefix text and ledgers `spoken_turn_truncated`
-        so the immutable ledger never claims unheard audio was spoken.
+            for row in reversed(list_actions(self.ctx.interaction_id)):
+                out = str(row.get("output_summary") or "")
+                if needle[:40] in out:
+                    return str(row.get("action_id") or "")
+        except Exception:
+            return ""
+        return ""
+
+    def _register_spoken_turn(self, text: str) -> None:
+        """Backward-compatible alias. Does not overwrite an in-flight utterance."""
+        self.note_emitted_utterance(text)
+
+    async def handle_barge_in_interrupt(
+        self, elapsed_ms: int = 0, utterance_id: str | None = None,
+    ) -> str:
+        """Reconcile a barge-in against the utterance the caller was hearing.
+
+        ``utterance_id`` is the id the browser started playing. When it is
+        absent, the server uses the utterance it marked as playing — not the
+        newest generated text.
         """
         try:
             from src.voice.wiring import reconcile_barge_in
 
+            uid = (utterance_id or self.ctx.playing_utterance_id or "").strip()
+            rec = (self.ctx.emitted_utterances or {}).get(uid) if uid else None
+            if rec:
+                text = str(rec.get("text") or "")
+                action_id = str(rec.get("action_id") or "")
+                markers = list(rec.get("markers") or [])
+            else:
+                text = self.ctx.last_agent_text or ""
+                action_id = str(self.ctx.last_agent_action_id or "")
+                markers = list(self.ctx.last_agent_word_markers or [])
             audible = reconcile_barge_in(
                 self.ctx.interaction_id,
-                self.ctx.last_agent_action_id,
-                self.ctx.last_agent_text or "",
-                list(self.ctx.last_agent_word_markers or []),
+                action_id,
+                text,
+                markers,
                 int(elapsed_ms or 0),
             )
             record_action(self._orchestrator_action(
                 "spoken_turn_reconciled",
-                input_summary=f"barge_in at {int(elapsed_ms or 0)}ms",
+                input_summary=(
+                    f"barge_in at {int(elapsed_ms or 0)}ms"
+                    f" utterance={uid or '-'} action={action_id or '-'}"
+                ),
                 output_summary=(audible or "[INTERRUPTED]")[:500],
             ))
             await self.hooks._maybe(self.hooks.emit_activity, {
@@ -899,7 +991,10 @@ class Orchestrator:
                 "action_type": "spoken_turn_truncated",
                 "summary": audible or "[INTERRUPTED]",
                 "ok": True,
+                "evidence_ids": [action_id] if action_id else [],
             })
+            if uid and uid == self.ctx.playing_utterance_id:
+                self.ctx.playing_utterance_id = None
             return audible or "[INTERRUPTED]"
         except Exception:
             return "[INTERRUPTED]"
@@ -1109,7 +1204,9 @@ class Orchestrator:
         if self.ctx.state in (SUPERVISED, DONE, ABANDONED):
             return
         was_handoff = self.ctx.state == HANDOFF_PENDING
+        self.ctx.control_generation = int(self.ctx.control_generation or 0) + 1
         self.ctx.takeover_claimed_by = (claimed_by or "").strip() or None
+        self.ctx.playing_utterance_id = None
         self._pre_supervised_state = self.ctx.state
         self.ctx.supervised = True
         self._transition(self.ctx.state, SUPERVISED)
@@ -1138,8 +1235,26 @@ class Orchestrator:
             await alert_takeover_started(self.ctx.interaction_id)
         except Exception:
             pass  # alerts must never break a call
+        try:
+            self._record_state(SUPERVISED)
+        except Exception:
+            pass
+        await self._publish_control()
 
-    async def release(self) -> None:
+    def _actor_may_control(self, actor: str | None, *, admin_override: bool = False) -> bool:
+        """Owner check for send/release.
+
+        A claim with no subject (historical or service-only) stays controllable
+        so existing calls are not stranded. A named claimant is exclusive.
+        """
+        if admin_override:
+            return True
+        owner = (self.ctx.takeover_claimed_by or "").strip()
+        if not owner:
+            return True
+        return (actor or "").strip() == owner
+
+    async def release(self, actor: str | None = None, *, admin_override: bool = False) -> dict[str, Any]:
         """Supervisor releases. Next state is recomputed from facts (audit 3.3).
 
         Restoring the literal pre-takeover state is stale when enrichment
@@ -1148,7 +1263,15 @@ class Orchestrator:
         CLOSING; slots complete → ENRICHING; else the prior state.
         """
         if self.ctx.state != SUPERVISED:
-            return
+            return {"ok": False, "code": "not_supervised", "state": self.ctx.state}
+        if not self._actor_may_control(actor, admin_override=admin_override):
+            return {
+                "ok": False,
+                "code": "not_owner",
+                "claimed_by": self.ctx.takeover_claimed_by,
+                "state": self.ctx.state,
+            }
+        self.ctx.control_generation = int(self.ctx.control_generation or 0) + 1
         if self.ctx.safety_flags.get("escalation"):
             target: str | None = "SAFETY_ESCALATION"
         elif self.ctx.enrichment_done:
@@ -1166,22 +1289,39 @@ class Orchestrator:
                 output_summary="AI resumes",
             ))
             self._pre_supervised_state = None
+            self.ctx.takeover_claimed_by = None
             await self._move_to_closing(force=True)
-            return
+            await self._publish_control()
+            return {
+                "ok": True,
+                "state": self.ctx.state,
+                "generation": self.ctx.control_generation,
+            }
         self._transition(SUPERVISED, target)
         # Clear the supervised flag so the console / audit reflects that the
         # AI has resumed. (takeover sets this to True; release must reset it.)
         self.ctx.supervised = False
+        self.ctx.takeover_claimed_by = None
         record_action(self._orchestrator_action(
             "takeover_released",
-            input_summary=f"returning to state={target} (recomputed)",
+            input_summary=f"returning to state={target} (recomputed) actor-released",
             output_summary="AI resumes",
         ))
         self._pre_supervised_state = None
+        try:
+            self._record_state(target)
+        except Exception:
+            pass
         if target == "SAFETY_ESCALATION":
             await self._deliver_pending_safety_script()
         elif target == "ENRICHING":
             await self._enter_enriching()
+        await self._publish_control()
+        return {
+            "ok": True,
+            "state": self.ctx.state,
+            "generation": self.ctx.control_generation,
+        }
 
     async def _deliver_pending_safety_script(self) -> None:
         """Emit the stored escalation script post-release (audit 3.3)."""
@@ -1206,35 +1346,77 @@ class Orchestrator:
         self.ctx.record_turn("agent", script, llm_used=False)
         await self._move_to_closing()
 
-    async def human_turn(self, text: str) -> None:
+    async def human_turn(
+        self,
+        text: str,
+        *,
+        actor: str | None = None,
+        message_id: str | None = None,
+    ) -> dict[str, Any]:
         """Supervisor typed a message. Ledger it BEFORE emitting.
 
         Supervisor turns pass the same input validation as customer turns
         before broadcast — the audit-first invariant applies to humans too.
+        Returns an explicit acceptance or rejection. Duplicate message ids
+        do not speak twice.
         """
+        mid = (message_id or "").strip()
         if self.ctx.state != SUPERVISED:
-            return
+            return {"ok": False, "code": "not_supervised", "message_id": mid}
+        if not self._actor_may_control(actor):
+            return {
+                "ok": False,
+                "code": "not_owner",
+                "claimed_by": self.ctx.takeover_claimed_by,
+                "message_id": mid,
+            }
+        if mid and mid in self.ctx.human_message_ids:
+            return {"ok": True, "duplicate": True, "message_id": mid}
         from src.security import validate_input
         v = validate_input(text)
         if not v.ok:
             record_action(self._orchestrator_action(
                 "state_transition",
-                input_summary="supervisor input rejected by security",
+                input_summary=f"actor={actor or 'unknown'} supervisor input rejected",
                 output_summary=f"reason: {v.reason}",
             ))
-            return  # don't emit; let the console show the rejection
+            return {"ok": False, "code": "rejected", "detail": v.reason, "message_id": mid}
         text = v.text
-        record_action(self._orchestrator_action(
+        who = (actor or "unknown").strip() or "unknown"
+        action_id = record_action(self._orchestrator_action(
             "human_turn",
-            input_summary=f"supervisor message",
+            input_summary=f"actor={who} message_id={mid or '-'}",
             output_summary=text,
         ))
-        self.ctx.record_turn("supervisor", text)
-        await self.hooks._maybe(
-            self.hooks.emit_customer_turn,
+        turn = self.ctx.record_turn("supervisor", text, action_id=action_id)
+        if mid:
+            self.ctx.human_message_ids.add(mid)
+        await self._emit_spoken(
             text,
-            {"speaker": "supervisor", "fast_path": True, "llm_used": False},
+            action_type="human_turn",
+            input_summary=f"actor={who}",
+            speaker="supervisor",
+            ledger=False,
+            action_id=action_id,
+            turn=turn,
         )
+        return {"ok": True, "message_id": mid, "action_id": action_id, "duplicate": False}
+
+    def _forget_client_turn(self, client_turn_id: str) -> None:
+        """Drop a dedup row when the turn was not durably accepted."""
+        tid = (client_turn_id or "").strip()
+        if not tid:
+            return
+        from src.data.warehouse import ops_con
+
+        try:
+            with ops_con() as con:
+                con.execute(
+                    "DELETE FROM turn_dedup WHERE interaction_id = ? AND client_turn_id = ?",
+                    [self.ctx.interaction_id, tid],
+                )
+        except Exception:
+            pass
 
     def _seen_client_turn(self, client_turn_id: str) -> bool:
         """Idempotency check for retried turns (board #4).
@@ -1404,22 +1586,34 @@ class Orchestrator:
             input_summary=f"no supervisor pickup within {HANDOFF_SLA_S}s",
             output_summary=f"resumed {resume}; callback offered",
         ))
+        generation = int(self.ctx.control_generation or 0)
         await self.hooks._maybe(self.hooks.emit_activity, {
             "agent": "orchestrator",
             "action_type": "handoff_unfulfilled",
             "summary": "Handoff SLA expired with no pickup; AI resumed.",
             "ok": False,
         })
+        if (
+            self.ctx.state == SUPERVISED
+            or self.ctx.supervised
+            or int(self.ctx.control_generation or 0) != generation
+        ):
+            return True
         apology = (
             "I'm sorry for the wait — no specialist was available. "
             "I can keep helping, or arrange a callback at a better time."
         )
-        await self.hooks._maybe(
-            self.hooks.emit_customer_turn,
+        await self._emit_spoken(
             apology,
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
+            action_type="question_asked",
+            input_summary="handoff SLA expired",
         )
-        self.ctx.record_turn("agent", apology, llm_used=False)
+        if (
+            self.ctx.state == SUPERVISED
+            or self.ctx.supervised
+            or int(self.ctx.control_generation or 0) != generation
+        ):
+            return True
         # The callback offer is a real queue row, not just words: staff work
         # it from the existing callback queue (board: no dead-end offers).
         try:
@@ -1687,12 +1881,7 @@ class Orchestrator:
                     pack_display_name=str(pack_name),
                 )
                 if offer and offer.get("customer_text"):
-                    await self.hooks._maybe(
-                        self.hooks.emit_customer_turn,
-                        offer["customer_text"],
-                        {"speaker": "agent", "fast_path": True, "llm_used": False},
-                    )
-                    self.ctx.record_turn("agent", offer["customer_text"], llm_used=False)
+                    await self._emit_ledgered_remedy(offer)
             except Exception:
                 pass
 
@@ -2450,6 +2639,86 @@ class Orchestrator:
                 _anyio.run(_fire)
         except Exception:
             pass
+
+    async def _emit_spoken(
+        self,
+        text: str,
+        *,
+        action_type: str,
+        input_summary: str = "",
+        speaker: str = "agent",
+        ledger: bool = True,
+        action_id: str = "",
+        turn: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Ledger (unless already done), persist, then emit one spoken turn.
+
+        AI speech is suppressed once the contact is supervised. Supervisor
+        speech is not. Ledger or transcript failure skips the emit.
+        """
+        if speaker != "supervisor" and (self.ctx.state == SUPERVISED or self.ctx.supervised):
+            return None
+        aid = action_id or ""
+        if ledger:
+            aid = record_action(self._orchestrator_action(
+                action_type, input_summary, (text or "")[:500],
+            ))
+        if turn is None:
+            turn = self.ctx.record_turn(speaker, text, llm_used=False, action_id=aid or None)
+        meta = {
+            "speaker": speaker,
+            "fast_path": True,
+            "llm_used": False,
+            "action_id": aid,
+            "turn_id": (turn or {}).get("turn_id"),
+            "utterance_id": (turn or {}).get("turn_id"),
+            **(extra or {}),
+        }
+        await self.hooks._maybe(self.hooks.emit_customer_turn, text, meta)
+        return meta
+
+    async def _emit_ledgered_remedy(self, offer: dict[str, Any]) -> None:
+        """Commit a remedy action and the transcript, then speak. No silent bypass."""
+        from src.ledger import AgentAction
+
+        spoken = str(offer.get("customer_text") or "")
+        if not spoken:
+            return
+        evidence = [str(offer["advisory_id"])] if offer.get("advisory_id") else []
+        action_id = record_action(AgentAction(
+            interaction_id=self.ctx.interaction_id,
+            agent="orchestrator",
+            action_type="remedy_offered",
+            input_summary=f"remedy_offer advisory={offer.get('advisory_id')}",
+            output_summary=spoken[:500],
+            evidence_ids=evidence,
+            case_id=self.ctx.case_id,
+        ))
+        turn = self.ctx.record_turn("agent", spoken, llm_used=False, action_id=action_id)
+        await self.hooks._maybe(
+            self.hooks.emit_customer_turn,
+            spoken,
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "action_id": action_id,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
+        )
+
+    async def _publish_control(self) -> None:
+        payload = {
+            "type": "control_state",
+            "interaction_id": self.ctx.interaction_id,
+            "state": self.ctx.state,
+            "supervised": bool(self.ctx.supervised),
+            "generation": int(self.ctx.control_generation or 0),
+            "claimed_by": self.ctx.takeover_claimed_by,
+        }
+        await self.hooks._maybe(getattr(self.hooks, "emit_control_state", None), payload)
 
     def _orchestrator_action(self, action_type: str, input_summary: str = "", output_summary: str = ""):
         from src.ledger import AgentAction

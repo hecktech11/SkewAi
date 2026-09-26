@@ -149,7 +149,12 @@ def test_legacy_xor_token_decodes_under_its_own_prefix(reset_ops_db):
     nonce = b"\x02" * 12
     legacy = _legacy_xor_token(dek, nonce, SHORT_SECRET, prefix=LEGACY_XOR_PREFIX)
 
-    assert decrypt_subject_pii(iid, legacy) == SHORT_SECRET
+    # Live reads reject legacy XOR tokens to prevent prefix downgrade attacks (N07)
+    with pytest.raises(PiiIntegrityError, match="not permitted in live reads"):
+        decrypt_subject_pii(iid, legacy)
+
+    # Offline migration explicitly permits decoding
+    assert decrypt_subject_pii(iid, legacy, allow_legacy=True) == SHORT_SECRET
 
 
 def test_relabel_then_migrate_yields_authenticated_ciphertext(reset_ops_db):

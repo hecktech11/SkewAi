@@ -306,8 +306,31 @@ def predict_category_zero_shot(
             extraction_source="none",
         )
 
+    import concurrent.futures
+
+    timeout_s = max(0.001, max_ms / 1000.0)
     try:
-        emb = embedder.embed(clean)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(embedder.embed, clean)
+            try:
+                emb = fut.result(timeout=timeout_s)
+            except concurrent.futures.TimeoutError:
+                step_down("slm_understanding", reason=f"latency_breach: embedding timed out after {max_ms:.1f}ms")
+                return ZeroShotCategoryResult(
+                    category=None,
+                    top1_category=None,
+                    top1_score=0.0,
+                    top2_category=None,
+                    top2_score=0.0,
+                    margin=0.0,
+                    floor=conf_floor,
+                    margin_gate=conf_margin,
+                    passed_floor=False,
+                    passed_margin=False,
+                    is_member=False,
+                    latency_ms=(time.monotonic() - t0) * 1000.0,
+                    extraction_source="none",
+                )
         u_v = np.array(emb.values[:384], dtype=np.float32)
         norm = float(np.linalg.norm(u_v))
         if norm > 1e-9:

@@ -55,8 +55,11 @@ class WebVoiceChannel(ChannelAdapter):
             "type": "agent_turn",
             "text": text,
             "turn_id": meta.get("turn_id"),
-            "speak": not self._text_only,
+            "utterance_id": meta.get("utterance_id") or meta.get("turn_id"),
+            "action_id": meta.get("action_id"),
+            "speak": not self._text_only and meta.get("speak", True) is not False,
             "speaker": speaker,
+            "closing": bool(meta.get("closing")),
         })
 
     async def send_activity(self, payload: dict[str, Any]) -> None:

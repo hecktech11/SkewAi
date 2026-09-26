@@ -16,6 +16,23 @@ const AGENT_BADGE_CLASS = {
 
 const FRUSTRATION_THRESHOLD = 0.65;
 
+function mergeConsoleTurns(existing, incoming) {
+  const out = [...(existing || [])];
+  for (const turn of incoming || []) {
+    if (!turn || !turn.text) continue;
+    const idx = out.findIndex((row) => {
+      if (turn.turn_id && row.turn_id) return row.turn_id === turn.turn_id;
+      return row.speaker === turn.speaker && row.text === turn.text;
+    });
+    if (idx >= 0) {
+      out[idx] = { ...out[idx], ...turn, turn_id: turn.turn_id || out[idx].turn_id };
+    } else {
+      out.push(turn);
+    }
+  }
+  return out.slice(-200);
+}
+
 export default function LiveContactConsole() {
   const [interactions, setInteractions] = useState([]); // active list from polling
   const [selectedId, setSelectedId] = useState(null);
@@ -30,10 +47,13 @@ export default function LiveContactConsole() {
   const [shadow, setShadow] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
   const [polled, setPolled] = useState(false);
+  const [streamEpoch, setStreamEpoch] = useState(0);
 
   const wsRef = useRef(null);
   const pollRef = useRef(null);
   const skipHashWrite = useRef(true);
+  const controlGenRef = useRef({});
+  const pendingReplyRef = useRef(null);
 
   const selected = interactions.find((i) => i.interaction_id === selectedId);
 
@@ -100,11 +120,16 @@ export default function LiveContactConsole() {
           const next = { ...prev };
           const activeIds = new Set(list.map((it) => it.interaction_id));
           for (const it of list) {
+            const gen = Number(it.control_generation || 0);
+            const local = controlGenRef.current[it.interaction_id] || 0;
+            if (gen && local && gen < local) continue;
+            if (gen) controlGenRef.current[it.interaction_id] = gen;
             next[it.interaction_id] = Boolean(it.supervised);
           }
           for (const id of Object.keys(next)) {
             if (!activeIds.has(id)) {
               delete next[id];
+              delete controlGenRef.current[id];
             }
           }
           return next;
@@ -160,13 +185,35 @@ export default function LiveContactConsole() {
         });
       } else if (msg.type === "agent_turn" || msg.type === "customer_turn") {
         const iid = msg.interaction_id;
+        const entry = {
+          speaker: msg.speaker || (msg.type === "customer_turn" ? "customer" : "agent"),
+          text: msg.text,
+          ts: msg.ts,
+          turn_id: msg.turn_id || msg.utterance_id || "",
+        };
         setTurns((prev) => ({
           ...prev,
-          [iid]: [
-            ...(prev[iid] || []),
-            { speaker: msg.speaker || (msg.type === "customer_turn" ? "customer" : "agent"), text: msg.text, ts: msg.ts },
-          ].slice(-200),
+          [iid]: mergeConsoleTurns(prev[iid], [entry]),
         }));
+      } else if (msg.type === "control_state") {
+        const iid = msg.interaction_id;
+        const gen = Number(msg.generation || 0);
+        const local = controlGenRef.current[iid] || 0;
+        if (!(gen && local && gen < local)) {
+          if (gen) controlGenRef.current[iid] = gen;
+          setTakenOver((prev) => ({ ...prev, [iid]: Boolean(msg.supervised) || msg.state === "SUPERVISED" }));
+        }
+      } else if (msg.type === "human_turn_result") {
+        const pending = pendingReplyRef.current;
+        if (msg.ok) {
+          if (!pending || !msg.message_id || pending.id === msg.message_id) {
+            setReply("");
+            pendingReplyRef.current = null;
+          }
+          setActionMsg(null);
+        } else {
+          setActionMsg(String(msg.detail || msg.code || "Message was not accepted"));
+        }
       } else if (msg.type === "slots_update") {
         const iid = msg.interaction_id;
         setSlots((prev) => ({ ...prev, [iid]: msg.slots || {} }));
@@ -192,6 +239,7 @@ export default function LiveContactConsole() {
         sendWsAuth(ws);
         attempt = 0;
         setWsStatus("live");
+        setStreamEpoch((n) => n + 1);
       };
       ws.onerror = () => setWsStatus("error");
       ws.onmessage = handleMessage;
@@ -262,18 +310,16 @@ export default function LiveContactConsole() {
         const d = await r.json();
         const history = Array.isArray(d.turns) ? d.turns : [];
         if (!history.length) return;
-        setTurns((prev) => {
-          if ((prev[selectedId] || []).length > 0) return prev;
-          return {
-            ...prev,
-            [selectedId]: history.map((t) => ({
-              speaker: t.speaker,
-              text: t.text,
-              ts: t.ts,
-              turn_id: t.turn_id,
-            })),
-          };
-        });
+        const mapped = history.map((t) => ({
+          speaker: t.speaker,
+          text: t.text,
+          ts: t.ts,
+          turn_id: t.turn_id,
+        }));
+        setTurns((prev) => ({
+          ...prev,
+          [selectedId]: mergeConsoleTurns(prev[selectedId], mapped),
+        }));
       } catch {
         /* keep WS-only transcript */
       }
@@ -281,7 +327,7 @@ export default function LiveContactConsole() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, streamEpoch]);
 
   // ── Takeover / release ─────────────────────────────────────────────
   async function takeover(iid) {
@@ -290,7 +336,22 @@ export default function LiveContactConsole() {
         method: "POST",
         headers: apiHeaders(),
       });
-      if (!r.ok) throw new Error(`takeover failed (${r.status})`);
+      if (!r.ok) {
+        let detail = "";
+        try {
+          const body = await r.json();
+          detail = body.detail?.claimed_by
+            ? `already claimed by ${body.detail.claimed_by}`
+            : (body.detail && (body.detail.code || body.detail)) || "";
+        } catch { /* ignore */ }
+        throw new Error(detail ? `takeover failed (${r.status}: ${detail})` : `takeover failed (${r.status})`);
+      }
+      const data = await r.json();
+      if (data.already_claimed) {
+        setActionMsg(`Already claimed by ${data.claimed_by || "another supervisor"}`);
+        return;
+      }
+      if (data.generation) controlGenRef.current[iid] = Number(data.generation);
       setTakenOver((t) => ({ ...t, [iid]: true }));
       setActionMsg(null);
     } catch (e) {
@@ -303,7 +364,16 @@ export default function LiveContactConsole() {
         method: "POST",
         headers: apiHeaders(),
       });
-      if (!r.ok) throw new Error(`release failed (${r.status})`);
+      if (!r.ok) {
+        let detail = "";
+        try {
+          const body = await r.json();
+          detail = body.detail?.code || body.detail || "";
+        } catch { /* ignore */ }
+        throw new Error(detail ? `release failed (${r.status}: ${detail})` : `release failed (${r.status})`);
+      }
+      const data = await r.json().catch(() => ({}));
+      if (data.generation) controlGenRef.current[iid] = Number(data.generation);
       setTakenOver((t) => ({ ...t, [iid]: false }));
       setReply("");
       setActionMsg(null);
@@ -317,15 +387,19 @@ export default function LiveContactConsole() {
     if (!selectedId || !reply.trim()) return;
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      const message_id = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : `m_${Date.now()}`;
+      pendingReplyRef.current = { id: message_id, text: reply.trim() };
       ws.send(
         JSON.stringify({
           type: "human_turn",
           interaction_id: selectedId,
           text: reply.trim(),
+          message_id,
         })
       );
-      setReply("");
-      setActionMsg(null);
+      setActionMsg("Sending…");
       return;
     }
     setActionMsg("Live socket is not connected — cannot send.");
@@ -340,7 +414,9 @@ export default function LiveContactConsole() {
         value: s[`entity_${i + 1}`] ?? s[label] ?? "",
       }));
     }
-    return Object.entries(s).map(([k, v]) => ({ label: k, value: v }));
+    return Object.entries(s)
+      .filter(([k]) => !String(k).startsWith("__"))
+      .map(([k, v]) => ({ label: k, value: v }));
   }
 
   function categoriesForInteraction(it) {
@@ -381,7 +457,9 @@ export default function LiveContactConsole() {
     : 0;
   const isFlagged = selFrustration > FRUSTRATION_THRESHOLD;
   const isTakenOver = selectedId
-    ? !!(takenOver[selectedId] || selected?.supervised)
+    ? (Object.prototype.hasOwnProperty.call(takenOver, selectedId)
+      ? !!takenOver[selectedId]
+      : !!selected?.supervised)
     : false;
   const contactEnded = polled && Boolean(selectedId && !selected);
 

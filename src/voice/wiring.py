@@ -149,10 +149,12 @@ def detect_vin_in_text(text: str) -> dict[str, Any]:
     def _digit_count(s: str) -> int:
         return sum(1 for c in s if c.isdigit())
 
-    # 1. Contiguous tokens (typed VINs): no spaces to squash, digits required.
+    # 1. Contiguous tokens (typed VINs). A 17-digit account number has no
+    # letters and no VIN word — it is not a vehicle identifier.
     for m in re.finditer(r"\b[A-HJ-NPR-Z0-9][A-HJ-NPR-Z0-9\-]{15,17}\b", raw.upper()):
         squashed = re.sub(r"[\-]", "", m.group(0))
-        if 16 <= len(squashed) <= 18 and _digit_count(squashed) >= 2:
+        has_letter = any(c.isalpha() for c in squashed)
+        if 16 <= len(squashed) <= 18 and _digit_count(squashed) >= 2 and (has_vin_word or has_letter):
             candidates.append((squashed, True))
     # 2. Phonetic path only with an explicit spelling signal.
     if has_phonetic or has_vin_word:

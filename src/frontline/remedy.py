@@ -61,20 +61,20 @@ def offer_and_ledger(
     )
     if not offer:
         return None
-    try:
-        record_action(
-            AgentAction(
-                interaction_id=interaction_id,
-                agent="case",
-                action_type="followup_drafted",
-                input_summary=f"remedy_offer advisory={offer.get('advisory_id')}",
-                output_summary=offer["customer_text"][:500],
-                evidence_ids=[str(offer["advisory_id"])] if offer.get("advisory_id") else [],
-                case_id=case_id,
-            )
+    # Ledger failure must propagate. Callers that still want to continue
+    # without an offer have to catch this themselves — returning the offer
+    # after a failed write would speak unaudited commercial text.
+    record_action(
+        AgentAction(
+            interaction_id=interaction_id,
+            agent="case",
+            action_type="followup_drafted",
+            input_summary=f"remedy_offer advisory={offer.get('advisory_id')}",
+            output_summary=offer["customer_text"][:500],
+            evidence_ids=[str(offer["advisory_id"])] if offer.get("advisory_id") else [],
+            case_id=case_id,
         )
-    except Exception:
-        pass
+    )
     return offer
 
 
