@@ -27,6 +27,9 @@ export const STATE_LABELS = {
  * operators know barge-in is off until the pack greeting finishes.
  */
 export function callStateLabel(state, opts = {}) {
+  if (opts.textOnly && (state === CALL_STATE.LISTENING || state === CALL_STATE.CONNECTING)) {
+    return state === CALL_STATE.CONNECTING ? "Connecting…" : "Text only";
+  }
   if (state === CALL_STATE.AGENT_SPEAKING && opts.speakPhase === "greeting") {
     return "Greeting you";
   }
@@ -36,6 +39,9 @@ export function callStateLabel(state, opts = {}) {
 /** Short status line under the hero label (barge-in honesty). */
 export function callPhaseHint(state, opts = {}) {
   const phase = opts.speakPhase || "normal";
+  if (opts.textOnly && state === CALL_STATE.LISTENING) {
+    return "Microphone unavailable · type your reply below";
+  }
   if (state === CALL_STATE.AGENT_SPEAKING && phase === "greeting") {
     return "Barge-in off · full greeting plays through";
   }

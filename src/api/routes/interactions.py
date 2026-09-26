@@ -34,6 +34,7 @@ from src.api.auth import authenticate_websocket, require_api_key
 from src.api.frontline_gate import frontline_enabled
 from src.api.limiter import limiter
 from src.api.rbac import (
+    actor_from_websocket,
     get_actor,
     get_role,
     has_perm,
@@ -287,15 +288,20 @@ async def _reap_orphans_unlocked(*, sweep_db: bool = False) -> list[str]:
     """
     async with _active_lock:
         dead = _pop_reapable_unlocked()
-        handoff_orches = [
-            e.orch
+    await _finalize_reaped(dead)
+    pending_handoffs: list[ActiveEntry] = []
+    async with _active_lock:
+        pending_handoffs = [
+            e
             for e in list(_active.values())
             if getattr(getattr(e.orch, "ctx", None), "state", None) == "HANDOFF_PENDING"
         ]
-    await _finalize_reaped(dead)
-    for orch in handoff_orches:
+    for entry in pending_handoffs:
         try:
-            await orch.sweep_handoff_timeout()
+            # Same per-contact lock as takeover. Do not hold the registry lock here.
+            async with entry.lock:
+                if getattr(entry.orch.ctx, "state", None) == "HANDOFF_PENDING":
+                    await entry.orch.sweep_handoff_timeout()
         except Exception:
             pass
     ids = [iid for iid, _, _ in dead]
@@ -711,6 +717,16 @@ async def list_interactions(
     rows = await ops_in_thread(_load)
     has_extra = len(rows) > lim
     page = rows[:lim]
+    async with _active_lock:
+        live = {iid: entry for iid, entry in _active.items()}
+    for row in page:
+        entry = live.get(row.get("interaction_id"))
+        if entry is None:
+            continue
+        ctx = entry.orch.ctx
+        row["supervised"] = bool(ctx.supervised)
+        row["control_generation"] = int(getattr(ctx, "control_generation", 0) or 0)
+        row["takeover_claimed_by"] = ctx.takeover_claimed_by
     if scrub_pii:
         page = [redact_dict(row) for row in page]
     else:
@@ -778,13 +794,18 @@ async def takeover(
         already = entry.orch.ctx.state == "SUPERVISED"
         claimed_by = entry.orch.ctx.takeover_claimed_by
         await entry.orch.takeover(claimed_by=actor)
-    return {
+        lost = bool(already and claimed_by and claimed_by != actor)
+    body = {
         "interaction_id": interaction_id,
         "state": entry.orch.ctx.state,
-        "supervised": True,
+        "supervised": entry.orch.ctx.state == "SUPERVISED",
         "claimed_by": entry.orch.ctx.takeover_claimed_by,
-        "already_claimed": bool(already and claimed_by and claimed_by != actor),
+        "already_claimed": lost,
+        "generation": int(entry.orch.ctx.control_generation or 0),
     }
+    if lost:
+        raise HTTPException(status_code=409, detail=body)
+    return body
 
 
 @router.post("/{interaction_id}/handoff/accept")
@@ -921,15 +942,29 @@ async def release(
     interaction_id: str,
     _auth: bool = Depends(require_api_key),
     _role: str = Depends(require_perm_dep("takeover")),
+    actor: str = Depends(get_actor),
+    override: bool = False,
 ) -> dict[str, Any]:
-    """Supervisor releases; AI resumes."""
+    """Supervisor releases; AI resumes. Only the claimant (or an admin override) may."""
+    if override and _role != "admin":
+        raise HTTPException(status_code=403, detail="admin override required")
     entry = await _get_entry(interaction_id)
     async with entry.lock:
-        await entry.orch.release()
+        result = await entry.orch.release(actor=actor, admin_override=bool(override and _role == "admin"))
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": result.get("code"),
+                "claimed_by": result.get("claimed_by"),
+                "state": result.get("state"),
+            },
+        )
     return {
         "interaction_id": interaction_id,
         "state": entry.orch.ctx.state,
-        "supervised": False,
+        "supervised": bool(entry.orch.ctx.supervised),
+        "generation": int(entry.orch.ctx.control_generation or 0),
     }
 
 
@@ -1039,33 +1074,87 @@ async def authorize_remedy(
 
 # ── WebSocket: per-interaction + console fan-out ─────────────────────────────
 
-_console_subscribers: set[WebSocket] = set()
+_CONSOLE_QUEUE_MAX = 32
+_console_clients: dict[int, "_ConsoleClient"] = {}
 _console_sub_lock = asyncio.Lock()
 
 
-async def _broadcast_console(msg: dict[str, Any]) -> None:
-    """Push a frame to every live Live Console WebSocket (H6)."""
+class _ConsoleClient:
+    """One console socket with a bounded outbound queue and its own sender."""
+
+    def __init__(self, ws: WebSocket, role: str) -> None:
+        self.ws = ws
+        self.role = role
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_CONSOLE_QUEUE_MAX)
+        self.task: asyncio.Task[None] | None = None
+
+
+def _strip_restricted_ledger(msg: dict[str, Any]) -> dict[str, Any]:
+    """Hide raw supervisor speech from roles that cannot read the ledger."""
+    out = dict(msg)
+    restricted = (
+        str(out.get("action_type") or "") == "human_turn"
+        or out.get("speaker") == "supervisor"
+    )
+    if not restricted:
+        return out
+    for key in ("summary", "output_summary", "input_summary", "text"):
+        if out.get(key):
+            out[key] = "[restricted]"
+    return out
+
+
+def _prepare_console_frame(msg: dict[str, Any], role: str) -> dict[str, Any]:
     from src.security.pii import redact_dict
 
-    dead: list[WebSocket] = []
+    frame = msg
+    if not has_perm(role, "ledger:read"):
+        frame = _strip_restricted_ledger(frame)
+    if not has_perm(role, "dsr:export"):
+        frame = redact_dict(frame)
+    return frame
+
+
+async def _drop_console_client(client: _ConsoleClient) -> None:
     async with _console_sub_lock:
-        subs = list(_console_subscribers)
-    redacted_msg: dict[str, Any] | None = None
-    for ws in subs:
+        _console_clients.pop(id(client.ws), None)
+    task = client.task
+    if task is not None and task is not asyncio.current_task():
+        task.cancel()
+    try:
+        await client.ws.close()
+    except Exception:
+        pass
+
+
+async def _console_sender(client: _ConsoleClient) -> None:
+    try:
+        while True:
+            msg = await client.queue.get()
+            frame = _prepare_console_frame(msg, client.role)
+            await asyncio.wait_for(client.ws.send_json(frame), timeout=1.0)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        await _drop_console_client(client)
+
+
+async def _enqueue_console(client: _ConsoleClient, msg: dict[str, Any]) -> None:
+    try:
+        client.queue.put_nowait(msg)
+    except asyncio.QueueFull:
+        await _drop_console_client(client)
+
+
+async def _broadcast_console(msg: dict[str, Any]) -> None:
+    """Enqueue a frame for every console. Does not wait on subscriber I/O."""
+    async with _console_sub_lock:
+        clients = list(_console_clients.values())
+    for client in clients:
         try:
-            ws_role = role_from_websocket(ws)
-            if has_perm(ws_role, "dsr:export"):
-                await ws.send_json(msg)
-            else:
-                if redacted_msg is None:
-                    redacted_msg = redact_dict(msg)
-                await ws.send_json(redacted_msg)
-        except Exception:
-            dead.append(ws)
-    if dead:
-        async with _console_sub_lock:
-            for ws in dead:
-                _console_subscribers.discard(ws)
+            client.queue.put_nowait(msg)
+        except asyncio.QueueFull:
+            asyncio.create_task(_drop_console_client(client))
 
 
 class _WSHooks(OrchestratorHooks):
@@ -1092,12 +1181,22 @@ class _WSHooks(OrchestratorHooks):
             pass
 
     async def emit_customer_turn(self, text: str, meta: dict[str, Any]) -> None:
-        # Register word alignment for barge-in reconciliation (P1): the ledger
-        # must record what was audible, not the full planned prompt.
+        # Remember this utterance for barge-in. A later generation must not
+        # replace the one the caller is already hearing.
         try:
             entry = _active.get(self._interaction_id)
             if entry is not None:
-                entry.orch._register_spoken_turn(text)
+                uid = entry.orch.note_emitted_utterance(
+                    text,
+                    utterance_id=str(meta.get("utterance_id") or meta.get("turn_id") or ""),
+                    action_id=str(meta.get("action_id") or ""),
+                    turn_id=str(meta.get("turn_id") or ""),
+                )
+                if uid and not meta.get("utterance_id"):
+                    meta["utterance_id"] = uid
+                if meta.get("action_id") in (None, "") and entry.orch.ctx.last_agent_action_id:
+                    if entry.orch.ctx.playing_utterance_id == uid:
+                        meta["action_id"] = entry.orch.ctx.last_agent_action_id
         except Exception:
             pass
         await self._to_customer(
@@ -1108,6 +1207,9 @@ class _WSHooks(OrchestratorHooks):
             "interaction_id": self._interaction_id,
             "speaker": meta.get("speaker", "agent"),
             "text": text,
+            "turn_id": meta.get("turn_id") or meta.get("utterance_id"),
+            "utterance_id": meta.get("utterance_id"),
+            "action_id": meta.get("action_id") or "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -1118,6 +1220,7 @@ class _WSHooks(OrchestratorHooks):
             "interaction_id": self._interaction_id,
             "speaker": meta.get("speaker", "customer"),
             "text": text,
+            "turn_id": meta.get("turn_id"),
             "ts": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -1183,6 +1286,39 @@ class _WSHooks(OrchestratorHooks):
             **{k: _json_safe(v) for k, v in (payload or {}).items()},
         })
 
+    async def emit_control_state(self, payload: dict[str, Any]) -> None:
+        frame = {
+            "type": "control_state",
+            "interaction_id": self._interaction_id,
+            **{k: _json_safe(v) for k, v in (payload or {}).items() if k != "type"},
+        }
+        await self._to_customer(self._channel.send_control(frame))
+        await _broadcast_console(frame)
+
+
+def _contact_scope_allows(websocket: WebSocket, interaction_id: str) -> bool:
+    """A session that names contacts may attach only to those contacts.
+
+    Installation credentials with no contact claim stay installation-wide.
+    """
+    try:
+        from src.api.auth import ws_principal
+
+        principal = ws_principal(websocket)
+        session = principal.session if principal is not None else None
+    except Exception:
+        session = None
+    if not isinstance(session, dict):
+        return True
+    scoped = session.get("interaction_id") or session.get("contact")
+    if scoped and str(scoped) != interaction_id:
+        return False
+    contacts = session.get("contacts")
+    if isinstance(contacts, list) and contacts:
+        if interaction_id not in {str(item) for item in contacts}:
+            return False
+    return True
+
 
 async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
     """Bidirectional contact stream at ``/ws/interaction/{id}``.
@@ -1229,6 +1365,26 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
 
+    role = role_from_websocket(websocket)
+    if not has_perm(role, "contact:write"):
+        await websocket.send_json({
+            "type": "error",
+            "detail": f"role {role} lacks contact:write",
+            "code": "forbidden",
+            "recoverable": False,
+        })
+        await websocket.close(code=1008)
+        return
+    if not _contact_scope_allows(websocket, interaction_id):
+        await websocket.send_json({
+            "type": "error",
+            "detail": "credential is not allowed to attach to this contact",
+            "code": "forbidden",
+            "recoverable": False,
+        })
+        await websocket.close(code=1008)
+        return
+
     try:
         entry, resumed = await _attach_customer_ws(interaction_id)
     except HTTPException as e:
@@ -1260,6 +1416,9 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                 "type": "resumed",
                 "interaction_id": interaction_id,
                 "state": orch.ctx.state,
+                "supervised": bool(orch.ctx.supervised),
+                "generation": int(orch.ctx.control_generation or 0),
+                "claimed_by": orch.ctx.takeover_claimed_by,
                 "turns": [
                     {
                         "id": t.get("turn_id"),
@@ -1276,8 +1435,41 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
 
     try:
         while True:
-            msg = await websocket.receive_json()
+            try:
+                msg = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception:
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "invalid JSON",
+                        "code": "bad_message",
+                        "recoverable": True,
+                    })
+                except Exception:
+                    pass
+                continue
+            if not isinstance(msg, dict):
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "JSON object required",
+                        "code": "bad_message",
+                        "recoverable": True,
+                    })
+                except Exception:
+                    pass
+                continue
             mtype = msg.get("type")
+            if mtype is not None and not isinstance(mtype, str):
+                await websocket.send_json({
+                    "type": "error",
+                    "detail": "type must be a string",
+                    "code": "bad_message",
+                    "recoverable": True,
+                })
+                continue
             if mtype == "user_turn":
                 # Durable replay dedup lives in ONE place: the orchestrator's
                 # _seen_client_turn (turn_dedup PK). A second pre-insert here
@@ -1285,6 +1477,14 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                 # just wrote) and silently eat 100% of widget turns — so this
                 # route must NOT touch turn_dedup before handle_customer_turn.
                 # Telephony replays are sequenced separately in twilio_ws.
+                if not isinstance(msg.get("text", ""), str):
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "text must be a string",
+                        "code": "bad_message",
+                        "recoverable": True,
+                    })
+                    continue
                 t0 = time.monotonic()
                 logger.debug("turn_recv iid=%s", interaction_id)
                 # Normalize ASR confidence: client may send overall float or dict.
@@ -1297,17 +1497,30 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                 if not isinstance(_asr, dict):
                     _asr = None
                 async with entry.lock:
-                    await orch.handle_customer_turn(
-                        msg.get("text", ""), final=msg.get("final", True),
-                        client_turn_id=msg.get("turn_id", msg.get("client_turn_id")),
-                        asr_confidence=_asr,
-                        confidence=_conf_f,
-                        region=msg.get("region"),
-                        dtmf=msg.get("dtmf"),
-                        turn_seq=msg.get("turn_seq", msg.get("seq")),
-                        drive_hint=msg.get("drive_hint", msg.get("driving")),
-                        locale=msg.get("locale"),
-                    )
+                    try:
+                        await orch.handle_customer_turn(
+                            msg.get("text", ""), final=msg.get("final", True),
+                            client_turn_id=msg.get("turn_id", msg.get("client_turn_id")),
+                            asr_confidence=_asr,
+                            confidence=_conf_f,
+                            region=msg.get("region"),
+                            dtmf=msg.get("dtmf"),
+                            turn_seq=msg.get("turn_seq", msg.get("seq")),
+                            drive_hint=msg.get("drive_hint", msg.get("driving")),
+                            locale=msg.get("locale"),
+                        )
+                    except Exception as turn_exc:
+                        from src.agents.base import TurnPersistenceError
+
+                        if isinstance(turn_exc, TurnPersistenceError):
+                            await websocket.send_json({
+                                "type": "error",
+                                "detail": "That turn could not be saved. Please repeat it.",
+                                "code": "turn_not_durable",
+                                "recoverable": True,
+                            })
+                            continue
+                        raise
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 try:
                     entry.turn_seq = int(entry.turn_seq or 0) + 1
@@ -1329,13 +1542,17 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                 # claiming the full prompt was spoken.
                 try:
                     _elapsed = msg.get("elapsed_ms", msg.get("elapsedMs", 0))
+                    _utt = msg.get("utterance_id") or msg.get("turn_id")
                     async with entry.lock:
                         _audible = await orch.handle_barge_in_interrupt(
-                            int(float(_elapsed or 0)))
+                            int(float(_elapsed or 0)),
+                            utterance_id=str(_utt) if _utt else None,
+                        )
                     try:
                         await websocket.send_json({
                             "type": "barge_in_reconciled",
                             "audible_text": _audible,
+                            "estimated": True,
                         })
                     except Exception:
                         pass
@@ -1354,8 +1571,25 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                         {"type": "error", "detail": "role lacks takeover", "code": "forbidden"}
                     )
                     continue
+                if not isinstance(msg.get("text", ""), str):
+                    await websocket.send_json({
+                        "type": "error",
+                        "detail": "text must be a string",
+                        "code": "bad_message",
+                        "recoverable": True,
+                    })
+                    continue
                 async with entry.lock:
-                    await orch.human_turn(msg.get("text", ""))
+                    result = await orch.human_turn(
+                        msg.get("text", ""),
+                        actor=actor_from_websocket(websocket),
+                        message_id=str(msg.get("message_id") or "") or None,
+                    )
+                await websocket.send_json({
+                    "type": "human_turn_result",
+                    "interaction_id": interaction_id,
+                    **{k: _json_safe(v) for k, v in result.items()},
+                })
     except WebSocketDisconnect:
         # Socket dropped without a hangup. Do NOT end the contact here: the
         # dashboard reconnects with backoff, and tearing the orchestrator down
@@ -1551,15 +1785,24 @@ async def console_ws(websocket: WebSocket) -> None:
 
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
+    client = _ConsoleClient(websocket, role)
+    client.task = asyncio.create_task(_console_sender(client))
     async with _console_sub_lock:
-        _console_subscribers.add(websocket)
-    can_export = has_perm(role, "dsr:export")
+        _console_clients[id(websocket)] = client
     # Look back so a console that connects mid-call still sees recent activity
     # (and so tests that ledger-then-connect are not deadlocked waiting forever).
     last_ts: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
     last_action_id = ""
-    try:
+
+    async def _catch_up_loop() -> None:
+        nonlocal last_ts, last_action_id
+        import os
+
         while True:
+            try:
+                poll_s = float(os.getenv("FRONTLINE_CONSOLE_POLL_S", "2") or "2")
+            except ValueError:
+                poll_s = 2.0
             rows = await asyncio.to_thread(
                 fetch_agent_actions_since, last_ts, 50, last_action_id
             )
@@ -1568,51 +1811,80 @@ async def console_ws(websocket: WebSocket) -> None:
                 if isinstance(raw_ts, datetime):
                     last_ts = raw_ts
                     last_action_id = str(r.get("action_id") or "")
-                # C1: never pass raw datetime into send_json (kills the socket).
-                from src.security.pii import redact_dict
-
-                frame = activity_frame_from_row(r)
-                if not can_export:
-                    frame = redact_dict(frame)
-                await websocket.send_json(frame)
-
-            try:
-                msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.5)
-                if msg.get("type") == "human_turn":
-                    try:
-                        require_perm(role_from_websocket(websocket), "takeover")
-                    except HTTPException:
-                        await websocket.send_json(
-                            {"type": "error", "detail": "role lacks takeover", "code": "forbidden"}
-                        )
-                        continue
-                    iid = msg.get("interaction_id")
-                    text = msg.get("text", "")
-                    try:
-                        entry = await _get_entry(iid)
-                        async with entry.lock:
-                            await entry.orch.human_turn(text)
-                    except HTTPException:
-                        await websocket.send_json(
-                            {"type": "error", "detail": f"interaction not active: {iid}"}
-                        )
-            except asyncio.TimeoutError:
-                pass
-            # Live broadcast is authoritative; this poll is a slow catch-up.
-            # FRONTLINE_CONSOLE_POLL_S (default 2s) keeps the global DuckDB
-            # lock off the hot path; tests may set 0.05.
-            import os
-
-            try:
-                poll_s = float(os.getenv("FRONTLINE_CONSOLE_POLL_S", "2") or "2")
-            except ValueError:
-                poll_s = 2.0
+                await _enqueue_console(client, activity_frame_from_row(r))
             await asyncio.sleep(max(0.05, poll_s))
+
+    catch_task = asyncio.create_task(_catch_up_loop())
+    try:
+        while True:
+            try:
+                msg = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception:
+                await _enqueue_console(client, {
+                    "type": "error",
+                    "detail": "invalid JSON",
+                    "code": "bad_message",
+                })
+                continue
+            if not isinstance(msg, dict):
+                await _enqueue_console(client, {
+                    "type": "error",
+                    "detail": "JSON object required",
+                    "code": "bad_message",
+                })
+                continue
+            if msg.get("type") != "human_turn":
+                continue
+            try:
+                require_perm(role_from_websocket(websocket), "takeover")
+            except HTTPException:
+                await _enqueue_console(client, {
+                    "type": "error",
+                    "detail": "role lacks takeover",
+                    "code": "forbidden",
+                })
+                continue
+            iid = msg.get("interaction_id")
+            text = msg.get("text", "")
+            if not isinstance(text, str) or not isinstance(iid, str):
+                await _enqueue_console(client, {
+                    "type": "human_turn_result",
+                    "ok": False,
+                    "code": "bad_message",
+                    "interaction_id": iid if isinstance(iid, str) else "",
+                    "message_id": str(msg.get("message_id") or ""),
+                })
+                continue
+            try:
+                entry = await _get_entry(iid)
+                async with entry.lock:
+                    result = await entry.orch.human_turn(
+                        text,
+                        actor=actor_from_websocket(websocket),
+                        message_id=str(msg.get("message_id") or "") or None,
+                    )
+                await _enqueue_console(client, {
+                    "type": "human_turn_result",
+                    "interaction_id": iid,
+                    **{k: _json_safe(v) for k, v in result.items()},
+                })
+            except HTTPException:
+                await _enqueue_console(client, {
+                    "type": "error",
+                    "detail": f"interaction not active: {iid}",
+                    "code": "not_active",
+                })
     except WebSocketDisconnect:
         return
     finally:
-        async with _console_sub_lock:
-            _console_subscribers.discard(websocket)
+        catch_task.cancel()
+        try:
+            await catch_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await _drop_console_client(client)
 
 
 __all__ = [

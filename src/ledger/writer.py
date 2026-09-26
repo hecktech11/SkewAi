@@ -169,6 +169,7 @@ ACTION_TYPES = {
     # Case
     "case_created",
     "followup_drafted",
+    "remedy_offered",
     "investigation_linked",
     "investigation_opened",
     "case_status_updated",

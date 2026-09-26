@@ -115,10 +115,10 @@ jobs:
           npm run build
           test -f dist/index.html
 
-  docker-static:
-    name: docker context static checks
+  docker-smoke:
+    name: docker build, startup and customer turn smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -147,3 +147,59 @@ jobs:
           grep -q "HEALTHCHECK" Dockerfile
           grep -q "requirements-docker.txt" Dockerfile
           echo "docker static checks OK"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t skewai-frontline:test .
+
+      - name: Start container and verify customer turn
+        run: |
+          docker run -d --name frontline-test \
+            -p 8000:8000 \
+            -e FRONTLINE_OPEN_BIND_ACK=1 \
+            -e FRONTLINE_ENABLED=1 \
+            -e DOMAIN_PACK=automotive_nhtsa \
+            skewai-frontline:test
+
+          echo "Waiting for container health readiness..."
+          HEALTHY=0
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+              echo "Container is healthy after ${i} attempts!"
+              HEALTHY=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$HEALTHY" -ne 1 ]; then
+            echo "Container failed to become healthy. Showing logs:"
+            docker logs frontline-test
+            exit 1
+          fi
+
+          echo "Creating customer interaction..."
+          CREATE_RESP=$(curl -sf -X POST http://127.0.0.1:8000/api/interactions \
+            -H "Content-Type: application/json" \
+            -d '{"channel": "web_text", "pack_id": "automotive_nhtsa"}')
+          echo "Interaction created: $CREATE_RESP"
+
+          IID=$(python3 -c "import json; d=json.loads('$CREATE_RESP'); print(d.get('interaction_id') or d.get('interaction', {}).get('interaction_id', ''))")
+          if [ -z "$IID" ]; then
+            echo "Failed to extract interaction_id"
+            docker logs frontline-test
+            exit 1
+          fi
+
+          echo "Creating customer turn for interaction $IID..."
+          TURN_RESP=$(curl -sf -X POST "http://127.0.0.1:8000/api/interactions/$IID/turn" \
+            -H "Content-Type: application/json" \
+            -d '{"speaker": "customer", "text": "my brake pedal feels spongy"}')
+          echo "Turn response: $TURN_RESP"
+
+          docker stop frontline-test
+          docker rm frontline-test
+          echo "Docker startup and customer turn smoke test passed!"
