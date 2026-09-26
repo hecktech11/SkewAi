@@ -394,11 +394,24 @@ def test_job_enqueue_rejects_unknown_type(hard_client):
     ).lower()
 
 
-def test_job_enqueue_allowlisted_type(hard_client):
+def test_job_enqueue_rejects_service_key_alone(hard_client):
+    """R01: the API key is authentication, not authorization. Submitting a job
+    submits the operation, so it needs the job type's permission."""
     r = hard_client.post(
         "/api/frontline/jobs",
         headers=_auth_h(),
-        json={"job_type": "audit_contact", "payload": {"interaction_id": "x"}},
+        json={"job_type": "audit_contact", "payload": {"interaction_id": "int_x1"}},
+    )
+    assert r.status_code == 403
+    assert "ops:write" in r.json().get("detail", "")
+
+
+def test_job_enqueue_allowlisted_type(hard_client):
+    token = issue_session("admin-user", "admin", issuer_role="admin")["token"]
+    r = hard_client.post(
+        "/api/frontline/jobs",
+        headers={**_auth_h(), "X-Frontline-Session": token},
+        json={"job_type": "audit_contact", "payload": {"interaction_id": "int_x1"}},
     )
     assert r.status_code == 200
     assert r.json().get("job_type") == "audit_contact"

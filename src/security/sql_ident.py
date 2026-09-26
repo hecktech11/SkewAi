@@ -14,6 +14,7 @@ SAFE_TABLES = frozenset(
     {
         "cases",
         "case_notes",
+        "contact_issues",
         "agent_actions",
         "interaction_turns",
         "interaction_version_stamps",

@@ -141,12 +141,13 @@ class CaseAgent(Agent):
             case_id=case_id,
         )
         desc_plain = (ctx.slots.get("description") or "")[:500]
-        try:
-            from src.security.pii import encrypt_subject_text
+        # No plaintext fallback: when encryption is unavailable the case is
+        # still written, but with a marker instead of the customer's words (R29).
+        from src.security.pii import store_subject_text
 
-            desc_stored = encrypt_subject_text(ctx.interaction_id, desc_plain)
-        except Exception:
-            desc_stored = desc_plain
+        desc_stored = store_subject_text(
+            ctx.interaction_id, desc_plain, field="cases.description_summary"
+        )
         insert_args = [
             case_id,
             ctx.interaction_id,

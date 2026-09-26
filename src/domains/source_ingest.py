@@ -45,10 +45,14 @@ def ingest_source(
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Ingest one source CSV into canonical records. Returns the run report."""
+    from src.security.identifiers import safe_csv_path, safe_mapping_path
+
     tag = (source or "").strip().lower()
     if not tag:
         raise ValueError("source tag required (e.g. warranty, service)")
-    csv_path = Path(csv_path)
+    # Jail caller-supplied paths here too: this is reachable from the job
+    # queue, not only from the upload route that jails its own input (R01).
+    csv_path = safe_csv_path(csv_path)
     if not csv_path.is_file():
         raise FileNotFoundError(f"source CSV not found: {csv_path}")
     # Audit 0.5: refuse to write into a behind-HEAD warehouse.
@@ -63,7 +67,7 @@ def ingest_source(
     except Exception:
         pass
     if mapping_path:
-        mpath = Path(mapping_path)
+        mpath = safe_mapping_path(mapping_path)
         if not mpath.is_file():
             raise FileNotFoundError(f"source mapping not found: {mpath}")
     else:

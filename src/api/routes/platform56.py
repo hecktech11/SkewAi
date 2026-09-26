@@ -295,20 +295,43 @@ async def jobs_list(status: str | None = None) -> dict[str, Any]:
     return {"jobs": rows, "count": len(rows)}
 
 
-@router.post("/jobs")
-async def jobs_enqueue(body: dict[str, Any]) -> dict[str, Any]:
+@router.post(
+    "/jobs",
+    dependencies=[Depends(require_api_key_strict)],
+)
+async def jobs_enqueue(
+    body: dict[str, Any],
+    role: str = Depends(get_role),
+    actor: str = Depends(get_actor),
+) -> dict[str, Any]:
+    """Queue a job — gated by the job type's own permission (R01).
+
+    Submitting a job is submitting the operation: a worker executes the
+    payload with full process authority, so the API key alone is not
+    sufficient authorization.
+    """
     from src.jobs.queue import enqueue
+    from src.security.audit_log import security_event
 
     jt = body.get("job_type")
     if not jt:
         raise HTTPException(400, "job_type required")
     try:
-        return enqueue(
+        result = enqueue(
             str(jt),
             body.get("payload") if isinstance(body.get("payload"), dict) else {},
+            role=role,
+            principal=actor,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    security_event(
+        "jobs.enqueue",
+        outcome="success",
+        role=role,
+        detail={"job_type": str(jt), "job_id": result.get("job_id")},
+    )
+    return result
 
 
 @router.post(

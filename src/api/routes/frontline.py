@@ -1253,14 +1253,22 @@ async def insights_product_gap(
 async def explain_decision(
     request: Request,
     interaction_id: str,
+    scrub_pii: bool = Query(default=True),
     _role: str = Depends(require_perm_dep("ledger:read", open_mode_ok=True)),
 ) -> dict[str, Any]:
-    """Why decisions happened: slots, severity source, advisory, cluster, evidence."""
+    """Why decisions happened: slots, severity source, advisory, cluster, evidence.
+
+    Free-text fields are PII-redacted by default. ``scrub_pii=false`` requires
+    ``dsr:export``, the same gate as the other raw reads.
+    """
     from src.frontline.explainability import explain_interaction
+    from src.security.pii import redact_dict
 
     out = explain_interaction(interaction_id)
     if not out.get("found"):
         raise HTTPException(status_code=404, detail=f"interaction not found: {interaction_id}")
+    if _scrub_or_authorize(_role, scrub_pii, surface="explain"):
+        out = redact_dict(out)
     return out
 
 
