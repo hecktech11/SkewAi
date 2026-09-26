@@ -1846,6 +1846,29 @@ class Orchestrator:
     def _record_state(self, state: str) -> None:
         # Persist the latest state + slot values + frustration on the interaction row.
         from src.data.warehouse import ops_con
+        from src.frontline.dsr import is_interaction_erased
+
+        if getattr(self, "_erased", False) or is_interaction_erased(self.ctx.interaction_id):
+            self._erased = True
+            self.ctx.slots.clear()
+            with ops_con() as con:
+                con.execute(
+                    """
+                    UPDATE interactions
+                    SET status = ?, peak_frustration = ?, last_frustration = ?,
+                        supervised = ?
+                    WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
+                    """,
+                    [
+                        "abandoned" if state == ABANDONED else ("active" if state not in (DONE,) else "completed"),
+                        self.ctx.peak_frustration,
+                        self.ctx.frustration_score,
+                        self.ctx.supervised,
+                        self.ctx.interaction_id,
+                    ],
+                )
+            return
+
         with ops_con() as con:
             con.execute(
                 """
@@ -1853,7 +1876,7 @@ class Orchestrator:
                 SET status = ?, peak_frustration = ?, last_frustration = ?,
                     supervised = ?, entity_1 = ?, entity_2 = ?, entity_3 = ?,
                     category = ?, description = ?
-                WHERE interaction_id = ?
+                WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
                 """,
                 [
                     "abandoned" if state == ABANDONED else ("active" if state not in (DONE,) else "completed"),
@@ -1914,6 +1937,13 @@ class Orchestrator:
     async def _finalize_interaction(self, outcome: str) -> None:
         from src.data.timeutil import utc_now
         from src.data.warehouse import ops_con, ops_in_thread
+        from src.frontline.dsr import is_interaction_erased
+
+        erased = getattr(self, "_erased", False) or is_interaction_erased(self.ctx.interaction_id)
+        if erased:
+            self._erased = True
+            self.ctx.slots.clear()
+
         # Determine final status from outcome: 'incomplete' → 'abandoned',
         # otherwise 'completed'. 'escalated_safety' stays 'escalated' for the
         # console's red-flag view.
@@ -1923,6 +1953,52 @@ class Orchestrator:
             final_status = "escalated"
         else:
             final_status = "completed"
+
+        if erased:
+            def _write_erased() -> None:
+                with ops_con() as con:
+                    try:
+                        con.execute(
+                            """
+                            UPDATE interactions
+                            SET ended_at = ?, status = ?, outcome = ?,
+                                peak_frustration = ?, supervised = ?, llm_calls = ?,
+                                enrichment_partial = ?
+                            WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
+                            """,
+                            [
+                                utc_now(),
+                                final_status,
+                                outcome,
+                                self.ctx.peak_frustration,
+                                self.ctx.supervised,
+                                self.ctx.llm_calls,
+                                bool(self.ctx.enrichment_partial),
+                                self.ctx.interaction_id,
+                            ],
+                        )
+                    except Exception:
+                        con.execute(
+                            """
+                            UPDATE interactions
+                            SET ended_at = ?, status = ?, outcome = ?,
+                                peak_frustration = ?, supervised = ?, llm_calls = ?
+                            WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
+                            """,
+                            [
+                                utc_now(),
+                                final_status,
+                                outcome,
+                                self.ctx.peak_frustration,
+                                self.ctx.supervised,
+                                self.ctx.llm_calls,
+                                self.ctx.interaction_id,
+                            ],
+                        )
+
+            await ops_in_thread(_write_erased)
+            return
+
         payload = [
             utc_now(),
             final_status,
@@ -1950,7 +2026,7 @@ class Orchestrator:
                             entity_1 = ?, entity_2 = ?, entity_3 = ?,
                             category = ?, description = ?,
                             enrichment_partial = ?
-                        WHERE interaction_id = ?
+                        WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
                         """,
                         payload,
                     )
@@ -1962,7 +2038,7 @@ class Orchestrator:
                             peak_frustration = ?, supervised = ?, llm_calls = ?,
                             entity_1 = ?, entity_2 = ?, entity_3 = ?,
                             category = ?, description = ?
-                        WHERE interaction_id = ?
+                        WHERE interaction_id = ? AND NOT COALESCE(erased, FALSE)
                         """,
                         payload[:-2] + payload[-1:],
                     )

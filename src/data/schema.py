@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS interactions (
     degraded_ledger    BOOLEAN NOT NULL DEFAULT FALSE,  -- safety output delivered from WAL fallback
     csat               INTEGER,                        -- post-call outcome signal 1-5 (board #9)
     customer_resolved  BOOLEAN,                        -- customer says the issue is resolved (board #9)
+    erased             BOOLEAN NOT NULL DEFAULT FALSE,  -- tombstoned by DSR erasure
     schema_version     INTEGER NOT NULL DEFAULT 1
 );
 
