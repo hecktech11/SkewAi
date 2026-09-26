@@ -183,7 +183,7 @@ def semantic_search_records(
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            [*params, query_vector, query_vector, int(limit)],
+            [query_vector, *params, query_vector, int(limit)],
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -220,7 +220,7 @@ def fts_search_records(
             ORDER BY rank DESC
             LIMIT %s
             """,
-            [q, *params[1:], int(limit)],
+            [q, *params, int(limit)],
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()]

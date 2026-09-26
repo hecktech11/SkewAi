@@ -475,20 +475,24 @@ def _mark_degraded_ledger(interaction_id: str) -> None:
 def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
     """Re-insert WAL rows into the chain after recovery.
 
-    Returns {replayed, failed, remaining}. Replay goes through the normal
-    insert path (fresh prev_hash linkage at replay time); replayed rows keep
-    their original action_id/ts so the audit trail shows what happened when.
-    On full success the WAL file is rotated aside.
+    Returns {replayed, failed, remaining}. Replay goes through a persistence-only
+    path that raises on failure and confirms commit (never falling back to appending
+    to the same WAL). On full success the WAL file is rotated aside.
     """
     path = _wal_path()
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        raw_text = path.read_text(encoding="utf-8")
+        lines = raw_text.splitlines()
     except FileNotFoundError:
         return {"replayed": 0, "failed": 0, "remaining": 0}
     except OSError as e:
         return {"replayed": 0, "failed": 1, "remaining": -1, "error": str(e)}
+
     replayed, failed = 0, []
     kept: list[str] = []
+    processed_iids: set[str] = set()
+    succeeded_lines: set[str] = set()
+
     for line in lines[:limit]:
         line = line.strip()
         if not line:
@@ -509,12 +513,50 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
                 duration_ms=a.get("duration_ms"),
             )
             act.action_id = a.get("action_id") or act.action_id
-            record_action(act)
+            if "ts" in a and a["ts"]:
+                try:
+                    from datetime import datetime
+
+                    act.ts = datetime.fromisoformat(str(a["ts"]).replace("Z", "+00:00"))
+                except Exception:
+                    pass
+
+            # Persistence-only path: check idempotency then insert directly via _record_action_inner.
+            # Must raise on failure rather than catching and re-appending to WAL.
+            already_persisted = False
+            try:
+                with ops_con(read_only=True) as con:
+                    existing = con.execute(
+                        "SELECT 1 FROM agent_actions WHERE action_id = ?",
+                        [act.action_id],
+                    ).fetchone()
+                    if existing:
+                        already_persisted = True
+            except Exception:
+                pass
+
+            if not already_persisted:
+                _record_action_inner(act, None, [], {}, None)
+
             replayed += 1
+            succeeded_lines.add(line)
+            if act.interaction_id:
+                processed_iids.add(act.interaction_id)
         except Exception as e:
             failed.append(f"{type(e).__name__}: {e}")
             kept.append(line)
-    rest = kept + [ln for ln in lines[limit:] if ln.strip()]
+
+    # Safely handle concurrent appends during replay
+    try:
+        current_lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        rest = []
+        for ln in current_lines:
+            if ln in succeeded_lines:
+                continue
+            rest.append(ln)
+    except Exception:
+        rest = kept + [ln for ln in lines[limit:] if ln.strip()]
+
     try:
         if rest:
             path.write_text("\n".join(rest) + "\n", encoding="utf-8")
@@ -523,27 +565,36 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
             path.rename(rotated)
     except OSError:
         pass
-    if not rest and replayed:
-        iids = set()
-        for line in lines[:limit]:
+
+    if replayed and not kept:
+        # Clear degraded_ledger ONLY for interactions that have NO remaining entries in rest
+        remaining_iids = set()
+        for ln in rest:
             try:
-                iid = (json.loads(line).get("action") or {}).get("interaction_id")
+                iid = (json.loads(ln).get("action") or {}).get("interaction_id")
                 if iid:
-                    iids.add(iid)
+                    remaining_iids.add(iid)
             except Exception:
                 pass
-        try:
-            with ops_con() as con:
-                for iid in iids:
-                    con.execute(
-                        "UPDATE interactions SET degraded_ledger = FALSE "
-                        "WHERE interaction_id = ? AND degraded_ledger = TRUE",
-                        [iid],
-                    )
-        except Exception:
-            pass
-    return {"replayed": replayed, "failed": len(failed), "remaining": len(rest),
-            "errors": failed[:5]}
+        clear_iids = {iid for iid in processed_iids if iid not in remaining_iids}
+        if clear_iids:
+            try:
+                with ops_con() as con:
+                    for iid in clear_iids:
+                        con.execute(
+                            "UPDATE interactions SET degraded_ledger = FALSE "
+                            "WHERE interaction_id = ? AND degraded_ledger = TRUE",
+                            [iid],
+                        )
+            except Exception:
+                pass
+
+    return {
+        "replayed": replayed,
+        "failed": len(failed),
+        "remaining": len(rest),
+        "errors": failed[:5],
+    }
 
 
 def _record_action_inner(action, pack_id, degraded, snaps, on_degraded) -> str:

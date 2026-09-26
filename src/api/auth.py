@@ -45,12 +45,16 @@ class Principal:
     the service role, which carries the contact-takeover permission (R04).
     """
 
-    credential: str  # "open" | "service" | "dsr"
+    credential: str  # "open" | "service" | "dsr" | "session"
     api_key: str = ""
+    subject: str = ""
+    session: Optional[dict[str, Any]] = None
 
     @property
     def role(self) -> str | None:
         """Role implied by the credential alone (a signed session overrides it)."""
+        if self.credential == "session" and self.session:
+            return str(self.session.get("role") or "agent")
         if self.credential == "dsr":
             return "dsr_officer"
         if self.credential == "service":
@@ -181,6 +185,29 @@ async def require_api_key(
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> bool:
     """FastAPI dependency for HTTP routes."""
+    # Check signed session from cookies or headers first (R10)
+    from src.api.rbac import session_token_from_cookies, verify_session
+
+    session_tok = (
+        request.headers.get("x-frontline-session")
+        or session_token_from_cookies(getattr(request, "cookies", {}) or {})
+    )
+    if session_tok:
+        try:
+            body = verify_session(session_tok)
+            p = Principal(
+                credential="session",
+                subject=str(body.get("sub") or ""),
+                session=body,
+            )
+            try:
+                setattr(request.state, PRINCIPAL_ATTR, p)
+            except Exception:
+                pass
+            return True
+        except HTTPException:
+            pass
+
     # Query keys rejected unless FRONTLINE_ALLOW_QUERY_KEY=1 (hermetic/legacy opt-in).
     q = request.query_params.get("api_key")
     allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
@@ -197,12 +224,16 @@ async def require_api_key(
             ),
             headers={"WWW-Authenticate": "Bearer"},
         )
-    check_api_key(
+    p = check_api_key(
         authorization=authorization,
         x_api_key=x_api_key,
         api_key=q if allow_query else None,
         allow_query_key=allow_query,
     )
+    try:
+        setattr(request.state, PRINCIPAL_ATTR, p)
+    except Exception:
+        pass
     return True
 
 
@@ -211,10 +242,33 @@ async def require_api_key_strict(
     authorization: Optional[str] = Header(default=None),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> bool:
-    """Always require a valid API key — ignores open mode (DSR / sensitive).
+    """Always require a valid credential — ignores open mode (DSR / sensitive).
 
+    Accepts an authorized signed session (admin/dsr/etc.) or header API key.
     Query-string keys are rejected (use headers only).
     """
+    from src.api.rbac import session_token_from_cookies, verify_session
+
+    session_tok = (
+        request.headers.get("x-frontline-session")
+        or session_token_from_cookies(getattr(request, "cookies", {}) or {})
+    )
+    if session_tok:
+        try:
+            body = verify_session(session_tok)
+            p = Principal(
+                credential="session",
+                subject=str(body.get("sub") or ""),
+                session=body,
+            )
+            try:
+                setattr(request.state, PRINCIPAL_ATTR, p)
+            except Exception:
+                pass
+            return True
+        except HTTPException:
+            pass
+
     q = request.query_params.get("api_key")
     header_present = bool(
         (x_api_key and x_api_key.strip())
@@ -226,13 +280,17 @@ async def require_api_key_strict(
             detail="API key in query string is disabled for this route; use X-API-Key or Authorization: Bearer.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    check_api_key(
+    p = check_api_key(
         authorization=authorization,
         x_api_key=x_api_key,
         api_key=None,
         allow_open=False,
         allow_query_key=False,
     )
+    try:
+        setattr(request.state, PRINCIPAL_ATTR, p)
+    except Exception:
+        pass
     return True
 
 
@@ -240,6 +298,7 @@ async def require_ws_api_key(
     api_key: Optional[str] = Query(default=None),
     authorization: Optional[str] = Header(default=None),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    x_frontline_session: Optional[str] = Header(default=None, alias="X-Frontline-Session"),
 ) -> bool:
     """FastAPI dependency for WebSocket routes (headers preferred; query deprecated).
 
@@ -249,12 +308,25 @@ async def require_ws_api_key(
     history). Prefer the ``authenticate_websocket`` first-message frame path
     for browser clients.
     """
+    if x_frontline_session and isinstance(x_frontline_session, str):
+        from src.api.rbac import verify_session
+
+        try:
+            verify_session(x_frontline_session)
+            return True
+        except HTTPException:
+            pass
+
     allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
+    auth_str = authorization if isinstance(authorization, str) else None
+    x_key_str = x_api_key if isinstance(x_api_key, str) else None
+    q_key_str = api_key if isinstance(api_key, str) else None
+
     header_present = bool(
-        (x_api_key and x_api_key.strip())
-        or (authorization and authorization.strip())
+        (x_key_str and x_key_str.strip())
+        or (auth_str and auth_str.strip())
     )
-    if api_key and not allow_query and not header_present:
+    if q_key_str and not allow_query and not header_present:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
@@ -265,9 +337,9 @@ async def require_ws_api_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
     check_api_key(
-        authorization=authorization,
-        x_api_key=x_api_key,
-        api_key=api_key if allow_query else None,
+        authorization=auth_str,
+        x_api_key=x_key_str,
+        api_key=q_key_str if allow_query else None,
         allow_query_key=allow_query,
     )
     return True
@@ -298,8 +370,9 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
 
     Order:
       1. Open mode → allow
-      2. Header (preferred for non-browser clients)
-      3. Accept + first-message ``{"type":"auth","api_key":"..."}`` (preferred for browsers)
+      2. Cookie or header session check
+      3. Header API key (preferred for non-browser clients)
+      4. Accept + first-message auth frame (preferred for browsers)
 
     Query ``?api_key=`` is deprecated and rejected unless
     ``FRONTLINE_ALLOW_QUERY_KEY=1`` (mirrors HTTP ``require_api_key``) so
@@ -315,6 +388,29 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
     if is_open_mode():
         return store_ws_principal(websocket, OPEN_PRINCIPAL)
 
+    # 1. Check signed session from headers or cookies
+    from src.api.rbac import session_token_from_cookies, verify_session
+
+    session_tok = ""
+    try:
+        session_tok = (
+            websocket.headers.get("x-frontline-session")
+            or session_token_from_cookies(getattr(websocket, "cookies", {}) or {})
+        )
+    except Exception:
+        session_tok = ""
+
+    if session_tok:
+        try:
+            body = verify_session(session_tok)
+            return store_ws_principal(
+                websocket,
+                Principal(credential="session", subject=str(body.get("sub") or ""), session=body),
+            )
+        except HTTPException:
+            pass
+
+    # 2. Header API key
     allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
     q = websocket.query_params.get("api_key")
     # Headers first (no query involved)
@@ -330,7 +426,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
     except HTTPException:
         pass
 
-    # Deprecated query fallback — only when explicitly opted in for tests.
+    # 3. Deprecated query fallback — only when explicitly opted in for tests.
     if q and allow_query:
         try:
             return store_ws_principal(websocket, check_api_key(api_key=q))
@@ -341,7 +437,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
         # Fall through to first-message auth (which will 401 without a key).
         pass
 
-    # Browser path: first message after accept
+    # 4. Browser path: first message after accept
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
     try:
@@ -356,8 +452,17 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
     if not isinstance(raw, dict) or raw.get("type") != "auth":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='WebSocket auth required: first message must be {"type":"auth","api_key":"..."}',
+            detail='WebSocket auth required: first message must be {"type":"auth","api_key":"..."} or {"type":"auth","session":"..."}',
         )
+    if raw.get("session"):
+        try:
+            body = verify_session(str(raw["session"]))
+            return store_ws_principal(
+                websocket,
+                Principal(credential="session", subject=str(body.get("sub") or ""), session=body),
+            )
+        except HTTPException as e:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.detail) from e
     return store_ws_principal(
         websocket, check_api_key(api_key=str(raw.get("api_key") or ""))
     )

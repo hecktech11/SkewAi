@@ -33,6 +33,27 @@ _BIGRAM_VOTE = 0.5
 # "unfitted": embed_text falls back to uniform weights (deterministic).
 _IDF: dict[str, float] = {}
 _IDF_DOCS = 0
+_PACK_IDF: dict[str, dict[str, float]] = {}
+_PACK_IDF_DOCS: dict[str, int] = {}
+
+
+def idf_digest(pack_id: str | None = None) -> str:
+    """Return an 8-char hex digest of the active IDF table (or 'uniform')."""
+    table = _PACK_IDF.get(pack_id) if pack_id else _IDF
+    if not table:
+        return "uniform"
+    items = sorted(table.items())
+    raw = ";".join(f"{k}:{round(v, 6)}" for k, v in items).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:8]
+
+
+def hash_embedding_version(pack_id: str | None = None) -> str:
+    from src.ml_runtime.embedding_space import HASH_EMBEDDING_VERSION
+
+    digest = idf_digest(pack_id)
+    if digest == "uniform":
+        return HASH_EMBEDDING_VERSION
+    return f"{HASH_EMBEDDING_VERSION}:idf-{digest}"
 
 
 def embedding_dim() -> int:
@@ -40,8 +61,10 @@ def embedding_dim() -> int:
     return _DIM
 
 
-def fit_idf(texts: Sequence[str], *, dim: int = _DIM) -> dict[str, float]:
-    """Fit the process-wide IDF table from a corpus (deterministic).
+def fit_idf(
+    texts: Sequence[str], *, pack_id: str | None = None, dim: int = _DIM
+) -> dict[str, float]:
+    """Fit the IDF table from a corpus (deterministic, pack-scoped when pack_id given).
 
     Returns the fitted table (feature -> ``log((N+1)/(df+1)) + 1``).
     Call before bulk embedding (cluster rebuilds do this) so frequent
@@ -59,20 +82,33 @@ def fit_idf(texts: Sequence[str], *, dim: int = _DIM) -> dict[str, float]:
         for feat in seen:
             df[feat] = df.get(feat, 0) + 1
     n = max(1, len(docs))
-    _IDF = {feat: math.log((n + 1) / (c + 1)) + 1.0 for feat, c in df.items()}
-    _IDF_DOCS = n
-    return dict(_IDF)
+    fitted = {feat: math.log((n + 1) / (c + 1)) + 1.0 for feat, c in df.items()}
+    if pack_id:
+        _PACK_IDF[pack_id] = fitted
+        _PACK_IDF_DOCS[pack_id] = n
+    else:
+        _IDF = fitted
+        _IDF_DOCS = n
+    return dict(fitted)
 
 
-def reset_idf() -> None:
+def reset_idf(pack_id: str | None = None) -> None:
     """Clear the fitted IDF table (tests / corpus switches)."""
     global _IDF, _IDF_DOCS
-    _IDF = {}
-    _IDF_DOCS = 0
+    if pack_id:
+        _PACK_IDF.pop(pack_id, None)
+        _PACK_IDF_DOCS.pop(pack_id, None)
+    else:
+        _IDF = {}
+        _IDF_DOCS = 0
+        _PACK_IDF.clear()
+        _PACK_IDF_DOCS.clear()
 
 
-def idf_status() -> dict[str, int]:
-    return {"features": len(_IDF), "docs": _IDF_DOCS}
+def idf_status(pack_id: str | None = None) -> dict[str, Any]:
+    table = _PACK_IDF.get(pack_id) if pack_id else _IDF
+    docs = _PACK_IDF_DOCS.get(pack_id, 0) if pack_id else _IDF_DOCS
+    return {"features": len(table or {}), "docs": docs, "digest": idf_digest(pack_id)}
 
 
 def _stable_bucket(gram: str, dim: int) -> int:
@@ -81,7 +117,7 @@ def _stable_bucket(gram: str, dim: int) -> int:
     return int.from_bytes(digest, "little") % dim
 
 
-def embed_text(text: str, dim: int = _DIM) -> list[float]:
+def embed_text(text: str, dim: int = _DIM, pack_id: str | None = None) -> list[float]:
     """Hashing trick embedding — deterministic across processes, no model download.
 
     Whole-token votes 2.0, char-bigram votes 0.5 (ratio preserved from the
@@ -95,15 +131,18 @@ def embed_text(text: str, dim: int = _DIM) -> list[float]:
         return vec
     from collections import Counter
 
+    idf_table = _PACK_IDF.get(pack_id) if pack_id else _IDF
     counts = Counter(tokens)
     for tok, tf_raw in counts.items():
         tf = 1.0 + math.log(tf_raw)  # sublinear: repetition damps out
         h = _stable_bucket(f"tok:{tok}", dim)
-        vec[h] += _TOKEN_VOTE * tf * _IDF.get(f"tok:{tok}", 1.0)
+        weight = idf_table.get(f"tok:{tok}", 1.0) if idf_table else 1.0
+        vec[h] += _TOKEN_VOTE * tf * weight
         for i in range(max(0, len(tok) - 1)):
             gram = tok[i:i+2]
             hb = _stable_bucket(f"bi:{gram}", dim)
-            vec[hb] += _BIGRAM_VOTE * tf * _IDF.get(f"bi:{gram}", 1.0)
+            b_weight = idf_table.get(f"bi:{gram}", 1.0) if idf_table else 1.0
+            vec[hb] += _BIGRAM_VOTE * tf * b_weight
     # L2 normalize — removes document-length bias (long docs don't outrank
     # short ones by magnitude; only direction matters for cosine).
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
@@ -164,6 +203,7 @@ def rank_by_similarity(
     top_k: int = 5,
     embedder: Any | None = None,
     allow_recompute: bool | None = None,
+    pack_id: str | None = None,
 ) -> list[dict]:
     """Return candidates sorted by cosine sim to query (adds ``sim_score``).
 
@@ -184,9 +224,9 @@ def rank_by_similarity(
 
     if not (query or "").strip():
         return []
-    active = embedder or HashEmbedder()
+    active = embedder or HashEmbedder(pack_id=pack_id)
     recompute = (
-        active.version == HASH_EMBEDDING_VERSION
+        active.version.startswith(HASH_EMBEDDING_VERSION)
         if allow_recompute is None
         else bool(allow_recompute)
     )
@@ -200,8 +240,8 @@ def rank_by_similarity(
         if isinstance(emb, EmbeddedVector):
             cand = emb
         elif isinstance(emb, (list, tuple)) and len(emb) == q.output_dimension and any(emb):
-            if active.version == HASH_EMBEDDING_VERSION:
-                cand = as_embedded(emb, HASH_EMBEDDING_VERSION)
+            if active.version.startswith(HASH_EMBEDDING_VERSION):
+                cand = as_embedded(emb, active.version)
         if cand is None:
             if recompute:
                 cand = active.embed(str(c.get(text_key) or ""))
@@ -236,6 +276,8 @@ __all__ = [
     "fit_idf",
     "reset_idf",
     "idf_status",
+    "idf_digest",
+    "hash_embedding_version",
     "embedding_dim",
     "measure_collisions",
     "_DIM",

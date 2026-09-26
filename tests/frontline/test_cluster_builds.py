@@ -68,3 +68,50 @@ def test_rebuild_rejects_mixed_versions(toy_ready):
     # hash version against toy-backfilled corpus still only reads that version.
     out = rebuild_cluster_build("automotive_nhtsa", HASH_EMBEDDING_VERSION, k=2)
     assert out["excluded"]["missing"] >= 0
+
+
+def test_rebuild_clusters_assigns_records_beyond_5000(monkeypatch, tmp_path):
+    """R15: rebuild_clusters assigns records beyond 5,000 to nearest centroid."""
+    from src.ml_runtime.clustering import rebuild_clusters
+    from src.ml_runtime.embeddings import embedding_dim
+    from src.data.warehouse import domain_con, apply_domain_schema
+    import datetime
+
+    pack = "test_large_pack"
+    db_file = tmp_path / f"{pack}.duckdb"
+    monkeypatch.setenv(f"FRONTLINE_{pack.upper()}_DB", str(db_file))
+    dim = embedding_dim()
+    vec = [0.1] * dim
+
+    with domain_con(pack, read_only=False) as con:
+        apply_domain_schema(con)
+        base_time = datetime.datetime(2025, 1, 1, 12, 0, 0)
+        rows = [
+            (
+                f"rec_{i}",
+                f"Complaint about brake issue {i}",
+                "BRAKES",
+                "Acme",
+                "Sedan",
+                vec,
+                (base_time + datetime.timedelta(minutes=i)).isoformat(),
+            )
+            for i in range(5005)
+        ]
+        con.executemany(
+            """
+            INSERT INTO records (record_id, text, category, entity_2, entity_3, embedding, received_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    res = rebuild_clusters(pack, k=2)
+    assert res["clusters"] >= 1
+    with domain_con(pack, read_only=True) as con:
+        assigned_count = con.execute("SELECT COUNT(*) FROM cluster_assignments").fetchone()[0]
+        assert assigned_count == 5005
+        latest_assigned = con.execute(
+            "SELECT cluster_id FROM cluster_assignments WHERE record_id = 'rec_5004'"
+        ).fetchone()
+        assert latest_assigned is not None

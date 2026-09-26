@@ -56,14 +56,12 @@ def ops_con(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     When FRONTLINE_OPS_DSN is configured for PostgreSQL (audit 6.1), delegates
     directly to the multi-writer Postgres pool to eliminate lock contention.
     """
-    try:
-        from src.data.postgres_backend import is_production_backend, ops_connection
-        if is_production_backend():
-            with ops_connection(read_only=read_only) as pcon:
-                yield pcon
-            return
-    except Exception:
-        pass
+    from src.data.postgres_backend import is_production_backend, ops_connection
+
+    if is_production_backend():
+        with ops_connection(read_only=read_only) as pcon:
+            yield pcon
+        return
 
     global _ops_initialized
     path = settings.frontline_db_path
@@ -108,9 +106,20 @@ async def ops_in_thread(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T
     return await asyncio.to_thread(fn, *args)
 
 
+_domain_locks: dict[str, threading.RLock] = {}
+_domain_locks_guard = threading.Lock()
+
+
+def _get_pack_lock(pack_id: str) -> threading.RLock:
+    with _domain_locks_guard:
+        if pack_id not in _domain_locks:
+            _domain_locks[pack_id] = threading.RLock()
+        return _domain_locks[pack_id]
+
+
 @contextmanager
 def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPyConnection]:
-    """Yield a read-only connection to a pack's domain warehouse.
+    """Yield a connection to a pack's domain warehouse with coordinated locking.
 
     If the file doesn't exist and read_only=True, raises FileNotFoundError —
     callers should build it first via ``scripts.seed_domains`` /
@@ -125,6 +134,7 @@ def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPy
     if not path.exists():
         # Try the pack's own domain_db override
         from src.domains.loader import load_pack
+
         try:
             pack = load_pack(pack_id)
             path = pack.domain_db_path()
@@ -134,21 +144,34 @@ def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPy
         if read_only:
             raise FileNotFoundError(f"Domain warehouse not found: {path} (build it first)")
         _ensure_parent(path)
-    con = duckdb.connect(str(path), read_only=read_only)
-    try:
-        if not read_only:
-            # Apply the canonical schema (CREATE IF NOT EXISTS).
-            apply_domain_schema(con)
-        yield con
-    finally:
-        con.close()
-        if not read_only:
-            try:
-                from scripts.migrate import stamp_schema_current
 
-                stamp_schema_current(path, target="domain")
-            except Exception:
-                pass
+    pack_lock = _get_pack_lock(pack_id)
+    with pack_lock:
+        con = None
+        for attempt in range(5):
+            try:
+                con = duckdb.connect(str(path), read_only=False)
+                break
+            except Exception as exc:
+                if "Could not set lock on file" in str(exc) and attempt < 4:
+                    time.sleep(0.04 * (2 ** attempt))
+                    continue
+                raise
+        try:
+            if not read_only:
+                # Apply the canonical schema (CREATE IF NOT EXISTS).
+                apply_domain_schema(con)
+            yield con
+        finally:
+            if con is not None:
+                con.close()
+            if not read_only:
+                try:
+                    from scripts.migrate import stamp_schema_current
+
+                    stamp_schema_current(path, target="domain")
+                except Exception:
+                    pass
 
 
 # ── Init helpers (for tests + Makefile) ─────────────────────────────────────
@@ -352,52 +375,83 @@ def apply_domain_schema(con) -> None:
 
 
 def apply_ops_schema(con) -> None:
+    index_stmts: list[str] = []
     for stmt in _strip_sql_comments(OPS_SCHEMA_SQL).strip().split(";"):
         s = stmt.strip()
-        if s:
+        if not s:
+            continue
+        if s.upper().startswith("CREATE INDEX"):
+            index_stmts.append(s)
+            continue
+        try:
             con.execute(s)
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
     # Forward-compatible columns (older DuckDB files created before hash-chain).
     from src.security.sql_ident import SAFE_ALTER_COLUMNS, safe_ident, safe_table
 
-    for col, typ in (
-        ("prev_hash", "VARCHAR"),
-        ("row_hash", "VARCHAR"),
-    ):
-        try:
-            c = safe_ident(col, SAFE_ALTER_COLUMNS, kind="column")
-            t = safe_table("agent_actions")
-            # typ is a fixed constant from this loop, not user input
-            con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
-        except Exception:
-            pass
-    for col, typ in (
-        ("assignee", "VARCHAR"),
-        ("sla_due_at", "TIMESTAMP"),
-    ):
-        try:
-            c = safe_ident(col, SAFE_ALTER_COLUMNS, kind="column")
-            t = safe_table("investigations")
-            con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
-        except Exception:
-            pass
     for table, cols in (
-        ("cases", (("case_kind", "VARCHAR"), ("customer_ref", "VARCHAR"))),
         (
             "interactions",
-            (("customer_ref", "VARCHAR"), ("degraded_ledger", "BOOLEAN"),
-             ("csat", "INTEGER"), ("customer_resolved", "BOOLEAN"),
-             ("enrichment_partial", "BOOLEAN")),
+            (
+                ("pack_version", "VARCHAR"),
+                ("entity_1", "VARCHAR"),
+                ("entity_2", "VARCHAR"),
+                ("entity_3", "VARCHAR"),
+                ("category", "VARCHAR"),
+                ("description", "TEXT"),
+                ("enrichment_partial", "BOOLEAN DEFAULT FALSE"),
+                ("supervised", "BOOLEAN DEFAULT FALSE"),
+                ("peak_frustration", "DOUBLE"),
+                ("last_frustration", "DOUBLE"),
+                ("peak_frustration_turn", "INTEGER"),
+                ("llm_calls", "INTEGER DEFAULT 0"),
+                ("customer_ref", "VARCHAR"),
+                ("degraded_ledger", "BOOLEAN DEFAULT FALSE"),
+                ("csat", "INTEGER"),
+                ("customer_resolved", "BOOLEAN"),
+                ("erased", "BOOLEAN DEFAULT FALSE"),
+                ("schema_version", "INTEGER DEFAULT 1"),
+            ),
+        ),
+        (
+            "cases",
+            (
+                ("case_kind", "VARCHAR DEFAULT 'customer'"),
+                ("customer_ref", "VARCHAR"),
+                ("description_summary", "TEXT"),
+                ("followup_draft", "TEXT"),
+                ("similar_record_count", "INTEGER DEFAULT 0"),
+                ("schema_version", "INTEGER DEFAULT 1"),
+            ),
         ),
         (
             "agent_actions",
             (
-                ("erased", "BOOLEAN"),
+                ("prev_hash", "VARCHAR"),
+                ("row_hash", "VARCHAR"),
+                ("erased", "BOOLEAN DEFAULT FALSE"),
                 ("hash_version", "INTEGER DEFAULT 1"),
                 ("content_hash", "VARCHAR"),
                 ("claims", "VARCHAR"),
             ),
         ),
-        ("interaction_turns", (("erased", "BOOLEAN"),)),
+        (
+            "interaction_turns",
+            (
+                ("erased", "BOOLEAN DEFAULT FALSE"),
+            ),
+        ),
+        (
+            "investigations",
+            (
+                ("assignee", "VARCHAR"),
+                ("sla_due_at", "TIMESTAMP"),
+            ),
+        ),
     ):
         for col, typ in cols:
             try:
@@ -405,19 +459,25 @@ def apply_ops_schema(con) -> None:
                 t = safe_table(table)
                 con.execute(f"ALTER TABLE {t} ADD COLUMN {c} {typ}")
             except Exception:
-                pass
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
     # Version-dependent indexes AFTER the ALTERs above: creating them in the
     # static DDL would hard-fail apply on pre-column databases (and a failed
     # apply must never wedge the warehouse).
-    for _idx_ddl in (
-        "CREATE INDEX IF NOT EXISTS idx_cases_customer"
-        " ON cases(customer_ref, category, created_at)",
+    extra_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_cases_customer ON cases(customer_ref, category, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_cases_kind ON cases(case_kind, status)",
-    ):
+    ]
+    for _idx_ddl in index_stmts + extra_indexes:
         try:
             con.execute(_idx_ddl)
         except Exception:
-            pass
+            try:
+                con.rollback()
+            except Exception:
+                pass
     # LLM daily spend ledger (Phase 1 narration cap).
     try:
         con.execute(

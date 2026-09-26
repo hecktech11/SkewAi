@@ -69,13 +69,57 @@ def _canon_v2(action: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+def compute_metadata_commitment(action: dict[str, Any]) -> str:
+    """Commitment to immutable metadata fields."""
+    claims = action.get("claims")
+    if isinstance(claims, str):
+        try:
+            claims = json.loads(claims)
+        except Exception:
+            pass
+    claims_json = json.dumps(claims if claims is not None else [], sort_keys=True, separators=(",", ":"))
+    payload = {
+        "action_id": action.get("action_id") or "",
+        "interaction_id": action.get("interaction_id") or "",
+        "case_id": action.get("case_id") or "",
+        "agent": action.get("agent") or "",
+        "action_type": action.get("action_type") or "",
+        "evidence_ids": action.get("evidence_ids")
+        if isinstance(action.get("evidence_ids"), str)
+        else json.dumps(action.get("evidence_ids") or []),
+        "claims": claims_json,
+        "ok": bool(action.get("ok", True)),
+        "error": action.get("error") or "",
+        "duration_ms": action.get("duration_ms"),
+        "ts": str(action.get("ts") or ""),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def compute_summary_commitment(action: dict[str, Any]) -> str:
+    """Commitment to erasable customer content summaries."""
+    payload = {
+        "input_summary": action.get("input_summary") or "",
+        "output_summary": action.get("output_summary") or "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _is_tombstone(val: Any) -> bool:
+    if not isinstance(val, str):
+        return False
+    s = val.strip()
+    return s.startswith("[ERASED") and s.endswith("]")
+
+
 def compute_content_hash(action: dict[str, Any], version: int = 2) -> str:
     """Compute content hash for an action before erasure or for v2 verification."""
     if version == 1:
         raw = _canon(action)
-    else:
-        raw = _canon_v2(action)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    meta_h = compute_metadata_commitment(action)
+    summary_h = compute_summary_commitment(action)
+    return f"{meta_h}:{summary_h}"
 
 
 def compute_row_hash_from_content(content_hash: str, prev_hash: str) -> str:
@@ -189,6 +233,29 @@ def verify_chain(
                         "first_bad_action_id": row.get("action_id"),
                         "detail": "erased_row_missing_content_hash",
                     }
+                # Check tombstone shape: erased content must follow exact tombstone format
+                in_sum = row.get("input_summary") or ""
+                out_sum = row.get("output_summary") or ""
+                if not _is_tombstone(out_sum) or (in_sum and not _is_tombstone(in_sum)):
+                    return {
+                        "ok": False,
+                        "error": "invalid_tombstone_shape",
+                        "checked": i + 1,
+                        "first_bad_action_id": row.get("action_id"),
+                        "detail": f"erased row {row.get('action_id')} has non-tombstone summaries",
+                    }
+                # Verify immutable metadata commitment if separated content_hash is present
+                if ":" in str(content_h):
+                    meta_expected, _ = str(content_h).split(":", 1)
+                    meta_actual = compute_metadata_commitment(row)
+                    if meta_actual != meta_expected:
+                        return {
+                            "ok": False,
+                            "error": "metadata_commitment_mismatch",
+                            "checked": i + 1,
+                            "first_bad_action_id": row.get("action_id"),
+                            "detail": f"metadata commitment mismatch for erased row at index {i}",
+                        }
                 expected = compute_row_hash_from_content(content_h, expected_prev)
                 if actual != expected:
                     return {
@@ -201,6 +268,11 @@ def verify_chain(
                 prev = actual or expected
             else:
                 content_h = compute_content_hash(row, version=2)
+                # If row already had a legacy single-hash content_hash, check if legacy matches
+                if row.get("content_hash") and ":" not in str(row.get("content_hash")):
+                    legacy_content_h = hashlib.sha256(_canon_v2(row).encode("utf-8")).hexdigest()
+                    if row.get("content_hash") == legacy_content_h:
+                        content_h = legacy_content_h
                 expected = compute_row_hash_from_content(content_h, expected_prev)
                 if actual != expected:
                     return {
@@ -218,6 +290,8 @@ def verify_chain(
 __all__ = [
     "GENESIS",
     "compute_content_hash",
+    "compute_metadata_commitment",
+    "compute_summary_commitment",
     "compute_row_hash_from_content",
     "compute_row_hash",
     "verify_chain",

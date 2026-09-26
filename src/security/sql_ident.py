@@ -94,6 +94,21 @@ SAFE_ALTER_COLUMNS = frozenset(
         "hash_version",
         "content_hash",
         "claims",
+        "pack_version",
+        "entity_1",
+        "entity_2",
+        "entity_3",
+        "category",
+        "description",
+        "supervised",
+        "peak_frustration",
+        "last_frustration",
+        "peak_frustration_turn",
+        "llm_calls",
+        "schema_version",
+        "description_summary",
+        "followup_draft",
+        "similar_record_count",
     }
 )
 

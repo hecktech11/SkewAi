@@ -91,7 +91,7 @@ def test_hardened_session_rejects_admin_without_issuer(hard_client):
     # issuer agent cannot mint admin
     with pytest.raises(Exception) as ei:
         issue_session("u2", "admin", issuer_role="agent")
-    assert "403" in str(ei.value) or "admin" in str(ei.value).lower() or True
+    assert "403" in str(ei.value) or "admin" in str(ei.value).lower()
     # Direct call:
     from fastapi import HTTPException
 

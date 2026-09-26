@@ -345,8 +345,9 @@ def predict_category_zero_shot(
 
     if latency_ms > max_ms:
         step_down("slm_understanding", reason=f"latency_breach: {latency_ms:.1f}ms > {max_ms:.1f}ms")
-
-    if passed_floor and passed_margin and is_member:
+        chosen_cat = None
+        source = "none"
+    elif passed_floor and passed_margin and is_member:
         chosen_cat = top1_cat
         source = "zeroshot"
     else:
@@ -369,6 +370,9 @@ def predict_category_zero_shot(
         extraction_source=source,
         all_scores=scores,
     )
+
+
+predict_category_zeroshot = predict_category_zero_shot
 
 
 # ── Shadow Telemetry ─────────────────────────────────────────────────────────

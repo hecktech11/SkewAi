@@ -98,8 +98,14 @@ export default function LiveContactConsole() {
         setInteractions(list);
         setTakenOver((prev) => {
           const next = { ...prev };
+          const activeIds = new Set(list.map((it) => it.interaction_id));
           for (const it of list) {
-            if (it.supervised) next[it.interaction_id] = true;
+            next[it.interaction_id] = Boolean(it.supervised);
+          }
+          for (const id of Object.keys(next)) {
+            if (!activeIds.has(id)) {
+              delete next[id];
+            }
           }
           return next;
         });

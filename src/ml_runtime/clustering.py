@@ -337,7 +337,7 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
         # Fit corpus IDF before embedding so frequent terms don't dominate
         # (item 21). Deterministic for a fixed corpus.
         try:
-            fit_idf([str(t or "") for _, t, _, _, _ in rows])
+            fit_idf([str(t or "") for _, t, _, _, _ in rows], pack_id=pack_id)
         except Exception:
             pass
         current_dim = embedding_dim()
@@ -345,7 +345,7 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
             if emb is None or len(list(emb)) != current_dim:
                 # Missing OR stale-dimension embedding (pre-512 migration):
                 # recompute from text rather than comparing across dims.
-                emb = embed_text(text or "")
+                emb = embed_text(text or "", pack_id=pack_id)
                 try:
                     con.execute(
                         "UPDATE records SET embedding = ? WHERE record_id = ?",
@@ -636,6 +636,101 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                 )
             except Exception:
                 pass
+
+        # R15: Assign all remaining records in the pack so records > 5,000 are not excluded
+        sample_rids = {rec["record_id"] for rec in records}
+        remaining_rows = con.execute(
+            """
+            SELECT record_id, text, category, embedding, received_at, entity_2, entity_3
+            FROM records
+            WHERE record_id NOT IN (
+                SELECT record_id FROM cluster_assignments
+            )
+            ORDER BY received_at
+            """
+        ).fetchall()
+
+        if remaining_rows and centroids:
+            import os as _os
+
+            try:
+                _cut = float(_os.getenv("FRONTLINE_CLUSTER_MAX_DISTANCE", "0.85"))
+            except ValueError:
+                _cut = 0.85
+
+            for rem_rid, rem_text, rem_cat, rem_emb, rem_rec_at, rem_e2, rem_e3 in remaining_rows:
+                if rem_rid in sample_rids:
+                    # Already handled during initial sampling loop
+                    continue
+                if rem_emb is None or len(list(rem_emb)) != current_dim:
+                    rem_emb = embed_text(rem_text or "", pack_id=pack_id)
+                    try:
+                        con.execute(
+                            "UPDATE records SET embedding = ? WHERE record_id = ?",
+                            [list(rem_emb), rem_rid],
+                        )
+                    except Exception:
+                        pass
+                else:
+                    rem_emb = list(rem_emb)
+
+                # Find closest centroid
+                best_lab = None
+                best_dist = float("inf")
+                for lab, c_vec in centroids.items():
+                    try:
+                        d = max(0.0, min(2.0, 1.0 - cosine(rem_emb, c_vec)))
+                    except ValueError:
+                        d = 1.0
+                    if d < best_dist:
+                        best_dist = d
+                        best_lab = lab
+
+                if best_lab is not None:
+                    cid = 1000 + best_lab
+                    if best_dist > _cut:
+                        try:
+                            con.execute(
+                                "INSERT INTO novel_candidates (novel_id, interaction_id, pack_id, "
+                                "category, entity_2, entity_3, top_score, status, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', current_timestamp)",
+                                [f"nov_{rem_rid}", "", pack_id,
+                                 rem_cat, rem_e2, rem_e3, round(1.0 - best_dist, 3)],
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        con.execute(
+                            """
+                            INSERT INTO cluster_assignments (record_id, cluster_id, distance)
+                            VALUES (?, ?, ?)
+                            """,
+                            [rem_rid, cid, best_dist],
+                        )
+                        written += 1
+
+            # Update cluster and version member counts with the newly assigned records
+            for lab in by_lab:
+                cid = 1000 + lab
+                row_stats = con.execute(
+                    """
+                    SELECT COUNT(*), MIN(r.received_at), MAX(r.received_at)
+                    FROM cluster_assignments ca
+                    JOIN records r ON ca.record_id = r.record_id
+                    WHERE ca.cluster_id = ?
+                    """,
+                    [cid],
+                ).fetchone()
+                if row_stats and row_stats[0] > 0:
+                    cnt, f_seen, l_seen = row_stats
+                    con.execute(
+                        "UPDATE clusters SET record_count = ?, first_seen = COALESCE(?, first_seen), last_seen = COALESCE(?, last_seen) WHERE cluster_id = ? AND pack_id = ?",
+                        [cnt, f_seen, l_seen, cid, pack_id],
+                    )
+                    con.execute(
+                        "UPDATE cluster_versions SET member_count = ? WHERE cluster_id = ? AND pack_id = ? AND version = (SELECT MAX(version) FROM cluster_versions WHERE cluster_id = ? AND pack_id = ?)",
+                        [cnt, cid, pack_id, cid, pack_id],
+                    )
 
         if legacy_ids_reused:
             msg = (

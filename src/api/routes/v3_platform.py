@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.auth import require_api_key
 from src.api.jsonutil import json_safe
-from src.api.rbac import get_role, require_perm
+from src.api.rbac import get_actor, get_role, require_perm
 
 router = APIRouter(
     prefix="/api/v3",
@@ -50,16 +50,22 @@ async def learning_get(proposal_id: str) -> dict[str, Any]:
 
 
 @router.post("/learning/proposals/{proposal_id}/review")
-async def learning_review(proposal_id: str, body: dict[str, Any]) -> dict[str, Any]:
+async def learning_review(
+    proposal_id: str,
+    body: dict[str, Any],
+    role: str = Depends(get_role),
+    actor: str = Depends(get_actor),
+) -> dict[str, Any]:
     from src.v3.learning import review_proposal
 
+    require_perm(role, "approval:decide")
     if not isinstance(body, dict) or "status" not in body:
         raise HTTPException(status_code=400, detail="body.status required")
     try:
         return review_proposal(
             proposal_id,
             status=str(body["status"]),
-            reviewed_by=str(body.get("reviewed_by") or "operator"),
+            reviewed_by=actor,
             review_note=str(body.get("review_note") or ""),
         )
     except LookupError as e:

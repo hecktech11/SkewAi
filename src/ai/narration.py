@@ -6,6 +6,7 @@ from typing import Any
 
 from src.ai.provider import NarrationResult, narrate
 from src.security.input_validation import sanitize_prompt_variable
+from src.security.pii import redact_pii
 
 
 def phrase_intake_question(
@@ -15,7 +16,7 @@ def phrase_intake_question(
     customer_last: str = "",
 ) -> NarrationResult:
     fallback = template or f"Could you tell me the {slot_label}?"
-    clean_cust = sanitize_prompt_variable(customer_last[:200], tag_name="last_customer")
+    clean_cust = sanitize_prompt_variable(redact_pii(customer_last[:200]), tag_name="last_customer")
     return narrate(
         site="intake_phrasing",
         system=(
@@ -43,7 +44,7 @@ def phrase_investigation_brief(
         + f"; historical lead-time {lt}."
         + (f" Evidence: {', '.join(evidence_ids[:5])}." if evidence_ids else "")
     )
-    clean_kw = sanitize_prompt_variable(keyword[:100], tag_name="keyword")
+    clean_kw = sanitize_prompt_variable(redact_pii(keyword[:100]), tag_name="keyword")
     return narrate(
         site="investigator_brief",
         system=(
@@ -70,7 +71,7 @@ def phrase_followup_draft(
         f"Case {case_id}: follow up on {category or 'reported issue'} "
         f"(severity {severity}). Customer reported: {(description or '')[:160]}"
     )
-    clean_desc = sanitize_prompt_variable((description or "")[:300], tag_name="customer_description")
+    clean_desc = sanitize_prompt_variable(redact_pii((description or "")[:300]), tag_name="customer_description")
     return narrate(
         site="followup_draft",
         system=(

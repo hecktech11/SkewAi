@@ -264,6 +264,60 @@ def test_item32_pg_ddl_and_fail_closed(monkeypatch):
     assert st["ops_backend"] == "postgres" and st["vector_dim"] == 512
 
 
+def test_postgres_backend_parameter_bindings():
+    from src.data import postgres_backend as pg
+
+    calls = []
+
+    class MockCursor:
+        def __init__(self):
+            self.description = [
+                ("record_id",),
+                ("category",),
+                ("entity_2",),
+                ("entity_3",),
+                ("text",),
+                ("sim",),
+            ]
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+
+        def fetchall(self):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class MockConn:
+        def cursor(self):
+            return MockCursor()
+
+    # Test semantic_search_records without category
+    vec = [0.1] * 512
+    pg.semantic_search_records(MockConn(), vec, limit=5)
+    _, params = calls[-1]
+    assert params == [vec, vec, 5]
+
+    # Test semantic_search_records with category
+    pg.semantic_search_records(MockConn(), vec, category="safety", limit=10)
+    _, params = calls[-1]
+    assert params == [vec, "safety", vec, 10]
+
+    # Test fts_search_records without category
+    pg.fts_search_records(MockConn(), "fuel leak", limit=15)
+    _, params = calls[-1]
+    assert params == ["fuel leak", "fuel leak", 15]
+
+    # Test fts_search_records with category
+    pg.fts_search_records(MockConn(), "fuel leak", category="safety", limit=20)
+    _, params = calls[-1]
+    assert params == ["fuel leak", "fuel leak", "safety", 20]
+
+
 # ── ITEM 33: forecast statistics ─────────────────────────────────────────────
 
 

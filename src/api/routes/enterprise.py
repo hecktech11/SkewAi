@@ -38,14 +38,22 @@ async def recent_interactions(
 @router.get("/timeline/{interaction_id}")
 async def get_timeline(
     interaction_id: str,
+    scrub_pii: bool = Query(default=True),
     _role: str = Depends(require_perm_dep("ledger:read", open_mode_ok=True)),
 ) -> dict[str, Any]:
+    from src.api.rbac import require_perm
     from src.enterprise.timeline import build_incident_timeline
+    from src.security.pii import redact_dict
 
     try:
-        return json_safe(build_incident_timeline(interaction_id))
+        data = build_incident_timeline(interaction_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+    if not scrub_pii:
+        require_perm(_role, "dsr:export")
+        return json_safe(data)
+    return json_safe(redact_dict(data))
 
 
 # ── 2. Root-cause explorer ───────────────────────────────────────────────────
