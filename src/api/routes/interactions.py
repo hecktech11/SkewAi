@@ -1151,7 +1151,10 @@ async def _broadcast_console(msg: dict[str, Any]) -> None:
     async with _console_sub_lock:
         clients = list(_console_clients.values())
     for client in clients:
-        await _enqueue_console(client, msg)
+        try:
+            client.queue.put_nowait(msg)
+        except asyncio.QueueFull:
+            asyncio.create_task(_drop_console_client(client))
 
 
 class _WSHooks(OrchestratorHooks):
@@ -1549,6 +1552,7 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                         await websocket.send_json({
                             "type": "barge_in_reconciled",
                             "audible_text": _audible,
+                            "estimated": True,
                         })
                     except Exception:
                         pass
@@ -1789,32 +1793,32 @@ async def console_ws(websocket: WebSocket) -> None:
     # (and so tests that ledger-then-connect are not deadlocked waiting forever).
     last_ts: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
     last_action_id = ""
-    last_poll = 0.0
-    try:
-        while True:
-            import os
 
+    async def _catch_up_loop() -> None:
+        nonlocal last_ts, last_action_id
+        import os
+
+        while True:
             try:
                 poll_s = float(os.getenv("FRONTLINE_CONSOLE_POLL_S", "2") or "2")
             except ValueError:
                 poll_s = 2.0
-            poll_s = max(0.05, poll_s)
-            now = time.monotonic()
-            if now - last_poll >= poll_s:
-                last_poll = now
-                rows = await asyncio.to_thread(
-                    fetch_agent_actions_since, last_ts, 50, last_action_id
-                )
-                for r in rows:
-                    raw_ts = r.get("ts")
-                    if isinstance(raw_ts, datetime):
-                        last_ts = raw_ts
-                        last_action_id = str(r.get("action_id") or "")
-                    await _enqueue_console(client, activity_frame_from_row(r))
+            rows = await asyncio.to_thread(
+                fetch_agent_actions_since, last_ts, 50, last_action_id
+            )
+            for r in rows:
+                raw_ts = r.get("ts")
+                if isinstance(raw_ts, datetime):
+                    last_ts = raw_ts
+                    last_action_id = str(r.get("action_id") or "")
+                await _enqueue_console(client, activity_frame_from_row(r))
+            await asyncio.sleep(max(0.05, poll_s))
+
+    catch_task = asyncio.create_task(_catch_up_loop())
+    try:
+        while True:
             try:
-                msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.2)
-            except asyncio.TimeoutError:
-                continue
+                msg = await websocket.receive_json()
             except WebSocketDisconnect:
                 raise
             except Exception:
@@ -1875,6 +1879,11 @@ async def console_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         return
     finally:
+        catch_task.cancel()
+        try:
+            await catch_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await _drop_console_client(client)
 
 
