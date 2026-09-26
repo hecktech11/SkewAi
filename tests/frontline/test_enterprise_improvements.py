@@ -63,7 +63,7 @@ def test_list_recent_interactions(reset_ops_db):
     ids = [r["interaction_id"] for r in rows]
     assert a in ids and b in ids
     assert "status" in rows[0]
-    assert "case_id" in rows[0] or rows[0].get("case_id") is None or True
+    assert "interaction_id" in rows[0]
 
 
 def test_copilot_new_intents(reset_ops_db):

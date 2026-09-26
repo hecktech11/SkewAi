@@ -161,7 +161,7 @@ def test_14_biometrics(ops):
 def test_15_case_status_module():
     from src.agents.case_status import extract_case_id_from_text, format_case_status_reply
 
-    assert extract_case_id_from_text("my case is CS-1042 please") or True
+    assert extract_case_id_from_text("my case is case_CS1042 please") == "case_CS1042"
     assert callable(format_case_status_reply)
 
 
@@ -304,7 +304,7 @@ def test_32_38_trust(ops):
 
     red = redact_pii("call me at 555-123-4567 or a@b.com")
     assert isinstance(red, (str, dict, tuple))
-    assert consent_preamble() or True
+    assert isinstance(consent_preamble(), str)
     assert dsr and archive and explainability
     req = request_approval(
         "open_investigation",
@@ -455,7 +455,7 @@ async def test_51_drain_rejects_create_interaction(ops, seed_automotive_pack):
 
     DRAIN.reset()
     install_sigterm_handler()
-    assert DRAIN.status()["sigterm_handler_installed"] is True or True  # may fail on some OS
+    assert DRAIN.status()["sigterm_handler_installed"] is True
 
     # Happy path while not draining
     orch, greeting = await create_interaction(channel="web_text", pack_id="automotive_nhtsa")

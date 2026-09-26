@@ -56,14 +56,12 @@ def ops_con(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     When FRONTLINE_OPS_DSN is configured for PostgreSQL (audit 6.1), delegates
     directly to the multi-writer Postgres pool to eliminate lock contention.
     """
-    try:
-        from src.data.postgres_backend import is_production_backend, ops_connection
-        if is_production_backend():
-            with ops_connection(read_only=read_only) as pcon:
-                yield pcon
-            return
-    except Exception:
-        pass
+    from src.data.postgres_backend import is_production_backend, ops_connection
+
+    if is_production_backend():
+        with ops_connection(read_only=read_only) as pcon:
+            yield pcon
+        return
 
     global _ops_initialized
     path = settings.frontline_db_path
@@ -108,9 +106,20 @@ async def ops_in_thread(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T
     return await asyncio.to_thread(fn, *args)
 
 
+_domain_locks: dict[str, threading.RLock] = {}
+_domain_locks_guard = threading.Lock()
+
+
+def _get_pack_lock(pack_id: str) -> threading.RLock:
+    with _domain_locks_guard:
+        if pack_id not in _domain_locks:
+            _domain_locks[pack_id] = threading.RLock()
+        return _domain_locks[pack_id]
+
+
 @contextmanager
 def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPyConnection]:
-    """Yield a read-only connection to a pack's domain warehouse.
+    """Yield a connection to a pack's domain warehouse with coordinated locking.
 
     If the file doesn't exist and read_only=True, raises FileNotFoundError —
     callers should build it first via ``scripts.seed_domains`` /
@@ -125,6 +134,7 @@ def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPy
     if not path.exists():
         # Try the pack's own domain_db override
         from src.domains.loader import load_pack
+
         try:
             pack = load_pack(pack_id)
             path = pack.domain_db_path()
@@ -134,21 +144,34 @@ def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPy
         if read_only:
             raise FileNotFoundError(f"Domain warehouse not found: {path} (build it first)")
         _ensure_parent(path)
-    con = duckdb.connect(str(path), read_only=read_only)
-    try:
-        if not read_only:
-            # Apply the canonical schema (CREATE IF NOT EXISTS).
-            apply_domain_schema(con)
-        yield con
-    finally:
-        con.close()
-        if not read_only:
-            try:
-                from scripts.migrate import stamp_schema_current
 
-                stamp_schema_current(path, target="domain")
-            except Exception:
-                pass
+    pack_lock = _get_pack_lock(pack_id)
+    with pack_lock:
+        con = None
+        for attempt in range(5):
+            try:
+                con = duckdb.connect(str(path), read_only=False)
+                break
+            except Exception as exc:
+                if "Could not set lock on file" in str(exc) and attempt < 4:
+                    time.sleep(0.04 * (2 ** attempt))
+                    continue
+                raise
+        try:
+            if not read_only:
+                # Apply the canonical schema (CREATE IF NOT EXISTS).
+                apply_domain_schema(con)
+            yield con
+        finally:
+            if con is not None:
+                con.close()
+            if not read_only:
+                try:
+                    from scripts.migrate import stamp_schema_current
+
+                    stamp_schema_current(path, target="domain")
+                except Exception:
+                    pass
 
 
 # ── Init helpers (for tests + Makefile) ─────────────────────────────────────

@@ -339,3 +339,297 @@ def test_fresh_volume_schema_convergence(tmp_path):
     ).fetchone()
     assert idx_row is not None
     con.close()
+
+
+# ── N05: Learning review requires approval:decide and uses verified actor ─────
+
+
+def test_learning_review_requires_approval_perm(reset_ops_db, monkeypatch):
+    """POST learning review without approval:decide should be rejected."""
+    from src.api.main import app
+
+    service_key = "test-service-key-32-chars-long!!"
+    session_secret = "test-session-secret-32-chars-long!"
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", service_key)
+    monkeypatch.setenv("SESSION_SECRET", session_secret)
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+
+    # Agent role does NOT have approval:decide
+    agent_sess = issue_session("review_agent", "agent")["token"]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v3/learning/proposals/fake-id/review",
+            json={"status": "approved"},
+            headers={"X-API-Key": service_key},
+            cookies={session_cookie_name(): agent_sess},
+        )
+        # Should be 403 — agent doesn't have approval:decide
+        assert resp.status_code == 403
+
+
+def test_learning_review_uses_verified_actor(reset_ops_db, monkeypatch):
+    """learning_review should use the authenticated actor, not body.reviewed_by."""
+    from unittest.mock import patch
+
+    from src.api.main import app
+
+    service_key = "test-service-key-32-chars-long!!"
+    session_secret = "test-session-secret-32-chars-long!"
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", service_key)
+    monkeypatch.setenv("SESSION_SECRET", session_secret)
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+
+    # Supervisor has approval:decide
+    sup_sess = issue_session("real_reviewer", "supervisor", issuer_role="admin")["token"]
+    captured_args: dict = {}
+
+    def mock_review_proposal(proposal_id, *, status, reviewed_by, review_note):
+        captured_args["reviewed_by"] = reviewed_by
+        return {"proposal_id": proposal_id, "status": status, "reviewed_by": reviewed_by}
+
+    with patch("src.v3.learning.review_proposal", side_effect=mock_review_proposal):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/api/v3/learning/proposals/p-1/review",
+                json={"status": "approved", "reviewed_by": "impersonator"},
+                headers={"X-API-Key": service_key},
+                cookies={session_cookie_name(): sup_sess},
+            )
+            assert resp.status_code == 200
+            # The reviewed_by should be the authenticated actor, NOT "impersonator"
+            assert captured_args["reviewed_by"] == "real_reviewer"
+
+
+# ── N07: Mutable prefix swap guard ───────────────────────────────────────────
+
+
+def test_legacy_xor_rejects_oversized_payload(reset_ops_db):
+    """Tokens with > 48-byte cipher payload are rejected by the XOR decoder."""
+    import base64
+    import secrets
+
+    from src.security.pii import (
+        LEGACY_XOR_PREFIX,
+        PiiIntegrityError,
+        decrypt_subject_pii,
+    )
+
+    SubjectKeyStore.clear()
+    subject = "subj_xor_oversize"
+    SubjectKeyStore.get_or_create_dek(subject)
+
+    # Create a fake legacy token with a 50-byte payload (nonce + cipher > 48)
+    nonce = secrets.token_bytes(12)
+    fake_cipher = secrets.token_bytes(50)  # > 48 threshold
+    payload = nonce + fake_cipher
+    fake_token = LEGACY_XOR_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
+
+    with pytest.raises(PiiIntegrityError, match="prefix swap"):
+        decrypt_subject_pii(subject, fake_token)
+
+
+# ── N08: Legacy XOR token migration script ───────────────────────────────────
+
+
+def test_migrate_legacy_xor_tokens_script(reset_ops_db):
+    """migrate_legacy_xor_tokens.py finds enc:v1: tokens failing AES, converts to enc:x1:, and re-encrypts to AES-GCM."""
+    import base64
+    import hashlib
+    import secrets
+    from scripts.migrate_legacy_xor_tokens import migrate
+    from src.security.pii import TOKEN_PREFIX, SubjectKeyStore, decrypt_subject_pii
+
+    SubjectKeyStore.clear()
+    iid = "int_legacy_mig_1"
+    turn_id = "turn_legacy_mig_1"
+    dek = SubjectKeyStore.get_or_create_dek(iid)
+
+    # Encode plaintext using legacy XOR under enc:v1:
+    plain_text = "legacy.user@example.com"
+    nonce = secrets.token_bytes(12)
+    plain_bytes = plain_text.encode("utf-8")
+    stream_key = hashlib.blake2b(dek, key=nonce, digest_size=len(plain_bytes)).digest()
+    cipher_bytes = bytes(b ^ k for b, k in zip(plain_bytes, stream_key))
+    raw = nonce + cipher_bytes
+    legacy_enc_v1 = TOKEN_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii")
+
+    # Insert into interaction_turns
+    with ops_con() as con:
+        con.execute(
+            """
+            INSERT INTO interactions (interaction_id, pack_id, pack_version, started_at, channel, status)
+            VALUES (?, 'automotive_nhtsa', '1.0', CURRENT_TIMESTAMP, 'web_text', 'active')
+            """,
+            [iid],
+        )
+        con.execute(
+            """
+            INSERT INTO interaction_turns (turn_id, interaction_id, seq, speaker, text, ts)
+            VALUES (?, ?, 1, 'customer', ?, CURRENT_TIMESTAMP)
+            """,
+            [turn_id, iid, legacy_enc_v1],
+        )
+
+    # Run migration
+    stats = migrate(dry_run=False)
+    assert stats["legacy"] >= 1
+    assert stats["migrated"] >= 1
+    assert stats["errors"] == 0
+
+    # Fetch updated token
+    with ops_con() as con:
+        row = con.execute("SELECT text FROM interaction_turns WHERE turn_id = ?", [turn_id]).fetchone()
+    assert row is not None
+    migrated_token = row[0]
+    assert migrated_token.startswith(TOKEN_PREFIX)
+    # Ensure it now decrypts cleanly via AES-GCM
+    decrypted = decrypt_subject_pii(iid, migrated_token)
+    assert decrypted == plain_text
+
+
+# ── N09: DSR delete logs failure when result is not ok ────────────────────────
+
+
+def test_dsr_delete_logs_failure_for_not_ok_result(reset_ops_db, monkeypatch):
+    """When delete_interaction returns ok=False, the API should log failure and return 500."""
+    from unittest.mock import patch
+
+    from src.api.main import app
+
+    service_key = "test-service-key-32-chars-long!!"
+    session_secret = "test-session-secret-32-chars-long!"
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", service_key)
+    monkeypatch.setenv("SESSION_SECRET", session_secret)
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+
+    admin_sess = issue_session("dsr_admin", "admin")["token"]
+    logged_events: list[dict] = []
+
+    def mock_delete(interaction_id, mode="tombstone"):
+        return {"ok": False, "reason": "row not found"}
+
+    def mock_security_event(event, *, outcome="", **kwargs):
+        logged_events.append({"event": event, "outcome": outcome, **kwargs})
+
+    with (
+        patch("src.frontline.dsr.delete_interaction", side_effect=mock_delete),
+        patch("src.security.audit_log.security_event", side_effect=mock_security_event),
+    ):
+        with TestClient(app) as client:
+            resp = client.delete(
+                "/api/frontline/dsr/int_fail_1",
+                params={"mode": "tombstone"},
+                headers={"X-API-Key": service_key},
+                cookies={session_cookie_name(): admin_sess},
+            )
+            # Should be 500 because the deletion wasn't successful
+            assert resp.status_code == 500
+            # The security_event should have been called with outcome="failure"
+            assert any(e["outcome"] == "failure" for e in logged_events), (
+                f"Expected a failure log, got: {logged_events}"
+            )
+
+
+# ── N10: Bootstrap seed decision uses populated flag ─────────────────────────
+
+
+def test_bootstrap_seeds_when_file_exists_but_empty():
+    """bootstrap_actions should trigger seed even when file exists, if it's empty."""
+    from src.data.bootstrap import bootstrap_actions
+
+    # File exists but is not populated (empty DB from migrations)
+    actions = bootstrap_actions(
+        ops_exists=True,
+        automotive_exists=True,
+        finance_exists=True,
+        automotive_populated=False,
+        finance_populated=False,
+        seed_demo=True,
+    )
+    assert "seed-automotive" in actions
+    assert "seed-finance" in actions
+
+
+def test_bootstrap_skips_seed_when_populated():
+    """bootstrap_actions should NOT seed when the DB has data."""
+    from src.data.bootstrap import bootstrap_actions
+
+    actions = bootstrap_actions(
+        ops_exists=True,
+        automotive_exists=True,
+        finance_exists=True,
+        automotive_populated=True,
+        finance_populated=True,
+        seed_demo=True,
+    )
+    assert "seed-automotive" not in actions
+    assert "seed-finance" not in actions
+    assert "init-automotive" in actions
+    assert "init-finance" in actions
+
+
+def test_bootstrap_backward_compat_no_populated_flag():
+    """When populated flags are not supplied, falls back to exists behavior."""
+    from src.data.bootstrap import bootstrap_actions
+
+    actions = bootstrap_actions(
+        ops_exists=True,
+        automotive_exists=False,
+        finance_exists=False,
+        seed_demo=True,
+    )
+    assert "seed-automotive" in actions
+    assert "seed-finance" in actions
+
+
+# ── N11: Job submission security log includes actor ──────────────────────────
+
+
+def test_jobs_enqueue_security_event_includes_actor(reset_ops_db, monkeypatch):
+    """security_event for jobs.enqueue must include actor= from the authenticated principal."""
+    from unittest.mock import patch
+
+    from src.api.main import app
+
+    service_key = "test-service-key-32-chars-long!!"
+    session_secret = "test-session-secret-32-chars-long!"
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", service_key)
+    monkeypatch.setenv("SESSION_SECRET", session_secret)
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+
+    admin_sess = issue_session("job_submitter", "admin")["token"]
+    logged_events: list[dict] = []
+
+    def mock_enqueue(job_type, payload, *, role, principal):
+        return {"job_id": "j-1234", "status": "queued"}
+
+    def mock_security_event(event, *, outcome="", **kwargs):
+        logged_events.append({"event": event, "outcome": outcome, **kwargs})
+
+    with (
+        patch("src.jobs.queue.enqueue", side_effect=mock_enqueue),
+        patch("src.security.audit_log.security_event", side_effect=mock_security_event),
+    ):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/api/frontline/jobs",
+                json={"job_type": "test-job", "payload": {}},
+                headers={"X-API-Key": service_key},
+                cookies={session_cookie_name(): admin_sess},
+            )
+            assert resp.status_code == 200
+            # Check that security_event was called with actor=
+            evt = next((e for e in logged_events if e["event"] == "jobs.enqueue"), None)
+            assert evt is not None, f"No jobs.enqueue event logged: {logged_events}"
+            assert evt.get("actor") == "job_submitter", (
+                f"Expected actor='job_submitter', got actor={evt.get('actor')!r}"
+            )

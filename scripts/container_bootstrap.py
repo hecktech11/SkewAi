@@ -18,6 +18,25 @@ from src.data.bootstrap import bootstrap_actions
 from src.data.warehouse import init_domain_db, init_ops_db
 
 
+def _db_has_rows(path: Path, table: str) -> bool:
+    """Return True if *path* exists, is a valid DuckDB file, and *table* has ≥ 1 row."""
+    if not path.exists():
+        return False
+    try:
+        import duckdb
+
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            result = con.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            return result is not None
+        except Exception:
+            return False
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
 def main() -> int:
     ops = settings.frontline_db_path
     automotive = settings.domain_db_path("automotive_nhtsa")
@@ -27,6 +46,8 @@ def main() -> int:
         ops_exists=ops.exists(),
         automotive_exists=automotive.exists(),
         finance_exists=finance.exists(),
+        automotive_populated=_db_has_rows(automotive, "complaints"),
+        finance_populated=_db_has_rows(finance, "complaints"),
         seed_demo=seed_demo,
     )
     print("→ Container bootstrap:", ", ".join(actions))

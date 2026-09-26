@@ -157,3 +157,43 @@ async def test_no_agent_turn_without_action(orchestrator_factory, reset_ops_db):
     # The greeting was emitted as an agent turn.
     assert n_agent_turns >= 1
     assert n_actions >= n_agent_turns  # every agent turn has a ledger row
+
+
+def test_r08_ledger_replay_handles_ongoing_outage_honestly(tmp_path, monkeypatch, reset_ops_db):
+    """When the DB is down during replay, replay_ledger_wal must not report recovery or clear WAL."""
+    import json
+    from unittest.mock import patch
+
+    from src.ledger.writer import replay_ledger_wal
+
+    wal_file = tmp_path / "ledger_wal.jsonl"
+    monkeypatch.setattr("src.ledger.writer._wal_path", lambda: wal_file)
+
+    # Write a test action to WAL
+    action_data = {
+        "wal_ts": "2026-09-26T12:00:00Z",
+        "action": {
+            "action_id": "act_wal_test_1",
+            "interaction_id": "int_wal_test_1",
+            "action_type": "supervised_safety_raised",
+            "agent": "sentinel",
+            "output_summary": "safety alert",
+        },
+    }
+    wal_file.write_text(json.dumps(action_data) + "\n", encoding="utf-8")
+
+    # Simulate ongoing outage in _record_action_inner
+    with patch("src.ledger.writer._record_action_inner", side_effect=OSError("DB down")):
+        res = replay_ledger_wal()
+        assert res["replayed"] == 0
+        assert res["failed"] == 1
+        assert res["remaining"] == 1
+        assert wal_file.exists()
+        assert "act_wal_test_1" in wal_file.read_text()
+
+    # Now recover (no error)
+    res_ok = replay_ledger_wal()
+    assert res_ok["replayed"] == 1
+    assert res_ok["failed"] == 0
+    assert res_ok["remaining"] == 0
+    assert not wal_file.exists()

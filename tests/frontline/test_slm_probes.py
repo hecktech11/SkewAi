@@ -304,3 +304,26 @@ async def test_task4_live_turn_path_has_zero_remote_llm_calls(pack, monkeypatch)
     assert d0 < 0.10 and d1 < 0.10, f"Turn took too long: {d0:.3f}s / {d1:.3f}s"
     assert r0.get("question"), "Expected slot question prompt"
     assert r1.get("question"), "Expected slot question prompt"
+
+
+def test_r22_category_zeroshot_rejects_over_deadline_prediction(pack):
+    """When inference exceeds timeout_ms, the model result must be rejected."""
+    import time
+    from src.ml_runtime.category_zeroshot import predict_category_zeroshot
+
+    class SlowEmbedder:
+        def embed(self, text):
+            time.sleep(0.02)  # 20ms
+            class FakeEmb:
+                values = [0.1] * 384
+            return FakeEmb()
+
+    res = predict_category_zeroshot(
+        "my brakes failed on highway",
+        pack,
+        embedder=SlowEmbedder(),
+        timeout_ms=1.0,  # 1ms deadline
+    )
+    assert res.category is None
+    assert res.latency_ms > 1.0
+    assert res.extraction_source == "none"

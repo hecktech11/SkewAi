@@ -1535,13 +1535,20 @@ async def dsr_delete(
         raise HTTPException(status_code=400, detail="mode must be 'tombstone' or 'erase'")
     try:
         out = delete_interaction(interaction_id, mode=mode)
+        ok = out.get("ok", True)
         security_event(
             "dsr.delete",
-            outcome="success",
+            outcome="success" if ok else "failure",
             role=role,
             resource=interaction_id,
+            detail=None if ok else {"reason": out.get("reason", "unknown")},
             ip=request.client.host if request.client else None,
         )
+        if not ok:
+            raise HTTPException(
+                status_code=500,
+                detail=out.get("reason", "deletion was not successful"),
+            )
         return out
     except Exception as e:
         security_event(
