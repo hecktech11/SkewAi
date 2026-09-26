@@ -89,6 +89,19 @@ _log = logging.getLogger("skewai.pii")
 #: Prefix of an authenticated (AES-GCM) at-rest token.
 TOKEN_PREFIX = "enc:v1:"
 
+#: Prefix of the pre-AES-GCM blake2b/XOR format. Unauthenticated, so it is
+#: reachable only when a row says so — see ``relabel_legacy_xor_token``.
+LEGACY_XOR_PREFIX = "enc:x1:"
+
+
+class PiiIntegrityError(ValueError):
+    """Stored ciphertext did not authenticate.
+
+    Distinct from a shredded key (KeyError): this is corruption or tampering,
+    and it must surface as an error rather than being silently re-read with a
+    decoder that has no integrity check.
+    """
+
 
 class PiiEncryptionError(RuntimeError):
     """PII could not be encrypted.
@@ -279,31 +292,104 @@ def encrypt_subject_pii(subject_id: str, plaintext: str) -> str:
     aesgcm = AESGCM(dek)
     ciphertext = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
     payload = nonce + ciphertext
-    return "enc:v1:" + base64.urlsafe_b64encode(payload).decode("ascii")
+    return TOKEN_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
 
 
 def decrypt_subject_pii(subject_id: str, token: str) -> str:
-    """Decrypt PII. Raises KeyError if the key has been shredded."""
-    if not token or not token.startswith("enc:v1:"):
+    """Decrypt PII.
+
+    Raises KeyError if the key has been shredded, PiiIntegrityError if the
+    ciphertext does not authenticate. An AES-GCM authentication failure is never
+    retried with the legacy decoder: the two formats used to share the
+    ``enc:v1:`` prefix, so flipping one byte of stored ciphertext downgraded the
+    read to an unauthenticated keystream and returned attacker-influenced text
+    instead of an error (R30). Legacy rows must be relabelled ``enc:x1:`` first.
+    """
+    if not token:
+        return token
+    legacy = token.startswith(LEGACY_XOR_PREFIX)
+    if not legacy and not token.startswith(TOKEN_PREFIX):
         return token
     if not SubjectKeyStore.has_dek(subject_id):
         raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
     dek = SubjectKeyStore.get_or_create_dek(subject_id)
-    raw = base64.urlsafe_b64decode(token[len("enc:v1:"):].encode("ascii"))
+    prefix = LEGACY_XOR_PREFIX if legacy else TOKEN_PREFIX
+    try:
+        raw = base64.urlsafe_b64decode(token[len(prefix):].encode("ascii"))
+    except Exception as exc:
+        raise PiiIntegrityError(
+            f"malformed at-rest PII token for subject {subject_id!r}"
+        ) from exc
     nonce, cipher_bytes = raw[:12], raw[12:]
+    if legacy:
+        return _decode_legacy_xor(dek, nonce, cipher_bytes, subject_id)
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         aesgcm = AESGCM(dek)
-        return aesgcm.decrypt(nonce, cipher_bytes, None).decode("utf-8", errors="replace")
-    except Exception:
-        if len(cipher_bytes) <= 64:
-            stream_key = hashlib.blake2b(dek, key=nonce, digest_size=max(1, len(cipher_bytes))).digest()
-            return bytes(b ^ k for b, k in zip(cipher_bytes, stream_key)).decode("utf-8", errors="replace")
-        raise
+        plain = aesgcm.decrypt(nonce, cipher_bytes, None)
+    except Exception as exc:
+        _log.error(
+            "pii_token_authentication_failed subject=%s bytes=%d: %s",
+            subject_id,
+            len(cipher_bytes),
+            type(exc).__name__,
+        )
+        raise PiiIntegrityError(
+            f"at-rest PII for subject {subject_id!r} failed authentication "
+            f"({type(exc).__name__}); stored ciphertext is corrupt or was modified"
+        ) from exc
+    return plain.decode("utf-8", errors="replace")
+
+
+def _decode_legacy_xor(dek: bytes, nonce: bytes, cipher_bytes: bytes, subject_id: str) -> str:
+    """Decode an ``enc:x1:`` row written before AES-GCM.
+
+    Unauthenticated by construction — there is no tag to check, which is exactly
+    why it is reachable only through its own prefix. Migrate these rows with
+    ``migrate_legacy_xor_token`` and this path goes away.
+    """
+    if len(cipher_bytes) > 64:
+        raise PiiIntegrityError(
+            f"legacy PII token for subject {subject_id!r} exceeds the "
+            "64-byte keystream the legacy format could produce"
+        )
+    _log.warning("pii_legacy_xor_token_read subject=%s (unauthenticated format)", subject_id)
+    stream_key = hashlib.blake2b(
+        dek, key=nonce, digest_size=max(1, len(cipher_bytes))
+    ).digest()
+    return bytes(b ^ k for b, k in zip(cipher_bytes, stream_key)).decode(
+        "utf-8", errors="replace"
+    )
+
+
+def relabel_legacy_xor_token(token: str) -> str:
+    """Tag a pre-AES-GCM token with the format version it actually uses.
+
+    Rows written before AES-GCM carry the same ``enc:v1:`` prefix as
+    authenticated ciphertext, which is why decryption used to fall back to the
+    unauthenticated decoder whenever AES failed. Operators who know a row
+    predates the change relabel it; only ``enc:x1:`` reaches the legacy path.
+    """
+    if token.startswith(LEGACY_XOR_PREFIX):
+        return token
+    if not token.startswith(TOKEN_PREFIX):
+        raise ValueError("not an at-rest PII token")
+    return LEGACY_XOR_PREFIX + token[len(TOKEN_PREFIX):]
+
+
+def migrate_legacy_xor_token(subject_id: str, token: str) -> str:
+    """Re-encrypt an ``enc:x1:`` row as authenticated ``enc:v1:`` ciphertext."""
+    if not token.startswith(LEGACY_XOR_PREFIX):
+        raise ValueError(f"expected a {LEGACY_XOR_PREFIX} token")
+    return encrypt_subject_pii(subject_id, decrypt_subject_pii(subject_id, token))
 
 
 ERASED_TEXT = "[ERASED]"
+#: Read-side marker for ciphertext that exists but does not authenticate. Kept
+#: distinct from ERASED_TEXT so a corruption/tampering incident is never filed
+#: as a completed Art. 17 erasure.
+CORRUPT_TEXT = "[UNREADABLE]"
 
 
 def encrypt_subject_text(subject_id: str, plaintext: str) -> str:
@@ -362,12 +448,31 @@ def store_subject_text(subject_id: str, plaintext: str, *, field: str) -> str:
 
 
 def reveal_subject_text(subject_id: str, text: str | None) -> str:
-    """Decrypt an at-rest enc:v1: payload. Plaintext passes through. Shredded → [ERASED]."""
+    """Decrypt an at-rest token for display. Plaintext passes through.
+
+    Shredded key → ``[ERASED]``. Ciphertext that fails authentication →
+    ``[UNREADABLE]`` plus a security event: a read surface should not raise, but
+    it must not report corruption as a completed erasure either (R30).
+    """
     raw = text or ""
-    if not raw.startswith("enc:v1:"):
+    if not (raw.startswith(TOKEN_PREFIX) or raw.startswith(LEGACY_XOR_PREFIX)):
         return raw
     try:
         return decrypt_subject_pii(subject_id, raw)
+    except PiiIntegrityError as exc:
+        _log.error("pii_reveal_integrity_failure subject=%s: %s", subject_id, exc)
+        try:
+            from src.security.audit_log import security_event
+
+            security_event(
+                "pii.token_integrity_failure",
+                outcome="failure",
+                resource=subject_id,
+                detail={"error": str(exc)},
+            )
+        except Exception:
+            pass
+        return CORRUPT_TEXT
     except Exception:
         return ERASED_TEXT
 
@@ -394,7 +499,9 @@ __all__ = [
     "redact_turns",
     "SubjectKeyStore",
     "PiiEncryptionError",
+    "PiiIntegrityError",
     "TOKEN_PREFIX",
+    "LEGACY_XOR_PREFIX",
     "UNENCRYPTED_PLACEHOLDER",
     "encryption_health",
     "reset_encryption_health",
@@ -403,7 +510,10 @@ __all__ = [
     "encrypt_subject_text",
     "store_subject_text",
     "reveal_subject_text",
+    "relabel_legacy_xor_token",
+    "migrate_legacy_xor_token",
     "decrypt_case_row",
     "decrypt_case_rows",
     "ERASED_TEXT",
+    "CORRUPT_TEXT",
 ]
