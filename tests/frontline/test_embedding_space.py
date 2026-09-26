@@ -107,3 +107,45 @@ def test_zero_padding_preserves_cosine():
     assert compare_embeddings(va, vb) == pytest.approx(native, abs=1e-12)
     assert native_prefix(a512, 384) == a384
     assert abs(math.sqrt(sum(x * x for x in a512)) - 1.0) < 1e-9
+
+
+def test_pack_scoped_idf_isolation_and_version_digest():
+    """R12: pack-scoped IDF fitting does not alter other packs and reflects in version digest."""
+    from src.ml_runtime.embeddings import fit_idf, reset_idf, embed_text, idf_digest
+    from src.ml_runtime.hash_embedder import HashEmbedder
+    from src.ml_runtime.embedding_space import compare_embeddings, EmbeddingVersionMismatch
+
+    reset_idf()
+    try:
+        # Uniform version before fit
+        h_uniform = HashEmbedder()
+        assert idf_digest() == "uniform"
+        assert h_uniform.version == HASH_EMBEDDING_VERSION
+
+        # Fit pack A
+        texts_a = ["brake pedal failure emergency stopping", "antilock brake system hydraulic leak"]
+        fit_idf(texts_a, pack_id="pack_a")
+        h_a = HashEmbedder(pack_id="pack_a")
+        assert h_a.version != HASH_EMBEDDING_VERSION
+        assert f":idf-{idf_digest('pack_a')}" in h_a.version
+
+        # Vector for pack A before pack B is touched
+        vec_a_1 = embed_text("brake pedal failure", pack_id="pack_a")
+
+        # Fit pack B with completely different corpus
+        texts_b = ["credit card dispute billing interest rate charges", "overdraft fee checking account balance"]
+        fit_idf(texts_b, pack_id="pack_b")
+        h_b = HashEmbedder(pack_id="pack_b")
+        assert h_b.version != h_a.version
+
+        # Fitting pack B must not mutate pack A's vector or version
+        vec_a_2 = embed_text("brake pedal failure", pack_id="pack_a")
+        assert vec_a_1 == vec_a_2
+
+        # Comparing embeddings across pack A and pack B raises EmbeddingVersionMismatch
+        emb_a = h_a.embed("brake pedal failure")
+        emb_b = h_b.embed("credit card dispute")
+        with pytest.raises(EmbeddingVersionMismatch):
+            compare_embeddings(emb_a, emb_b)
+    finally:
+        reset_idf()

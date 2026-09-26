@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 PACK_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
-TOKEN_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,95}$")
+TOKEN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")
 MAX_PACK_ID_LEN = 64
 MAX_TOKEN_ID_LEN = 96
 MAX_CLUSTER_ID = 10_000_000

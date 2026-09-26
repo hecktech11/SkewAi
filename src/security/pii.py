@@ -190,109 +190,127 @@ class SubjectKeyStore:
     Keys are persisted across restarts and replicas in DuckDB ops warehouse.
     """
     _keys: dict[str, bytes] = {}
+    _shredded: set[str] = set()
+    _lock = threading.RLock()
 
     @classmethod
     def get_or_create_dek(cls, subject_id: str) -> bytes:
-        if subject_id in cls._keys:
-            return cls._keys[subject_id]
-        from src.data.timeutil import utc_now
-        from src.data.warehouse import ops_con
+        with cls._lock:
+            if subject_id in cls._shredded:
+                raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
+            if subject_id in cls._keys:
+                return cls._keys[subject_id]
+            from src.data.timeutil import utc_now
+            from src.data.warehouse import ops_con
 
-        with ops_con() as con:
-            _ensure_dek_table(con)
-            row = con.execute(
-                "SELECT dek_hex, shredded FROM subject_deks WHERE subject_id = ?",
-                [subject_id],
-            ).fetchone()
-            if row:
-                dek_hex, shredded = row
-                if shredded:
-                    raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
-                dek = bytes.fromhex(dek_hex)
-                cls._keys[subject_id] = dek
-                return dek
-            new_key = secrets.token_bytes(32)
-            con.execute(
-                """
-                INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded)
-                VALUES (?, ?, ?, FALSE)
-                """,
-                [subject_id, new_key.hex(), utc_now().replace(tzinfo=None)],
-            )
-            cls._keys[subject_id] = new_key
-            return new_key
+            with ops_con() as con:
+                _ensure_dek_table(con)
+                row = con.execute(
+                    "SELECT dek_hex, shredded FROM subject_deks WHERE subject_id = ?",
+                    [subject_id],
+                ).fetchone()
+                if row:
+                    dek_hex, shredded = row
+                    if shredded:
+                        cls._shredded.add(subject_id)
+                        cls._keys.pop(subject_id, None)
+                        raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
+                    dek = bytes.fromhex(dek_hex)
+                    cls._keys[subject_id] = dek
+                    return dek
+                new_key = secrets.token_bytes(32)
+                con.execute(
+                    """
+                    INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded)
+                    VALUES (?, ?, ?, FALSE)
+                    """,
+                    [subject_id, new_key.hex(), utc_now().replace(tzinfo=None)],
+                )
+                cls._keys[subject_id] = new_key
+                return new_key
 
     @classmethod
     def shred_dek(cls, subject_id: str) -> bool:
         """Permanently erase the subject's encryption key (GDPR Art. 17)."""
-        cls._keys.pop(subject_id, None)
-        from src.data.timeutil import utc_now
-        from src.data.warehouse import ops_con
+        with cls._lock:
+            cls._shredded.add(subject_id)
+            cls._keys.pop(subject_id, None)
+            from src.data.timeutil import utc_now
+            from src.data.warehouse import ops_con
 
-        with ops_con() as con:
-            _ensure_dek_table(con)
-            now = utc_now().replace(tzinfo=None)
-            row = con.execute(
-                "SELECT shredded FROM subject_deks WHERE subject_id = ?",
-                [subject_id],
-            ).fetchone()
-            if row:
-                if not row[0]:
-                    con.execute(
-                        "UPDATE subject_deks SET dek_hex = '', shredded = TRUE, shredded_at = ? WHERE subject_id = ?",
-                        [now, subject_id],
-                    )
-                    return True
-                return False
-            # If subject_id exists in interactions table, record shredding tombstones
-            try:
-                int_row = con.execute(
-                    "SELECT 1 FROM interactions WHERE interaction_id = ?",
+            with ops_con() as con:
+                _ensure_dek_table(con)
+                now = utc_now().replace(tzinfo=None)
+                row = con.execute(
+                    "SELECT shredded FROM subject_deks WHERE subject_id = ?",
                     [subject_id],
                 ).fetchone()
-                if int_row:
-                    con.execute(
-                        """
-                        INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded, shredded_at)
-                        VALUES (?, '', ?, TRUE, ?)
-                        """,
-                        [subject_id, now, now],
-                    )
-                    return True
+                if row:
+                    if not row[0]:
+                        con.execute(
+                            "UPDATE subject_deks SET dek_hex = '', shredded = TRUE, shredded_at = ? WHERE subject_id = ?",
+                            [now, subject_id],
+                        )
+                        return True
+                    return False
+                # If subject_id exists in interactions table, record shredding tombstones
+                try:
+                    int_row = con.execute(
+                        "SELECT 1 FROM interactions WHERE interaction_id = ?",
+                        [subject_id],
+                    ).fetchone()
+                    if int_row:
+                        con.execute(
+                            """
+                            INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded, shredded_at)
+                            VALUES (?, '', ?, TRUE, ?)
+                            """,
+                            [subject_id, now, now],
+                        )
+                        return True
+                except Exception:
+                    pass
+                return False
+
+    @classmethod
+    def has_dek(cls, subject_id: str) -> bool:
+        with cls._lock:
+            if subject_id in cls._shredded:
+                return False
+            if subject_id in cls._keys:
+                return True
+            try:
+                from src.data.warehouse import ops_con
+
+                with ops_con(read_only=True) as con:
+                    _ensure_dek_table(con)
+                    row = con.execute(
+                        "SELECT shredded FROM subject_deks WHERE subject_id = ?",
+                        [subject_id],
+                    ).fetchone()
+                    if row:
+                        if row[0]:
+                            cls._shredded.add(subject_id)
+                            cls._keys.pop(subject_id, None)
+                            return False
+                        return True
             except Exception:
                 pass
             return False
 
     @classmethod
-    def has_dek(cls, subject_id: str) -> bool:
-        if subject_id in cls._keys:
-            return True
-        try:
-            from src.data.warehouse import ops_con
-
-            with ops_con(read_only=True) as con:
-                _ensure_dek_table(con)
-                row = con.execute(
-                    "SELECT shredded FROM subject_deks WHERE subject_id = ?",
-                    [subject_id],
-                ).fetchone()
-                if row and not row[0]:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    @classmethod
     def clear(cls) -> None:
-        cls._keys.clear()
-        try:
-            from src.data.warehouse import ops_con
+        with cls._lock:
+            cls._keys.clear()
+            cls._shredded.clear()
+            try:
+                from src.data.warehouse import ops_con
 
-            with ops_con() as con:
-                _ensure_dek_table(con)
-                con.execute("DELETE FROM subject_deks")
-        except Exception:
-            pass
+                with ops_con() as con:
+                    _ensure_dek_table(con)
+                    con.execute("DELETE FROM subject_deks")
+            except Exception:
+                pass
 
 
 def encrypt_subject_pii(subject_id: str, plaintext: str) -> str:
@@ -362,11 +380,31 @@ def _decode_legacy_xor(dek: bytes, nonce: bytes, cipher_bytes: bytes, subject_id
     Unauthenticated by construction — there is no tag to check, which is exactly
     why it is reachable only through its own prefix. Migrate these rows with
     ``migrate_legacy_xor_token`` and this path goes away.
+
+    Guard: the legacy XOR format stored only short identifiers (≤ 64 bytes) with
+    no authentication tag. AES-GCM ciphertext always contains a 16-byte GCM tag
+    appended to the plaintext bytes. If the cipher payload after the nonce is
+    longer than the legacy maximum, it is almost certainly an AES-GCM payload
+    whose prefix was mutated from ``enc:v1:`` to ``enc:x1:`` — reject it.
     """
+    # Legacy XOR never produced ciphertext longer than the plaintext itself
+    # (no authentication tag), and plaintext was limited to short identifiers.
     if len(cipher_bytes) > 64:
         raise PiiIntegrityError(
             f"legacy PII token for subject {subject_id!r} exceeds the "
             "64-byte keystream the legacy format could produce"
+        )
+    # AES-GCM tag is 16 bytes — any ciphertext that is long enough to
+    # contain meaningful plaintext + a 16-byte tag is suspicious.  The
+    # absolute minimum AES-GCM output for a 1-byte plaintext is 17 bytes.
+    # Legacy XOR tokens for real-world identifiers (phone, email) are
+    # typically ≤ 40 bytes.  We accept up to 48 bytes to give headroom
+    # but reject anything above that as a potential prefix-swap attack.
+    _MAX_LEGACY_PAYLOAD = 48
+    if len(cipher_bytes) > _MAX_LEGACY_PAYLOAD:
+        raise PiiIntegrityError(
+            f"legacy PII token for subject {subject_id!r} has {len(cipher_bytes)}-byte "
+            f"payload (max {_MAX_LEGACY_PAYLOAD}); possible enc:v1: → enc:x1: prefix swap"
         )
     _log.warning("pii_legacy_xor_token_read subject=%s (unauthenticated format)", subject_id)
     stream_key = hashlib.blake2b(

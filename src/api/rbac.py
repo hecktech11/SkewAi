@@ -94,6 +94,8 @@ PERMS: dict[str, frozenset[str]] = {
             "biometrics:match",
             "routing:control",
             "ops:read",
+            "ledger:read",
+            "audit:read",
         }
     ),
     "auditor": frozenset({"case:read", "audit:read", "ledger:read", "dsr:export", "ops:read"}),
@@ -445,6 +447,15 @@ def require_perm(role: str, perm: str, *, open_mode_ok: bool = False) -> None:
     raise HTTPException(status_code=403, detail=f"role {role} lacks {perm}")
 
 
+def has_perm(role: str, perm: str, *, open_mode_ok: bool = False) -> bool:
+    """Return True if *role* is granted *perm*, False otherwise."""
+    try:
+        require_perm(role, perm, open_mode_ok=open_mode_ok)
+        return True
+    except HTTPException:
+        return False
+
+
 def require_perm_dep(perm: str, *, open_mode_ok: bool = False):
     """FastAPI dependency that resolves the role and enforces *perm*."""
 
@@ -497,6 +508,15 @@ def role_from_websocket(websocket: Any) -> str:
     without it, a validated DSR key fell through to the shared service
     principal, which carries the ``takeover`` permission (R04).
     """
+    try:
+        from src.api.auth import ws_principal
+
+        p = ws_principal(websocket)
+        if p is not None and p.credential == "session" and p.role:
+            return p.role
+    except Exception:
+        pass
+
     session = ""
     try:
         session = (websocket.headers.get("x-frontline-session") or "").strip()

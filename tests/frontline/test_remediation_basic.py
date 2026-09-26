@@ -354,7 +354,7 @@ def test_item50_key_permissions_and_rotation(tmp_path):
     priv, pub = generate_keypair(d)
     mode = stat.S_IMODE(os.stat(priv).st_mode)
     assert mode == 0o600, f"private key must be created 0600, got {oct(mode)}"
-    assert locker_key_permission_problems() == [] or True  # repo-tree check only
+    assert locker_key_permission_problems() == []
 
     # Rotation keeps 0600 + grace copy, refuses weak values.
     first = rotate_file_secret(d, "FRONTLINE_API_KEY", "x" * 40)

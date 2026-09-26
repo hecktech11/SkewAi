@@ -30,6 +30,40 @@ def _ts(val: Any) -> float:
         return 0.0
 
 
+class PopulationIndex:
+    """Pre-indexed support counts for O(1) lift calculations."""
+
+    def __init__(self, population: Sequence[dict[str, Any]]) -> None:
+        self.rows = list(population)
+        self.n = len(self.rows) or 1
+        self.n_cat: dict[str, int] = {}
+        self.n_ent: dict[str, int] = {}
+        self.n_both: dict[tuple[str, str], int] = {}
+        for row in self.rows:
+            cat = _norm(row.get("category"))
+            ent = _norm(row.get("entity_2"))
+            if cat:
+                self.n_cat[cat] = self.n_cat.get(cat, 0) + 1
+            if ent:
+                self.n_ent[ent] = self.n_ent.get(ent, 0) + 1
+            if cat and ent:
+                self.n_both[(cat, ent)] = self.n_both.get((cat, ent), 0) + 1
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def get_counts(self, c_cat: str, c_ent: str) -> tuple[int, int, int, int]:
+        return (
+            self.n,
+            self.n_both.get((c_cat, c_ent), 0),
+            self.n_cat.get(c_cat, 0),
+            self.n_ent.get(c_ent, 0),
+        )
+
+
 def lift_for_pair(
     query: dict[str, Any],
     candidate: dict[str, Any],
@@ -53,16 +87,19 @@ def lift_for_pair(
         return 0.0
     if q_ent and c_ent != q_ent:
         return 0.0
-    n = len(population) or 1
-    n_both = n_cat = n_ent = 0
-    for row in population:
-        cat, ent = _norm(row.get("category")), _norm(row.get("entity_2"))
-        if cat == c_cat:
-            n_cat += 1
-        if ent == c_ent:
-            n_ent += 1
-        if cat == c_cat and ent == c_ent:
-            n_both += 1
+    if isinstance(population, PopulationIndex):
+        n, n_both, n_cat, n_ent = population.get_counts(c_cat, c_ent)
+    else:
+        n = len(population) or 1
+        n_both = n_cat = n_ent = 0
+        for row in population:
+            cat, ent = _norm(row.get("category")), _norm(row.get("entity_2"))
+            if cat == c_cat:
+                n_cat += 1
+            if ent == c_ent:
+                n_ent += 1
+            if cat == c_cat and ent == c_ent:
+                n_both += 1
     p_both = n_both / n
     p_cat = n_cat / n
     p_ent = n_ent / n
@@ -145,7 +182,8 @@ def rank_by_association(
     marked ``assoc_population='candidates-fallback'`` (vs ``'full-corpus'``)
     so candidate-side lift can never masquerade as corpus lift.
     """
-    pop = list(population) if population is not None else list(candidates)
+    raw_pop = list(population) if population is not None else list(candidates)
+    pop = PopulationIndex(raw_pop)
     pop_source = "full-corpus" if population is not None else "candidates-fallback"
     qid = _norm(query.get(id_key) or query.get("interaction_id"))
     scored: list[tuple[float, float, dict[str, Any]]] = []

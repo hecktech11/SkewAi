@@ -309,3 +309,62 @@ def test_v1_erased_cannot_hide_content_tamper():
     row1["input_summary"] = "attacker rewrite"
     res = verify_chain([row0, row1], allow_partial=True)
     assert res["ok"] is False
+
+
+def test_r09_tampered_metadata_on_erased_row_fails(reset_ops_db):
+    """Setting erased=True and editing non-erasable metadata must fail verification."""
+    iid = "int_r09_meta_tamper"
+    record_action(
+        AgentAction(
+            interaction_id=iid,
+            agent="orchestrator",
+            action_type="state_transition",
+            input_summary="customer info",
+            output_summary="greeting emitted",
+        )
+    )
+    rows = list_actions(iid)
+    assert len(rows) == 1
+    # Legitimate erasure passes
+    erased_row = copy.deepcopy(rows[0])
+    erased_row["erased"] = True
+    erased_row["input_summary"] = "[ERASED 2026-09-26 per erasure request]"
+    erased_row["output_summary"] = "[ERASED 2026-09-26 per erasure request]"
+    res = verify_chain([erased_row], allow_partial=True)
+    assert res["ok"] is True
+
+    # Tampering with agent on erased row fails
+    tampered_agent = copy.deepcopy(erased_row)
+    tampered_agent["agent"] = "rogue_agent"
+    res_agent = verify_chain([tampered_agent], allow_partial=True)
+    assert res_agent["ok"] is False
+    assert res_agent["error"] == "metadata_commitment_mismatch"
+
+    # Tampering with action_type on erased row fails
+    tampered_type = copy.deepcopy(erased_row)
+    tampered_type["action_type"] = "unauthorized_export"
+    res_type = verify_chain([tampered_type], allow_partial=True)
+    assert res_type["ok"] is False
+    assert res_type["error"] == "metadata_commitment_mismatch"
+
+
+def test_r09_forged_erased_flag_on_content_fails(reset_ops_db):
+    """Setting erased=True without exact tombstone shape must fail verification."""
+    iid = "int_r09_content_tamper"
+    record_action(
+        AgentAction(
+            interaction_id=iid,
+            agent="orchestrator",
+            action_type="state_transition",
+            input_summary="customer info",
+            output_summary="greeting emitted",
+        )
+    )
+    rows = list_actions(iid)
+    # Attacker keeps content_hash and row_hash, changes output_summary, sets erased=True
+    tampered = copy.deepcopy(rows[0])
+    tampered["output_summary"] = "attacker forged output summary"
+    tampered["erased"] = True
+    res = verify_chain([tampered], allow_partial=True)
+    assert res["ok"] is False
+    assert res["error"] == "invalid_tombstone_shape"

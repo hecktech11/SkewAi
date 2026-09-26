@@ -95,3 +95,29 @@ def test_iter_mapped_rows_skips_empty_text(tmp_path):
     )
     rows = list(iter_mapped_rows(csv_path, mapping))
     assert [r["record_id"] for r in rows] == ["KEEP"]
+
+
+def test_missing_mapped_headers_not_converted_to_fabricated_constants():
+    """R24: Missing column references resolve to empty string rather than literal column names."""
+    mapping = {"record_id": "CMPLID", "text": "CDESC", "source": "NHTSA", "received_at": "DATEA"}
+    bad_row = {"unrelated_col": "some_value", "other_col": "123"}
+    res = map_row(bad_row, mapping)
+    assert res is None
+
+
+def test_parse_ts_converts_timezone_offsets_to_utc():
+    """R27: Ingestion converts timezone offsets to UTC without stripping local wall time."""
+    from datetime import datetime
+    from src.domains.mapping_ingest import _parse_ts
+
+    dt = _parse_ts("2024-01-01T00:30:00+05:30")
+    assert dt == datetime(2023, 12, 31, 19, 0, 0)
+
+    dt2 = _parse_ts("2024-01-01 00:30:00+05:30")
+    assert dt2 == datetime(2023, 12, 31, 19, 0, 0)
+
+    dt3 = _parse_ts("2024-01-01T20:00:00-05:00")
+    assert dt3 == datetime(2024, 1, 2, 1, 0, 0)
+
+    dt4 = _parse_ts("2024-01-01T15:00:00Z")
+    assert dt4 == datetime(2024, 1, 1, 15, 0, 0)

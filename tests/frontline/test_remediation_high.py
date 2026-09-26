@@ -74,7 +74,7 @@ def test_item12_oidc_config_needs_admin(reset_ops_db, seed_automotive_pack, monk
             headers={"X-API-Key": key, "X-Frontline-Session": admin},
         )
         assert r2.status_code in (200, 400), r2.text[:200]
-        assert r2.status_code != 403 or True  # auth passed if not 403-for-role
+        assert r2.status_code != 403  # auth passed if not 403-for-role
 
 
 def test_item12_oidc_config_malformed_payload_admin(reset_ops_db, seed_automotive_pack, monkeypatch):
@@ -422,6 +422,65 @@ def test_item18_idempotent_enqueue_and_completion(reset_ops_db):
     # Duplicate completion returns the stored result, no double-apply.
     dup = _finish(a["job_id"], "w9", ok=True, result={"ok": True})
     assert dup.get("duplicate_completion") is True
+
+
+def test_r19_lease_heartbeat_prevents_duplicate_execution(reset_ops_db):
+    """A long-running job with lease_s=1 must renew its lease via heartbeat so worker 2 cannot claim it."""
+    import time
+    from src.jobs.queue import enqueue, register_handler, run_next
+
+    side_effects = []
+
+    def slow_handler(payload):
+        side_effects.append("started")
+        time.sleep(1.2)  # longer than lease_s=1
+        side_effects.append("finished")
+        return {"ok": True}
+
+    register_handler("test_slow_job", slow_handler)
+
+    try:
+        j = enqueue("test_slow_job", {})
+        # Worker 1 runs in a thread
+        import threading
+        w1_result = []
+
+        t1 = threading.Thread(target=lambda: w1_result.append(run_next(worker_id="w1", lease_s=1)))
+        t1.start()
+
+        # While worker 1 is executing (after 0.5s, half the lease):
+        time.sleep(0.5)
+        # Worker 2 attempts to claim
+        w2_res = run_next(worker_id="w2", lease_s=1)
+        assert w2_res is None, "Worker 2 must NOT steal the job while worker 1 is alive and heartbeating"
+
+        t1.join(timeout=3.0)
+        assert len(w1_result) == 1 and w1_result[0]["status"] == "done"
+        assert side_effects == ["started", "finished"]
+    finally:
+        from src.jobs.queue import _HANDLERS
+        _HANDLERS.pop("test_slow_job", None)
+
+
+def test_r20_failed_job_result_not_marked_done(reset_ops_db):
+    """When a job handler returns ok=False or success=False, run_next must not mark it done."""
+    from src.jobs.queue import enqueue, register_handler, run_next
+
+    def failing_handler(payload):
+        return {"ok": False, "error": "CSV file does not exist", "terminal": True}
+
+    register_handler("test_fail_job", failing_handler)
+
+    try:
+        j = enqueue("test_fail_job", {})
+        res = run_next(worker_id="w_fail")
+        assert res is not None
+        assert res["status"] == "failed"
+        assert "CSV file does not exist" in str(res.get("error"))
+    finally:
+        from src.jobs.queue import _HANDLERS
+        _HANDLERS.pop("test_fail_job", None)
+
 
 
 # ── ITEM 19: cookies ─────────────────────────────────────────────────────────

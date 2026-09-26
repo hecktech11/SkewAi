@@ -347,6 +347,28 @@ def run_next(
         return _finish(jid, owner, ok=False, error=denial, terminal=True)
     payload = json.loads(payload_raw or "{}")
     fn = _HANDLERS.get(jtype)
+
+    import threading
+
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        interval = max(0.1, min(float(lease_s) / 3.0, 5.0))
+        while not stop_heartbeat.wait(interval):
+            try:
+                new_expiry = utc_now() + timedelta(seconds=max(1, int(lease_s)))
+                with ops_con() as c:
+                    c.execute(
+                        "UPDATE job_queue SET lease_expires = ? "
+                        "WHERE job_id = ? AND status = 'running' AND lease_owner = ?",
+                        [new_expiry, jid, owner],
+                    )
+            except Exception:
+                pass
+
+    hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+    hb_thread.start()
+
     try:
         from src.observability.otel import start_span as _span
 
@@ -356,9 +378,25 @@ def run_next(
                 result = _default_handler(jtype, payload)
             else:
                 result = fn(payload)
+
+        is_failure = False
+        err_msg = None
+        if isinstance(result, dict):
+            if result.get("ok") is False:
+                is_failure = True
+                err_msg = result.get("error") or "handler returned ok=False"
+            elif result.get("success") is False:
+                is_failure = True
+                err_msg = result.get("error") or "handler returned success=False"
+
+        if is_failure:
+            return _finish(jid, owner, ok=False, error=RuntimeError(err_msg), result=result)
         return _finish(jid, owner, ok=True, result=result)
     except Exception as e:
         return _finish(jid, owner, ok=False, error=e)
+    finally:
+        stop_heartbeat.set()
+        hb_thread.join(timeout=1.0)
 
 
 def _authorization_denial(
@@ -453,25 +491,30 @@ def _finish(
             )
             return {"job_id": jid, "status": "done", "result": result}
         n = attempts
+        res_json = (
+            json.dumps(result if isinstance(result, dict) else {"result": result})
+            if result is not None
+            else None
+        )
         if terminal or n >= MAX_ATTEMPTS:
             con.execute(
                 """
-                UPDATE job_queue SET status='failed', finished_at=?, error=?,
+                UPDATE job_queue SET status='failed', finished_at=?, error=?, result_json=?,
                     lease_owner=NULL, lease_expires=NULL
                 WHERE job_id=? AND status='running' AND lease_owner=?
                 """,
-                [now, f"{error}\n{traceback.format_exc()[-500:]}", jid, owner],
+                [now, f"{error}\n{traceback.format_exc()[-500:]}", res_json, jid, owner],
             )
         else:
             con.execute(
                 """
-                UPDATE job_queue SET status='pending', finished_at=NULL, error=?,
+                UPDATE job_queue SET status='pending', finished_at=NULL, error=?, result_json=?,
                     lease_owner=NULL, lease_expires=NULL, started_at=NULL
                 WHERE job_id=? AND status='running' AND lease_owner=?
                 """,
-                [f"retry {n}/{MAX_ATTEMPTS}: {error}", jid, owner],
+                [f"retry {n}/{MAX_ATTEMPTS}: {error}", res_json, jid, owner],
             )
-        return {"job_id": jid, "status": "failed", "error": str(error)}
+        return {"job_id": jid, "status": "failed", "error": str(error), "result": result}
 
 
 def _default_handler(jtype: str, payload: dict[str, Any]) -> dict[str, Any]:

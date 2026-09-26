@@ -453,6 +453,52 @@ def test_prune_ops_tables_deletes_aged_rows(reset_ops_db):
     assert "new:key" in keys
 
 
+def test_r18_prune_never_deletes_agent_actions_and_aligns_retention(reset_ops_db):
+    """Pruning must never hard delete agent_actions rows, and respect turns retention."""
+    from src.data.prune import prune_ops_tables
+    from src.ledger.writer import AgentAction, record_action
+
+    # Create an old agent action (100 days old)
+    old_ts = utc_now() - timedelta(days=100)
+    act = AgentAction(
+        interaction_id="int_prune_test",
+        agent="orchestrator",
+        action_type="state_transition",
+        input_summary="in",
+        output_summary="out",
+        ts=old_ts,
+    )
+    record_action(act)
+
+    # Create an old interaction turn (100 days old) and a recent one (45 days old)
+    with ops_con() as con:
+        con.execute(
+            "INSERT INTO interaction_turns (turn_id, interaction_id, seq, speaker, text, ts) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["turn_old", "int_prune_test", 1, "customer", "old complaint", old_ts],
+        )
+        con.execute(
+            "INSERT INTO interaction_turns (turn_id, interaction_id, seq, speaker, text, ts) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["turn_mid", "int_prune_test", 2, "customer", "mid complaint", utc_now() - timedelta(days=45)],
+        )
+
+    # Prune with default policy (turns = 90 days, agent_actions never deleted)
+    result = prune_ops_tables(now=utc_now())
+    assert "agent_actions" not in result["deleted"]
+
+    with ops_con(read_only=True) as con:
+        # agent_actions must survive
+        act_count = con.execute("SELECT COUNT(*) FROM agent_actions WHERE interaction_id = ?", ["int_prune_test"]).fetchone()[0]
+        assert act_count >= 1
+
+        # turns older than 90d must be deleted, turns under 90d must survive
+        turns = [r[0] for r in con.execute("SELECT turn_id FROM interaction_turns WHERE interaction_id = ?", ["int_prune_test"]).fetchall()]
+        assert "turn_old" not in turns
+        assert "turn_mid" in turns
+
+
+
 # ── Rollback safety ──────────────────────────────────────────────────────────
 
 

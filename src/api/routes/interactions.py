@@ -33,7 +33,14 @@ from src.agents.orchestrator import (
 from src.api.auth import authenticate_websocket, require_api_key
 from src.api.frontline_gate import frontline_enabled
 from src.api.limiter import limiter
-from src.api.rbac import get_actor, get_role, require_perm, require_perm_dep, role_from_websocket
+from src.api.rbac import (
+    get_actor,
+    get_role,
+    has_perm,
+    require_perm,
+    require_perm_dep,
+    role_from_websocket,
+)
 from src.channels.web_voice import WebVoiceChannel
 from src.data.warehouse import ops_con, ops_in_thread
 
@@ -1038,12 +1045,21 @@ _console_sub_lock = asyncio.Lock()
 
 async def _broadcast_console(msg: dict[str, Any]) -> None:
     """Push a frame to every live Live Console WebSocket (H6)."""
+    from src.security.pii import redact_dict
+
     dead: list[WebSocket] = []
     async with _console_sub_lock:
         subs = list(_console_subscribers)
+    redacted_msg: dict[str, Any] | None = None
     for ws in subs:
         try:
-            await ws.send_json(msg)
+            ws_role = role_from_websocket(ws)
+            if has_perm(ws_role, "dsr:export"):
+                await ws.send_json(msg)
+            else:
+                if redacted_msg is None:
+                    redacted_msg = redact_dict(msg)
+                await ws.send_json(redacted_msg)
         except Exception:
             dead.append(ws)
     if dead:
@@ -1521,10 +1537,23 @@ async def console_ws(websocket: WebSocket) -> None:
             pass
         return
 
+    role = role_from_websocket(websocket)
+    try:
+        require_perm(role, "case:read", open_mode_ok=True)
+    except HTTPException:
+        try:
+            if websocket.client_state.name != "CONNECTED":
+                await websocket.accept()
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
     async with _console_sub_lock:
         _console_subscribers.add(websocket)
+    can_export = has_perm(role, "dsr:export")
     # Look back so a console that connects mid-call still sees recent activity
     # (and so tests that ledger-then-connect are not deadlocked waiting forever).
     last_ts: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -1540,7 +1569,12 @@ async def console_ws(websocket: WebSocket) -> None:
                     last_ts = raw_ts
                     last_action_id = str(r.get("action_id") or "")
                 # C1: never pass raw datetime into send_json (kills the socket).
-                await websocket.send_json(activity_frame_from_row(r))
+                from src.security.pii import redact_dict
+
+                frame = activity_frame_from_row(r)
+                if not can_export:
+                    frame = redact_dict(frame)
+                await websocket.send_json(frame)
 
             try:
                 msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.5)

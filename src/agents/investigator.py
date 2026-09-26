@@ -13,6 +13,7 @@ two-sentence console narration (citation-verified).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -173,6 +174,9 @@ class InvestigatorAgent(Agent):
     name = "investigator"
 
     async def run(self, **kwargs: Any) -> dict[str, Any]:
+        return await asyncio.to_thread(self._run_sync, **kwargs)
+
+    def _run_sync(self, **kwargs: Any) -> dict[str, Any]:
         ctx = self.ctx
         try:
             from src.ops.pilot import agent_enabled
@@ -607,7 +611,6 @@ class InvestigatorAgent(Agent):
             cluster_count = cd.get("record_count", 0) or 0
             tt = cd.get("top_terms")
             if isinstance(tt, str):
-                import json
                 try:
                     cluster_top_terms = json.loads(tt)
                 except json.JSONDecodeError:
