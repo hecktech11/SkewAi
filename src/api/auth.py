@@ -27,9 +27,38 @@ from __future__ import annotations
 
 import os
 import secrets
+from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Header, HTTPException, Query, Request, WebSocket, status
+
+#: Attribute name used to carry a verified principal on a connection's state.
+PRINCIPAL_ATTR = "frontline_principal"
+
+
+@dataclass(frozen=True)
+class Principal:
+    """The credential authentication actually verified.
+
+    Authorization must decide from this, not from "authentication is enabled,
+    therefore service" — that inference silently promoted a DSR credential to
+    the service role, which carries the contact-takeover permission (R04).
+    """
+
+    credential: str  # "open" | "service" | "dsr"
+    api_key: str = ""
+
+    @property
+    def role(self) -> str | None:
+        """Role implied by the credential alone (a signed session overrides it)."""
+        if self.credential == "dsr":
+            return "dsr_officer"
+        if self.credential == "service":
+            return "service"
+        return None
+
+
+OPEN_PRINCIPAL = Principal(credential="open")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -98,15 +127,18 @@ def check_api_key(
     api_key: Optional[str] = None,
     allow_open: bool = True,
     allow_query_key: bool = True,
-) -> None:
+) -> Principal:
     """Raise 401 when auth is required and the provided key does not match.
+
+    Returns the verified :class:`Principal` so callers can authorize the
+    credential that actually matched instead of guessing at one.
 
     ``allow_open=False`` forces a configured key even when open mode is on
     (privacy-sensitive routes: DSR, etc.).
     ``allow_query_key=False`` rejects query-string keys (FIND-006 harden path).
     """
     if allow_open and is_open_mode():
-        return
+        return OPEN_PRINCIPAL
     expected = _configured_key()
     dsr_expected = _configured_dsr_key()
     if not expected and not dsr_expected:
@@ -137,6 +169,10 @@ def check_api_key(
             detail="Invalid or missing API key. Send X-API-Key or Authorization: Bearer.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # A key configured as both is the service key: never widen a credential.
+    return Principal(
+        credential="service" if matches_service else "dsr", api_key=provided
+    )
 
 
 async def require_api_key(
@@ -237,7 +273,27 @@ async def require_ws_api_key(
     return True
 
 
-async def authenticate_websocket(websocket: WebSocket) -> None:
+def store_ws_principal(websocket: WebSocket, principal: Principal) -> Principal:
+    """Attach the verified principal to the connection for later authorization."""
+    try:
+        setattr(websocket.state, PRINCIPAL_ATTR, principal)
+    except Exception:
+        # Some transports/test doubles have no mutable state; role resolution
+        # falls back to the handshake headers in that case.
+        pass
+    return principal
+
+
+def ws_principal(websocket: WebSocket) -> Principal | None:
+    """Verified principal stored by ``authenticate_websocket``, if any."""
+    try:
+        value = getattr(websocket.state, PRINCIPAL_ATTR, None)
+    except Exception:
+        return None
+    return value if isinstance(value, Principal) else None
+
+
+async def authenticate_websocket(websocket: WebSocket) -> Principal:
     """Authenticate a WebSocket before or immediately after accept.
 
     Order:
@@ -249,29 +305,35 @@ async def authenticate_websocket(websocket: WebSocket) -> None:
     ``FRONTLINE_ALLOW_QUERY_KEY=1`` (mirrors HTTP ``require_api_key``) so
     hardened deploys don't leak keys via logs/proxy history.
 
+    Returns the verified principal and stores it on ``websocket.state`` so
+    every later authorization decision uses the credential that was actually
+    validated — the first-frame key never appears in the handshake headers,
+    so it would otherwise be lost (R04).
+
     Raises HTTPException on failure (caller should close with 1008).
     """
     if is_open_mode():
-        return
+        return store_ws_principal(websocket, OPEN_PRINCIPAL)
 
     allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
     q = websocket.query_params.get("api_key")
     # Headers first (no query involved)
     try:
-        check_api_key(
-            authorization=websocket.headers.get("authorization"),
-            x_api_key=websocket.headers.get("x-api-key"),
-            api_key=None,
+        return store_ws_principal(
+            websocket,
+            check_api_key(
+                authorization=websocket.headers.get("authorization"),
+                x_api_key=websocket.headers.get("x-api-key"),
+                api_key=None,
+            ),
         )
-        return
     except HTTPException:
         pass
 
     # Deprecated query fallback — only when explicitly opted in for tests.
     if q and allow_query:
         try:
-            check_api_key(api_key=q)
-            return
+            return store_ws_principal(websocket, check_api_key(api_key=q))
         except HTTPException:
             pass
     elif q and not allow_query:
@@ -296,15 +358,22 @@ async def authenticate_websocket(websocket: WebSocket) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail='WebSocket auth required: first message must be {"type":"auth","api_key":"..."}',
         )
-    check_api_key(api_key=str(raw.get("api_key") or ""))
+    return store_ws_principal(
+        websocket, check_api_key(api_key=str(raw.get("api_key") or ""))
+    )
 
 
 __all__ = [
+    "Principal",
+    "OPEN_PRINCIPAL",
+    "PRINCIPAL_ATTR",
     "require_api_key",
     "require_api_key_strict",
     "require_ws_api_key",
     "check_api_key",
     "authenticate_websocket",
+    "store_ws_principal",
+    "ws_principal",
     "auth_required",
     "is_open_mode",
     "_configured_key",

@@ -11,30 +11,10 @@ for _pack in automotive_nhtsa finance_cfpb; do
   DOMAIN_PACK="$_pack" python -m scripts.migrate --db domain --pack "$_pack" || true
 done
 
-# Seed fixture warehouses if missing (idempotent enough for pilot demos).
-# Also repair finance_cfpb when it was accidentally seeded with NHTSA rows
-# (record_id prefix NHTSA- → all simulates abandon on the finance pack).
-need_seed=0
-if [ ! -f data/frontline.duckdb ] \
-   || [ ! -f data/domains/automotive_nhtsa.duckdb ] \
-   || [ ! -f data/domains/finance_cfpb.duckdb ]; then
-  need_seed=1
-fi
-if [ -f data/domains/finance_cfpb.duckdb ]; then
-  if ! python -c "
-from src.data.warehouse import domain_con
-with domain_con('finance_cfpb', read_only=True) as con:
-    row = con.execute(\"SELECT record_id FROM records LIMIT 1\").fetchone()
-    raise SystemExit(0 if row and str(row[0]).startswith('CFPB-') else 1)
-" 2>/dev/null; then
-    echo "→ finance_cfpb warehouse looks wrong or empty — re-seeding fixtures…"
-    need_seed=1
-  fi
-fi
-if [ "$need_seed" = "1" ]; then
-  echo "→ Seeding fixture warehouses…"
-  python -m scripts.seed_frontline_fixtures
-fi
+# Create missing schemas. FRONTLINE_SEED_DEMO=1 fills a domain file only
+# when it is absent. This never resets an existing warehouse and never
+# treats a non-CFPB record id as corruption.
+python -m scripts.container_bootstrap
 
 # Fail-closed when production-like (also enforced in app lifespan).
 if [ "${ENV:-}" = "production" ] || [ "${ENV:-}" = "prod" ] \

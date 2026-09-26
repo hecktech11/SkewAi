@@ -33,7 +33,7 @@ from src.agents.orchestrator import (
 from src.api.auth import authenticate_websocket, require_api_key
 from src.api.frontline_gate import frontline_enabled
 from src.api.limiter import limiter
-from src.api.rbac import get_actor, require_perm, require_perm_dep, role_from_websocket
+from src.api.rbac import get_actor, get_role, require_perm, require_perm_dep, role_from_websocket
 from src.channels.web_voice import WebVoiceChannel
 from src.data.warehouse import ops_con, ops_in_thread
 
@@ -673,10 +673,17 @@ async def list_interactions(
     limit: int = 50,
     offset: int = 0,
     cursor: str | None = None,
+    scrub_pii: bool = True,
+    _role: str = Depends(get_role),
 ) -> dict[str, Any]:
-    """List interactions (optionally filter by status). Paginated."""
+    """List interactions (optionally filter by status). Paginated.
+
+    Free-text columns are PII-redacted by default. ``scrub_pii=false``
+    requires ``dsr:export``.
+    """
     from src.api.jsonutil import json_safe_rows
     from src.api.pagination import clamp_limit, page_meta, resolve_offset
+    from src.security.pii import redact_dict
 
     lim = clamp_limit(limit)
     off = resolve_offset(offset=offset, cursor=cursor)
@@ -697,6 +704,10 @@ async def list_interactions(
     rows = await ops_in_thread(_load)
     has_extra = len(rows) > lim
     page = rows[:lim]
+    if scrub_pii:
+        page = [redact_dict(row) for row in page]
+    else:
+        require_perm(_role, "dsr:export")
     total = None if has_extra else off + len(page)
     return {
         "interactions": json_safe_rows(page),
@@ -715,11 +726,11 @@ async def get_interaction(
 ) -> dict[str, Any]:
     """Return the interaction header + turns + actions for replay.
 
-    Turn text is PII-redacted by default; ``scrub_pii=false`` requires
-    ``dsr:export`` (item 16).
+    Free text is PII-redacted by default, including the header, the nested
+    case, turns and actions. ``scrub_pii=false`` requires ``dsr:export``.
     """
     from src.qubot.retrievers import contact_audit
-    from src.security.pii import redact_dict, redact_turns
+    from src.security.pii import redact_dict
 
     try:
         data = contact_audit(interaction_id)
@@ -730,15 +741,7 @@ async def get_interaction(
     if not scrub_pii:
         require_perm(_role, "dsr:export")
         return data
-    data = dict(data)
-    if isinstance(data.get("turns"), list):
-        data["turns"] = redact_turns(data["turns"])
-    if isinstance(data.get("actions"), list):
-        data["actions"] = [
-            redact_dict(a) if isinstance(a, dict) else a
-            for a in data["actions"]
-        ]
-    return data
+    return redact_dict(data)
 
 
 @router.post("/{interaction_id}/end")

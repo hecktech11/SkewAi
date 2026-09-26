@@ -414,8 +414,8 @@ def test_item18_atomic_claim_and_crash_recovery(reset_ops_db):
 def test_item18_idempotent_enqueue_and_completion(reset_ops_db):
     from src.jobs.queue import _finish, enqueue, run_next
 
-    a = enqueue("audit_contact", {"interaction_id": "x"}, idempotency_key="idem-1")
-    b = enqueue("audit_contact", {"interaction_id": "x"}, idempotency_key="idem-1")
+    a = enqueue("audit_contact", {"interaction_id": "int_x1"}, idempotency_key="idem-1")
+    b = enqueue("audit_contact", {"interaction_id": "int_x1"}, idempotency_key="idem-1")
     assert b["job_id"] == a["job_id"] and b.get("duplicate") is True
     done = run_next(worker_id="w9")
     assert done["status"] == "done"
