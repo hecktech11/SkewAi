@@ -1,0 +1,51 @@
+"""Non-destructive container startup.
+
+Creates a missing ops or domain schema. With FRONTLINE_SEED_DEMO=1, fills a
+domain warehouse only when its file is absent. Never calls reset_ops_db and
+never inspects record ids.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.config import settings
+from src.data.bootstrap import bootstrap_actions
+from src.data.warehouse import init_domain_db, init_ops_db
+
+
+def main() -> int:
+    ops = settings.frontline_db_path
+    automotive = settings.domain_db_path("automotive_nhtsa")
+    finance = settings.domain_db_path("finance_cfpb")
+    seed_demo = os.getenv("FRONTLINE_SEED_DEMO", "").strip() == "1"
+    actions = bootstrap_actions(
+        ops_exists=ops.exists(),
+        automotive_exists=automotive.exists(),
+        finance_exists=finance.exists(),
+        seed_demo=seed_demo,
+    )
+    print("→ Container bootstrap:", ", ".join(actions))
+    if "init-ops" in actions:
+        init_ops_db()
+    if "init-automotive" in actions:
+        init_domain_db("automotive_nhtsa")
+    if "init-finance" in actions:
+        init_domain_db("finance_cfpb")
+    if "seed-automotive" in actions:
+        from scripts.seed_domains import build as build_automotive
+
+        build_automotive("automotive_nhtsa", force=False)
+    if "seed-finance" in actions:
+        from scripts.seed_finance_cfpb import build as build_finance
+
+        build_finance("finance_cfpb", force=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
