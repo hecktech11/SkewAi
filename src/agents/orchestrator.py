@@ -1283,15 +1283,17 @@ class Orchestrator:
         if target == "CLOSING":
             # _move_to_closing owns the SUPERVISED→CLOSING transition itself.
             self.ctx.supervised = False
+            self.ctx.takeover_claimed_by = None
+            self._pre_supervised_state = None
             record_action(self._orchestrator_action(
                 "takeover_released",
                 input_summary="returning to state=CLOSING (recomputed)",
                 output_summary="AI resumes",
             ))
-            self._pre_supervised_state = None
-            self.ctx.takeover_claimed_by = None
-            await self._move_to_closing(force=True)
+            # FU06: Publish control update FIRST so browser humanControlRef is cleared
+            # before the closing turn is emitted to the customer.
             await self._publish_control()
+            await self._move_to_closing(force=True)
             return {
                 "ok": True,
                 "state": self.ctx.state,
@@ -1302,21 +1304,23 @@ class Orchestrator:
         # AI has resumed. (takeover sets this to True; release must reset it.)
         self.ctx.supervised = False
         self.ctx.takeover_claimed_by = None
+        self._pre_supervised_state = None
         record_action(self._orchestrator_action(
             "takeover_released",
             input_summary=f"returning to state={target} (recomputed) actor-released",
             output_summary="AI resumes",
         ))
-        self._pre_supervised_state = None
         try:
             self._record_state(target)
         except Exception:
             pass
+        # FU06: Publish control update FIRST so browser humanControlRef is cleared
+        # before the AI emits safety scripts or resumed conversational turns.
+        await self._publish_control()
         if target == "SAFETY_ESCALATION":
             await self._deliver_pending_safety_script()
         elif target == "ENRICHING":
             await self._enter_enriching()
-        await self._publish_control()
         return {
             "ok": True,
             "state": self.ctx.state,
@@ -1333,17 +1337,23 @@ class Orchestrator:
         self.ctx.severity = "Critical"
         self.ctx.severity_source = "rules"
         self.ctx.priority = 1
-        record_action(self._orchestrator_action(
+        aid = record_action(self._orchestrator_action(
             "escalation_script_emitted",
             input_summary="safety escalation raised while supervised; delivered on release",
             output_summary=script,
         ))
+        turn = self.ctx.record_turn("agent", script, llm_used=False, action_id=aid)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             script,
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "action_id": aid,
+                "turn_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", script, llm_used=False)
         await self._move_to_closing()
 
     async def human_turn(

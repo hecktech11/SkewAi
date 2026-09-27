@@ -390,8 +390,27 @@ async def _attach_customer_ws(interaction_id: str) -> tuple[ActiveEntry, bool]:
     pending_dead: list[tuple[str, ActiveEntry, str]] = []
     error: HTTPException | None = None
     result: tuple[ActiveEntry, bool] | None = None
+
+    from src.frontline.dsr import is_interaction_erased
+
+    if is_interaction_erased(interaction_id):
+        async with _active_lock:
+            popped = _active.pop(interaction_id, None)
+            if popped is not None and getattr(popped, "orch", None) is not None:
+                popped.orch._erased = True
+                if getattr(popped.orch, "ctx", None) is not None:
+                    popped.orch.ctx.slots.clear()
+                    if hasattr(popped.orch.ctx, "turns") and popped.orch.ctx.turns is not None:
+                        popped.orch.ctx.turns.clear()
+        raise HTTPException(
+            status_code=404, detail=f"active interaction not found: {interaction_id}"
+        )
+
     async with _active_lock:
         entry = _active.get(interaction_id)
+        if entry is not None and getattr(entry.orch, "_erased", False):
+            _active.pop(interaction_id, None)
+            entry = None
         now = time.monotonic()
         grace_s = _reconnect_grace_s()
         decision = classify_customer_ws_attach(entry, now=now, grace_s=grace_s)
@@ -1240,7 +1259,7 @@ class _WSHooks(OrchestratorHooks):
             "interaction_id": self._interaction_id,
             "speaker": meta.get("speaker", "agent"),
             "text": text,
-            "turn_id": meta.get("turn_id") or meta.get("utterance_id"),
+            "turn_id": meta.get("turn_id"),
             "utterance_id": meta.get("utterance_id"),
             "action_id": meta.get("action_id") or "",
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -1455,6 +1474,10 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
         return
 
     orch = entry.orch
+    from src.frontline.dsr import is_interaction_erased
+    if getattr(orch, "_erased", False) or is_interaction_erased(interaction_id):
+        await websocket.close(code=1008)
+        return
     channel = WebVoiceChannel(websocket)
     orch.hooks = _WSHooks(channel, interaction_id)
     # Track whether the customer left on purpose; only then do we drop the
@@ -1716,6 +1739,34 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
 
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
+
+    role = role_from_websocket(websocket)
+    if not has_perm(role, "contact:write"):
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "detail": f"role {role} lacks contact:write",
+                "code": "forbidden",
+                "recoverable": False,
+            })
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+
+    if not _contact_scope_allows(websocket, interaction_id):
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "detail": "credential is not allowed to attach to this contact",
+                "code": "forbidden",
+                "recoverable": False,
+            })
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+
     try:
         entry, _resumed = await _attach_customer_ws(interaction_id)
     except HTTPException as e:
@@ -1890,7 +1941,14 @@ async def console_ws(websocket: WebSocket) -> None:
                 if isinstance(raw_ts, datetime):
                     last_ts = raw_ts
                     last_action_id = str(r.get("action_id") or "")
-                await _enqueue_console(client, activity_frame_from_row(r))
+                try:
+                    await asyncio.wait_for(
+                        client.queue.put(activity_frame_from_row(r)),
+                        timeout=5.0,
+                    )
+                except Exception:
+                    await _drop_console_client(client)
+                    return
             await asyncio.sleep(max(0.05, poll_s))
 
     catch_task = asyncio.create_task(_catch_up_loop())

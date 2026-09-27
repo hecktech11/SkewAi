@@ -181,24 +181,43 @@ jobs:
             exit 1
           fi
 
-          echo "Creating customer interaction..."
-          CREATE_RESP=$(curl -sf -X POST http://127.0.0.1:8000/api/interactions \
-            -H "Content-Type: application/json" \
-            -d '{"channel": "web_text", "pack_id": "automotive_nhtsa"}')
-          echo "Interaction created: $CREATE_RESP"
+          echo "Starting customer interaction..."
+          START_RESP=$(curl -sf -X POST "http://127.0.0.1:8000/api/interactions/start?channel=web_text&pack_id=automotive_nhtsa")
+          echo "Interaction started: $START_RESP"
 
-          IID=$(python3 -c "import json; d=json.loads('$CREATE_RESP'); print(d.get('interaction_id') or d.get('interaction', {}).get('interaction_id', ''))")
+          IID=$(python3 -c "import json; d=json.loads('''$START_RESP'''); print(d.get('interaction_id') or '')")
+          TOKEN=$(python3 -c "import json; d=json.loads('''$START_RESP'''); print(d.get('capability_token') or '')")
           if [ -z "$IID" ]; then
             echo "Failed to extract interaction_id"
             docker logs frontline-test
             exit 1
           fi
 
-          echo "Creating customer turn for interaction $IID..."
-          TURN_RESP=$(curl -sf -X POST "http://127.0.0.1:8000/api/interactions/$IID/turn" \
-            -H "Content-Type: application/json" \
-            -d '{"speaker": "customer", "text": "my brake pedal feels spongy"}')
-          echo "Turn response: $TURN_RESP"
+          echo "Sending customer turn via WebSocket for interaction $IID..."
+          docker exec frontline-test python3 -c "
+import asyncio, json, websockets
+
+async def test_ws():
+    url = 'ws://127.0.0.1:8000/ws/interaction/$IID'
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps({'type': 'auth', 'token': '$TOKEN'}))
+        await ws.send(json.dumps({'type': 'user_turn', 'text': 'my brake pedal feels spongy'}))
+        for _ in range(10):
+            raw = await asyncio.wait_for(ws.recv(), timeout=15.0)
+            msg = json.loads(raw)
+            print('WS received:', msg.get('type'), msg.get('text'))
+            if msg.get('type') == 'turn' and msg.get('speaker') == 'agent':
+                print('Agent turn verified!')
+                return
+    raise RuntimeError('No agent turn received')
+
+asyncio.run(test_ws())
+"
+          if [ $? -ne 0 ]; then
+            echo "WebSocket test failed. Container logs:"
+            docker logs frontline-test
+            exit 1
+          fi
 
           docker stop frontline-test
           docker rm frontline-test

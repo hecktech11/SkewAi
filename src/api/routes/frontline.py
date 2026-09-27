@@ -1327,15 +1327,23 @@ async def evaluate_alert_rule(
             raise HTTPException(status_code=404, detail="rule not found")
         pack_id = str(body.get("pack_id") or rule.get("pack_id") or "automotive_nhtsa")
         cluster_id = int(body.get("cluster_id") or 0)
-        case_count, max_severity = fetch_cluster_metrics(pack_id, cluster_id)
+        window_days = rule.get("window_days")
+        case_count, max_severity = fetch_cluster_metrics(
+            pack_id, cluster_id, window_days=window_days
+        )
     else:
         rule = body.get("rule") or get_rule(str(body.get("rule_id") or ""))
         if not rule:
             raise HTTPException(status_code=404, detail="rule not found")
         pack_id = str(body.get("pack_id") or rule.get("pack_id") or "automotive_nhtsa")
         cluster_id = int(body.get("cluster_id") or 0)
-        case_count = int(body.get("case_count") or 0)
-        max_severity = str(body.get("max_severity") or "Low")
+        if body.get("case_count") is not None:
+            case_count = int(body["case_count"])
+            max_severity = str(body.get("max_severity") or "Low")
+        else:
+            case_count, max_severity = fetch_cluster_metrics(
+                pack_id, cluster_id, window_days=rule.get("window_days")
+            )
 
     ev = evaluate_cluster_rule(
         rule,

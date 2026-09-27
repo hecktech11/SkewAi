@@ -233,16 +233,16 @@ async def pack_builder_insight(
     body: dict[str, Any],
     role: str = Depends(get_role),
 ) -> dict[str, Any]:
-    from src.api.rbac import _is_open_mode
+    from src.api.rbac import _is_open_mode, require_perm
     from src.domains.builder.pack_builder import first_insight_from_csv
 
     tok = (
         request.headers.get("x-frontline-session")
         or (request.cookies.get("frontline_session") if hasattr(request, "cookies") else None)
     )
-    is_agent = (role == "agent") and (not _is_open_mode() or bool(tok))
-    if is_agent:
-        raise HTTPException(403, "agent lacks pack:edit permission")
+    if (not _is_open_mode()) or bool(tok):
+        if role != "service":
+            require_perm(role, "pack:edit", open_mode_ok=False)
     csv_path = body.get("csv_path")
     if not csv_path:
         raise HTTPException(400, "csv_path required")

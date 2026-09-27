@@ -21,7 +21,8 @@ function mergeConsoleTurns(existing, incoming) {
   for (const turn of incoming || []) {
     if (!turn || !turn.text) continue;
     const idx = out.findIndex((row) => {
-      if (turn.turn_id && row.turn_id) return row.turn_id === turn.turn_id;
+      if (turn.turn_id && row.turn_id && row.turn_id === turn.turn_id) return true;
+      if (turn.utterance_id && row.utterance_id && row.utterance_id === turn.utterance_id) return true;
       return row.speaker === turn.speaker && row.text === turn.text;
     });
     if (idx >= 0) {
