@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -139,7 +140,8 @@ def _ensure(con) -> None:
             next_url VARCHAR,
             created_at TIMESTAMP,
             used BOOLEAN,
-            code_verifier VARCHAR
+            code_verifier VARCHAR,
+            browser_binding VARCHAR
         )
         """
     )
@@ -153,7 +155,8 @@ def _ensure(con) -> None:
             role VARCHAR,
             exp INTEGER,
             created_at TIMESTAMP,
-            used BOOLEAN
+            used BOOLEAN,
+            browser_binding VARCHAR
         )
         """
     )
@@ -163,6 +166,14 @@ def _ensure(con) -> None:
         cols = set()
     if cols and "code_verifier" not in cols:
         con.execute("ALTER TABLE oidc_auth_state ADD COLUMN code_verifier VARCHAR")
+    if cols and "browser_binding" not in cols:
+        con.execute("ALTER TABLE oidc_auth_state ADD COLUMN browser_binding VARCHAR")
+    try:
+        cols_h = {str(r[0]) for r in con.execute("DESCRIBE oidc_handoffs").fetchall()}
+    except Exception:
+        cols_h = set()
+    if cols_h and "browser_binding" not in cols_h:
+        con.execute("ALTER TABLE oidc_handoffs ADD COLUMN browser_binding VARCHAR")
 
 
 def allowed_next_origins() -> set[str]:
@@ -207,7 +218,7 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def begin_login(*, next_url: str | None = None) -> dict[str, str]:
+def begin_login(*, next_url: str | None = None, browser_binding: str | None = None) -> dict[str, str]:
     cfg = provider_status()
     if not cfg["configured"]:
         raise RuntimeError("google_oauth_not_configured")
@@ -220,10 +231,10 @@ def begin_login(*, next_url: str | None = None) -> dict[str, str]:
         con.execute(
             """
             INSERT INTO oidc_auth_state
-            (state, nonce, next_url, created_at, used, code_verifier)
-            VALUES (?, ?, ?, ?, FALSE, ?)
+            (state, nonce, next_url, created_at, used, code_verifier, browser_binding)
+            VALUES (?, ?, ?, ?, FALSE, ?, ?)
             """,
-            [state, nonce, nxt, utc_now(), verifier],
+            [state, nonce, nxt, utc_now(), verifier, browser_binding],
         )
     params = {
         "client_id": cfg["client_id"],
@@ -243,6 +254,7 @@ def begin_login(*, next_url: str | None = None) -> dict[str, str]:
         "state": state,
         "nonce": nonce,
         "next_url": nxt,
+        "browser_binding": browser_binding or "",
     }
 
 
@@ -253,7 +265,7 @@ def pop_state(state: str) -> dict[str, Any] | None:
         _ensure(con)
         row = con.execute(
             """
-            SELECT state, nonce, next_url, used, code_verifier, created_at
+            SELECT state, nonce, next_url, used, code_verifier, created_at, browser_binding
             FROM oidc_auth_state WHERE state = ?
             """,
             [state],
@@ -282,6 +294,7 @@ def pop_state(state: str) -> dict[str, Any] | None:
             "nonce": row[1],
             "next_url": row[2],
             "code_verifier": row[4] or "",
+            "browser_binding": row[6] or "",
         }
 
 
@@ -400,10 +413,14 @@ def exchange_code(code: str, *, code_verifier: str = "") -> dict[str, Any]:
     return r.json()
 
 
-def finish_callback(*, code: str, state: str) -> dict[str, Any]:
+def finish_callback(*, code: str, state: str, browser_binding: str | None = None) -> dict[str, Any]:
     st = pop_state(state)
     if not st:
         raise ValueError("oidc_state_invalid")
+    expected_binding = str(st.get("browser_binding") or "")
+    if expected_binding:
+        if not browser_binding or not hmac.compare_digest(expected_binding, str(browser_binding)):
+            raise ValueError("oidc_browser_binding_mismatch")
     tokens = exchange_code(code, code_verifier=str(st.get("code_verifier") or ""))
     id_token = tokens.get("id_token")
     if not id_token:
@@ -423,13 +440,14 @@ def finish_callback(*, code: str, state: str) -> dict[str, Any]:
 
     sess = issue_idp_session(subject)
     hid = "hf_" + new_ulid()
+    final_binding = browser_binding or expected_binding or ""
     with ops_con() as con:
         _ensure(con)
         con.execute(
             """
             INSERT INTO oidc_handoffs
-            (handoff_id, token, subject, email, role, exp, created_at, used)
-            VALUES (?, ?, ?, ?, ?, ?, ?, FALSE)
+            (handoff_id, token, subject, email, role, exp, created_at, used, browser_binding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, ?)
             """,
             [
                 hid,
@@ -439,6 +457,7 @@ def finish_callback(*, code: str, state: str) -> dict[str, Any]:
                 sess["role"],
                 sess["exp"],
                 utc_now(),
+                final_binding,
             ],
         )
     return {
@@ -448,6 +467,7 @@ def finish_callback(*, code: str, state: str) -> dict[str, Any]:
         "subject": sess["subject"],
         "email": email,
         "role": sess["role"],
+        "browser_binding": final_binding,
     }
 
 
@@ -464,7 +484,7 @@ def handoff_expired(created_at, *, now=None, ttl_s: int = HANDOFF_TTL_S) -> bool
     return (cur - created).total_seconds() > max(1, int(ttl_s))
 
 
-def consume_handoff(handoff_id: str) -> dict[str, Any]:
+def consume_handoff(handoff_id: str, *, browser_binding: str | None = None) -> dict[str, Any]:
     hid = (handoff_id or "").strip()
     if not hid:
         raise ValueError("handoff_missing")
@@ -472,7 +492,7 @@ def consume_handoff(handoff_id: str) -> dict[str, Any]:
         _ensure(con)
         row = con.execute(
             """
-            SELECT token, subject, email, role, exp, used, created_at
+            SELECT token, subject, email, role, exp, used, created_at, browser_binding
             FROM oidc_handoffs WHERE handoff_id = ?
             """,
             [hid],
@@ -484,6 +504,10 @@ def consume_handoff(handoff_id: str) -> dict[str, Any]:
         if handoff_expired(row[6]):
             con.execute("UPDATE oidc_handoffs SET used = TRUE WHERE handoff_id = ?", [hid])
             raise ValueError("handoff_expired")
+        expected_binding = str(row[7] or "")
+        if expected_binding:
+            if not browser_binding or not hmac.compare_digest(expected_binding, str(browser_binding)):
+                raise ValueError("handoff_binding_mismatch")
         con.execute("UPDATE oidc_handoffs SET used = TRUE WHERE handoff_id = ?", [hid])
     return {
         "token": row[0],

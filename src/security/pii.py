@@ -57,6 +57,21 @@ PII_TEXT_FIELDS = frozenset({
     "body",
 })
 
+#: Structured slot keys that carry sensitive customer identifiers / PII.
+SENSITIVE_STRUCTURED_KEYS = frozenset({
+    "vin",
+    "ssn",
+    "account_number",
+    "card_number",
+    "license_number",
+    "ssn_last4",
+    "pan",
+    "cvv",
+    "driver_license",
+    "phone",
+    "email",
+})
+
 
 def redact_dict(row: dict[str, Any], fields: frozenset[str] = PII_TEXT_FIELDS) -> dict[str, Any]:
     """Return a copy of *row* with PII redacted in known free-text fields.
@@ -74,8 +89,15 @@ def redact_dict(row: dict[str, Any], fields: frozenset[str] = PII_TEXT_FIELDS) -
                 redact_dict(item, fields) if isinstance(item, dict) else item
                 for item in val
             ]
-        elif isinstance(val, str) and val and key in fields:
-            out[key] = redact_pii(val)
+        elif isinstance(val, str) and val:
+            k_lower = key.lower()
+            if k_lower in SENSITIVE_STRUCTURED_KEYS:
+                tag = k_lower.upper()
+                out[key] = f"[{tag}]"
+            elif key in fields:
+                out[key] = redact_pii(val)
+            else:
+                out[key] = val
         else:
             out[key] = val
     return out

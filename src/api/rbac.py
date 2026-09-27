@@ -176,15 +176,13 @@ def _secret() -> bytes:
     if session_sec:
         return session_sec.encode()
 
-    if _auth_required() or _env_bool("PILOT_HARDENED", False):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "SESSION_SECRET must be configured for "
-                "session tokens when auth is required (refusing dev-only fallback)."
-            ),
-        )
-    return b"dev-only"
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "SESSION_SECRET must be configured for "
+            "session tokens (refusing dev-only fallback)."
+        ),
+    )
 
 
 def issue_session(
@@ -515,7 +513,20 @@ def actor_from_websocket(websocket: Any) -> str:
             return "service"
     except Exception:
         pass
-    return role_from_websocket(websocket)[:80]
+    session = ""
+    try:
+        session = (websocket.headers.get("x-frontline-session") or "").strip()
+    except Exception:
+        session = ""
+    if not session:
+        try:
+            session = session_token_from_cookies(websocket.cookies)
+        except Exception:
+            session = ""
+    return subject_from_headers(
+        session or None,
+        api_key=_websocket_api_key(websocket) or None,
+    )[:80]
 
 
 def role_from_websocket(websocket: Any) -> str:
@@ -580,15 +591,24 @@ def oidc_discovery() -> dict[str, Any]:
     }
 
 
-def _extract_header_key(request: Request, x_api_key: str | None, authorization: str | None) -> str:
-    key = (x_api_key or "").strip()
-    if not key and authorization:
+def _extract_request_key(request: Request | None, x_api_key: Any, authorization: Any) -> str:
+    key = x_api_key.strip() if isinstance(x_api_key, str) else ""
+    if not key and isinstance(authorization, str) and authorization.strip():
         parts = authorization.strip().split(None, 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
             key = parts[1].strip()
         else:
             key = authorization.strip()
+    if not key and request:
+        try:
+            val = request.query_params.get("api_key")
+            key = val.strip() if isinstance(val, str) else ""
+        except Exception:
+            pass
     return key
+
+
+_extract_header_key = _extract_request_key
 
 
 async def get_role(
@@ -598,10 +618,23 @@ async def get_role(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None),
 ) -> str:
-    key = _extract_header_key(request, x_api_key, authorization)
+    # 1. Resolve from verified request principal first
+    p = getattr(getattr(request, "state", None), "frontline_principal", None)
+    if p is not None and getattr(p, "credential", None) in ("dsr", "session") and p.role:
+        return p.role
+
+    key = _extract_request_key(request, x_api_key, authorization)
+    if not key and p is not None and getattr(p, "api_key", None):
+        key = p.api_key
+
+    session_token = x_frontline_session if isinstance(x_frontline_session, str) else None
+    if not session_token and getattr(request, "cookies", None):
+        session_token = session_token_from_cookies(request.cookies)
+
+    role_hdr = x_frontline_role if isinstance(x_frontline_role, str) else None
     return role_from_headers(
-        x_frontline_role,
-        x_frontline_session or session_token_from_cookies(request.cookies),
+        role_hdr,
+        session_token,
         api_key=key,
     )
 
@@ -612,8 +645,22 @@ async def get_actor(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None),
 ) -> str:
-    key = _extract_header_key(request, x_api_key, authorization)
+    # 1. Resolve from verified request principal first
+    p = getattr(getattr(request, "state", None), "frontline_principal", None)
+    if p is not None and getattr(p, "subject", None):
+        return p.subject
+    if p is not None and getattr(p, "credential", None) == "dsr":
+        return "dsr_officer"
+
+    key = _extract_request_key(request, x_api_key, authorization)
+    if not key and p is not None and getattr(p, "api_key", None):
+        key = p.api_key
+
+    session_token = x_frontline_session if isinstance(x_frontline_session, str) else None
+    if not session_token and getattr(request, "cookies", None):
+        session_token = session_token_from_cookies(request.cookies)
+
     return subject_from_headers(
-        x_frontline_session or session_token_from_cookies(request.cookies) or None,
+        session_token or None,
         api_key=key,
     )

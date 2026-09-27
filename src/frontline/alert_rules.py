@@ -186,6 +186,25 @@ async def apply_triggered_rule(eval_result: dict[str, Any], *, title: str = "") 
     return out
 
 
+def fetch_cluster_metrics(pack_id: str, cluster_id: int) -> tuple[int, str]:
+    """Fetch live case count and maximum severity for cluster from the ops DB."""
+    ensure_alert_rules_table()
+    with ops_con(read_only=True) as con:
+        cur = con.execute(
+            """
+            SELECT count(*), coalesce(max(severity), 'Low')
+            FROM cases
+            WHERE (pack_id = ? OR pack_id IS NULL)
+              AND (cluster_match_id = ? OR cluster_match_id = ?)
+            """,
+            [pack_id, cluster_id, str(cluster_id)],
+        )
+        row = cur.fetchone()
+        if row and row[0] is not None and row[0] > 0:
+            return int(row[0]), str(row[1] or "Low")
+    return 0, "Low"
+
+
 __all__ = [
     "ensure_alert_rules_table",
     "create_rule",
@@ -193,4 +212,5 @@ __all__ = [
     "list_rules",
     "evaluate_cluster_rule",
     "apply_triggered_rule",
+    "fetch_cluster_metrics",
 ]

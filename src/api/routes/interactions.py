@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -93,6 +94,8 @@ class ActiveEntry:
     detached_at: float | None = None
     # Tier-A: durable turn sequencing survives reconnect + restart via turn_dedup.
     turn_seq: int = 0
+    owner_subject: str = ""
+    capability_token: str = ""
 
 
 _active: dict[str, ActiveEntry] = {}
@@ -350,11 +353,21 @@ async def _get_entry(interaction_id: str) -> ActiveEntry:
     return entry
 
 
-async def _register(interaction_id: str, orch: Orchestrator) -> None:
+async def _register(
+    interaction_id: str,
+    orch: Orchestrator,
+    *,
+    owner_subject: str = "",
+    capability_token: str = "",
+) -> None:
     async with _active_lock:
         # Register only. Orphan hangup/DB sweep is the reaper's job — never
         # hold ``_active_lock`` across hangup (that stalled WS attach ~30s).
-        _active[interaction_id] = ActiveEntry(orch=orch)
+        _active[interaction_id] = ActiveEntry(
+            orch=orch,
+            owner_subject=owner_subject,
+            capability_token=capability_token,
+        )
 
 
 async def _unregister(interaction_id: str) -> None:
@@ -495,6 +508,7 @@ async def start_interaction(
     locale: str | None = None,
     _auth: bool = Depends(require_api_key),
     _role: str = Depends(require_perm_dep("contact:write")),
+    actor: str = Depends(get_actor),
 ) -> dict[str, Any]:
     """Create an interaction + return the WS URL + greeting.
 
@@ -556,7 +570,11 @@ async def start_interaction(
 
         tg = get_traffic_gate()
         raw_hash = request.headers.get("X-Call-Hash")
-        if raw_hash is not None and raw_hash.strip().isdigit():
+        allow_hash_override = (
+            os.getenv("FRONTLINE_ALLOW_CALL_HASH_OVERRIDE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if allow_hash_override and raw_hash is not None and raw_hash.strip().isdigit():
             admitted, reason = tg.evaluate_ingress(
                 call_hash=int(raw_hash.strip()),
                 domain=pack_id,
@@ -564,8 +582,7 @@ async def start_interaction(
             )
         else:
             seed_source = (
-                request.headers.get("X-Call-Seed")
-                or request.headers.get("X-Call-Sid")
+                request.headers.get("X-Call-Sid")
                 or channel_session_id
                 or customer_ref
                 or f"int_{new_ulid()}"
@@ -597,7 +614,13 @@ async def start_interaction(
             status_code=503,
             detail=str(e) or "service_draining: not accepting new contacts",
         ) from e
-    await _register(orch.ctx.interaction_id, orch)
+    cap_token = secrets.token_urlsafe(32)
+    await _register(
+        orch.ctx.interaction_id,
+        orch,
+        owner_subject=actor,
+        capability_token=cap_token,
+    )
     pack = orch.ctx.pack
     try:
         _server_stt = bool(
@@ -616,6 +639,7 @@ async def start_interaction(
         "interaction_id": orch.ctx.interaction_id,
         "ws_url": f"/ws/interaction/{orch.ctx.interaction_id}",
         "twilio_ws_url": f"/ws/twilio/{orch.ctx.interaction_id}",
+        "capability_token": cap_token,
         "greeting_text": greeting,
         "pack": {
             "id": pack.id,
@@ -950,10 +974,19 @@ async def release(
         raise HTTPException(status_code=403, detail="admin override required")
     entry = await _get_entry(interaction_id)
     async with entry.lock:
+        claimed_by = (entry.orch.ctx.takeover_claimed_by or "").strip()
+        if claimed_by and claimed_by != actor:
+            if not (override and _role == "admin"):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"call claimed by {claimed_by}; only claimant or admin override may release",
+                )
         result = await entry.orch.release(actor=actor, admin_override=bool(override and _role == "admin"))
     if not result.get("ok"):
+        code = result.get("code")
+        status_code = 403 if code == "not_owner" else (400 if code == "not_supervised" else 409)
         raise HTTPException(
-            status_code=409,
+            status_code=status_code,
             detail={
                 "code": result.get("code"),
                 "claimed_by": result.get("claimed_by"),
@@ -1299,7 +1332,7 @@ class _WSHooks(OrchestratorHooks):
 def _contact_scope_allows(websocket: WebSocket, interaction_id: str) -> bool:
     """A session that names contacts may attach only to those contacts.
 
-    Installation credentials with no contact claim stay installation-wide.
+    Customer socket must also match the initiating principal or have the capability token.
     """
     try:
         from src.api.auth import ws_principal
@@ -1307,16 +1340,37 @@ def _contact_scope_allows(websocket: WebSocket, interaction_id: str) -> bool:
         principal = ws_principal(websocket)
         session = principal.session if principal is not None else None
     except Exception:
+        principal = None
         session = None
-    if not isinstance(session, dict):
-        return True
-    scoped = session.get("interaction_id") or session.get("contact")
-    if scoped and str(scoped) != interaction_id:
-        return False
-    contacts = session.get("contacts")
-    if isinstance(contacts, list) and contacts:
-        if interaction_id not in {str(item) for item in contacts}:
+
+    if isinstance(session, dict):
+        scoped = session.get("interaction_id") or session.get("contact")
+        if scoped and str(scoped) != interaction_id:
             return False
+        contacts = session.get("contacts")
+        if isinstance(contacts, list) and contacts:
+            if interaction_id not in {str(item) for item in contacts}:
+                return False
+
+    entry = _active.get(interaction_id)
+    if entry is not None:
+        token = (
+            websocket.query_params.get("token")
+            or websocket.query_params.get("capability_token")
+            or websocket.headers.get("x-capability-token")
+        )
+        if token and entry.capability_token and secrets.compare_digest(str(token).strip(), entry.capability_token):
+            return True
+
+        if entry.owner_subject:
+            actor = actor_from_websocket(websocket)
+            if actor and actor == entry.owner_subject:
+                return True
+            role = role_from_websocket(websocket)
+            if role == "admin":
+                return True
+            return False
+
     return True
 
 
@@ -1564,8 +1618,9 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                     await orch.hangup()
                 break
             elif mtype == "human_turn":
+                role = role_from_websocket(websocket)
                 try:
-                    require_perm(role_from_websocket(websocket), "takeover")
+                    require_perm(role, "takeover")
                 except HTTPException:
                     await websocket.send_json(
                         {"type": "error", "detail": "role lacks takeover", "code": "forbidden"}
@@ -1579,10 +1634,21 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                         "recoverable": True,
                     })
                     continue
+                actor = actor_from_websocket(websocket)
                 async with entry.lock:
+                    claimed_by = (orch.ctx.takeover_claimed_by or "").strip()
+                    if claimed_by and claimed_by != actor and role != "admin":
+                        await websocket.send_json({
+                            "type": "human_turn_result",
+                            "ok": False,
+                            "code": "not_owner",
+                            "claimed_by": claimed_by,
+                            "interaction_id": interaction_id,
+                        })
+                        continue
                     result = await orch.human_turn(
                         msg.get("text", ""),
-                        actor=actor_from_websocket(websocket),
+                        actor=actor,
                         message_id=str(msg.get("message_id") or "") or None,
                     )
                 await websocket.send_json({
@@ -1636,6 +1702,18 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
     if not frontline_enabled():
         await websocket.close(code=1013)
         return
+
+    try:
+        await authenticate_websocket(websocket)
+    except HTTPException:
+        try:
+            if websocket.client_state.name != "CONNECTED":
+                await websocket.accept()
+            await websocket.close(code=1008)
+        except Exception:
+            pass
+        return
+
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
     try:
@@ -1719,6 +1797,7 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
     except Exception:
         pass
     finally:
+        await _detach_customer_ws(interaction_id)
         try:
             await websocket.close()
         except Exception:
@@ -1835,10 +1914,42 @@ async def console_ws(websocket: WebSocket) -> None:
                     "code": "bad_message",
                 })
                 continue
+            if msg.get("type") == "release":
+                iid = msg.get("interaction_id")
+                override = bool(msg.get("override", False))
+                try:
+                    entry = await _get_entry(iid)
+                    actor = actor_from_websocket(websocket)
+                    role = role_from_websocket(websocket)
+                    async with entry.lock:
+                        claimed_by = (entry.orch.ctx.takeover_claimed_by or "").strip()
+                        if claimed_by and claimed_by != actor and not (override and role == "admin"):
+                            await _enqueue_console(client, {
+                                "type": "release_result",
+                                "ok": False,
+                                "code": "not_owner",
+                                "claimed_by": claimed_by,
+                                "interaction_id": iid,
+                            })
+                            continue
+                        result = await entry.orch.release(actor=actor, admin_override=bool(override and role == "admin"))
+                    await _enqueue_console(client, {
+                        "type": "release_result",
+                        "interaction_id": iid,
+                        **{k: _json_safe(v) for k, v in result.items()},
+                    })
+                except Exception as ex:
+                    await _enqueue_console(client, {
+                        "type": "error",
+                        "detail": str(ex),
+                        "code": "release_failed",
+                    })
+                continue
             if msg.get("type") != "human_turn":
                 continue
+            role = role_from_websocket(websocket)
             try:
-                require_perm(role_from_websocket(websocket), "takeover")
+                require_perm(role, "takeover")
             except HTTPException:
                 await _enqueue_console(client, {
                     "type": "error",
@@ -1859,10 +1970,22 @@ async def console_ws(websocket: WebSocket) -> None:
                 continue
             try:
                 entry = await _get_entry(iid)
+                actor = actor_from_websocket(websocket)
                 async with entry.lock:
+                    claimed_by = (entry.orch.ctx.takeover_claimed_by or "").strip()
+                    if claimed_by and claimed_by != actor and role != "admin":
+                        await _enqueue_console(client, {
+                            "type": "human_turn_result",
+                            "ok": False,
+                            "code": "not_owner",
+                            "claimed_by": claimed_by,
+                            "interaction_id": iid,
+                            "message_id": str(msg.get("message_id") or ""),
+                        })
+                        continue
                     result = await entry.orch.human_turn(
                         text,
-                        actor=actor_from_websocket(websocket),
+                        actor=actor,
                         message_id=str(msg.get("message_id") or "") or None,
                     )
                 await _enqueue_console(client, {

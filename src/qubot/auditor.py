@@ -652,7 +652,8 @@ def _audit_single_action(
     own_interaction_id = action.get("interaction_id")
     if own_interaction_id:
         evidence_set.add(str(own_interaction_id))
-    uncited = [c for c in cited_in_text if c not in evidence_set]
+    KNOWN_NON_ID_TOKENS = {"case_created", "case_updated", "case_closed", "case_escalated"}
+    uncited = [c for c in cited_in_text if c not in evidence_set and c.lower() not in KNOWN_NON_ID_TOKENS]
     verdict.uncited_ids_in_output = uncited
 
     from src.qubot.evidence_pin import detect_source_drift, snapshots_for_action
