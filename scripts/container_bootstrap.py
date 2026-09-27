@@ -66,15 +66,6 @@ def main() -> int:
 
         build_finance("finance_cfpb", force=False)
 
-    # N08: Migrate legacy XOR tokens on startup so existing enc:v1: rows are upgraded to authenticated AES-GCM
-    try:
-        from scripts.migrate_legacy_xor_tokens import migrate as migrate_legacy_tokens
-
-        stats = migrate_legacy_tokens(dry_run=False)
-        if stats.get("migrated", 0) > 0:
-            print(f"→ Migrated {stats['migrated']} legacy XOR PII tokens to authenticated AES-GCM")
-    except Exception as e:
-        print(f"→ Legacy XOR token migration note: {e}")
     return 0
 
 

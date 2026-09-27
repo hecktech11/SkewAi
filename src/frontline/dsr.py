@@ -233,7 +233,7 @@ def is_interaction_erased(interaction_id: str, con: Any = None) -> bool:
 
     from src.security.pii import SubjectKeyStore
 
-    if not SubjectKeyStore.has_dek(interaction_id):
+    if not SubjectKeyStore.has_dek(interaction_id, con=con):
         if interaction_id in getattr(SubjectKeyStore, "_shredded", set()):
             return True
 
@@ -278,19 +278,44 @@ def is_interaction_erased(interaction_id: str, con: Any = None) -> bool:
 
 
 def invalidate_active_orchestrator(interaction_id: str) -> None:
-    """Invalidate in-memory slots and description for an active contact."""
+    """Invalidate in-memory state and remove active entry for an erased contact (FU02)."""
     with _erasure_lock:
         _erasure_barrier.add(interaction_id)
     try:
         from src.api.routes.interactions import _active
 
-        entry = _active.get(interaction_id)
+        entry = _active.pop(interaction_id, None)
         if entry is not None:
+            entry.capability_token = None
+            entry.ws_attached = False
+            # Close already-open customer socket immediately (FU02)
+            ws = getattr(entry, "customer_ws", None)
+            if ws is not None:
+                entry.customer_ws = None
+                try:
+                    import asyncio
+                    loop = getattr(entry, "loop", None)
+                    if loop is None:
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            pass
+                    if loop is not None and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(ws.close(code=1008), loop)
+                except Exception:
+                    pass
             if hasattr(entry, "orch") and entry.orch is not None:
                 entry.orch._erased = True
                 if hasattr(entry.orch, "ctx") and entry.orch.ctx is not None:
-                    entry.orch.ctx.slots.clear()
-                    entry.orch.ctx.slots["description"] = ""
+                    ctx = entry.orch.ctx
+                    ctx._erased = True
+                    ctx.slots.clear()
+                    ctx.slots["description"] = ""
+                    if hasattr(ctx, "turns") and ctx.turns is not None:
+                        ctx.turns.clear()
+                    ctx.pending_safety_script = None
+                    if hasattr(ctx, "facts") and ctx.facts is not None:
+                        ctx.facts.clear()
     except Exception:
         pass
 

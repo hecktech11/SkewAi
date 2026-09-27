@@ -226,6 +226,7 @@ class InvestigatorAgent(Agent):
                 try:
                     from src.ml_runtime.association import get_pack_population_index
 
+                    pack_id = getattr(ctx.pack, "id", "") if hasattr(ctx, "pack") and ctx.pack else "automotive_nhtsa"
                     population = get_pack_population_index(con, pack_id=pack_id)
                 except Exception:
                     population = candidates

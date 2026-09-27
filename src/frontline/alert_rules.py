@@ -186,22 +186,57 @@ async def apply_triggered_rule(eval_result: dict[str, Any], *, title: str = "") 
     return out
 
 
-def fetch_cluster_metrics(pack_id: str, cluster_id: int) -> tuple[int, str]:
-    """Fetch live case count and maximum severity for cluster from the ops DB."""
+def fetch_cluster_metrics(
+    pack_id: str,
+    cluster_id: int,
+    *,
+    window_days: int | None = None,
+) -> tuple[int, str]:
+    """Fetch live case count and maximum severity for cluster from the ops DB (FU08).
+
+    Severity ordering: Critical (4) > High (3) > Medium (2) > Low (1) > 0.
+    If window_days is specified, cases older than window_days are excluded.
+    """
+    from datetime import timedelta
+    from typing import Any
+
+    from src.data.timeutil import utc_now
+
     ensure_alert_rules_table()
+    params: list[Any] = [pack_id, cluster_id, str(cluster_id)]
+    time_filter = ""
+    if window_days is not None and int(window_days) > 0:
+        cutoff = utc_now().replace(tzinfo=None) - timedelta(days=int(window_days))
+        time_filter = "AND created_at >= ?"
+        params.append(cutoff)
+
     with ops_con(read_only=True) as con:
         cur = con.execute(
-            """
-            SELECT count(*), coalesce(max(severity), 'Low')
+            f"""
+            SELECT count(*),
+                   coalesce(
+                       max(
+                           CASE upper(trim(coalesce(severity, 'Low')))
+                               WHEN 'CRITICAL' THEN 4
+                               WHEN 'HIGH' THEN 3
+                               WHEN 'MEDIUM' THEN 2
+                               WHEN 'LOW' THEN 1
+                               ELSE 0
+                           END
+                       ), 0
+                   )
             FROM cases
             WHERE (pack_id = ? OR pack_id IS NULL)
               AND (cluster_match_id = ? OR cluster_match_id = ?)
+              {time_filter}
             """,
-            [pack_id, cluster_id, str(cluster_id)],
+            params,
         )
         row = cur.fetchone()
         if row and row[0] is not None and row[0] > 0:
-            return int(row[0]), str(row[1] or "Low")
+            rank = int(row[1] or 0)
+            rank_map = {4: "Critical", 3: "High", 2: "Medium", 1: "Low"}
+            return int(row[0]), rank_map.get(rank, "Low")
     return 0, "Low"
 
 

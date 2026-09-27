@@ -216,18 +216,17 @@ class SubjectKeyStore:
     _lock = threading.RLock()
 
     @classmethod
-    def get_or_create_dek(cls, subject_id: str) -> bytes:
+    def get_or_create_dek(cls, subject_id: str, con: Any = None) -> bytes:
         with cls._lock:
             if subject_id in cls._shredded:
                 raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
             if subject_id in cls._keys:
                 return cls._keys[subject_id]
             from src.data.timeutil import utc_now
-            from src.data.warehouse import ops_con
 
-            with ops_con() as con:
-                _ensure_dek_table(con)
-                row = con.execute(
+            def _query(c: Any) -> bytes:
+                _ensure_dek_table(c)
+                row = c.execute(
                     "SELECT dek_hex, shredded FROM subject_deks WHERE subject_id = ?",
                     [subject_id],
                 ).fetchone()
@@ -241,7 +240,7 @@ class SubjectKeyStore:
                     cls._keys[subject_id] = dek
                     return dek
                 new_key = secrets.token_bytes(32)
-                con.execute(
+                c.execute(
                     """
                     INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded)
                     VALUES (?, ?, ?, FALSE)
@@ -251,25 +250,31 @@ class SubjectKeyStore:
                 cls._keys[subject_id] = new_key
                 return new_key
 
+            if con is not None:
+                return _query(con)
+            from src.data.warehouse import ops_con
+
+            with ops_con() as con_ctx:
+                return _query(con_ctx)
+
     @classmethod
-    def shred_dek(cls, subject_id: str) -> bool:
+    def shred_dek(cls, subject_id: str, con: Any = None) -> bool:
         """Permanently erase the subject's encryption key (GDPR Art. 17)."""
         with cls._lock:
             cls._shredded.add(subject_id)
             cls._keys.pop(subject_id, None)
             from src.data.timeutil import utc_now
-            from src.data.warehouse import ops_con
 
-            with ops_con() as con:
-                _ensure_dek_table(con)
+            def _do_shred(c: Any) -> bool:
+                _ensure_dek_table(c)
                 now = utc_now().replace(tzinfo=None)
-                row = con.execute(
+                row = c.execute(
                     "SELECT shredded FROM subject_deks WHERE subject_id = ?",
                     [subject_id],
                 ).fetchone()
                 if row:
                     if not row[0]:
-                        con.execute(
+                        c.execute(
                             "UPDATE subject_deks SET dek_hex = '', shredded = TRUE, shredded_at = ? WHERE subject_id = ?",
                             [now, subject_id],
                         )
@@ -277,12 +282,12 @@ class SubjectKeyStore:
                     return False
                 # If subject_id exists in interactions table, record shredding tombstones
                 try:
-                    int_row = con.execute(
+                    int_row = c.execute(
                         "SELECT 1 FROM interactions WHERE interaction_id = ?",
                         [subject_id],
                     ).fetchone()
                     if int_row:
-                        con.execute(
+                        c.execute(
                             """
                             INSERT INTO subject_deks (subject_id, dek_hex, created_at, shredded, shredded_at)
                             VALUES (?, '', ?, TRUE, ?)
@@ -294,19 +299,24 @@ class SubjectKeyStore:
                     pass
                 return False
 
+            if con is not None:
+                return _do_shred(con)
+            from src.data.warehouse import ops_con
+
+            with ops_con() as con_ctx:
+                return _do_shred(con_ctx)
+
     @classmethod
-    def has_dek(cls, subject_id: str) -> bool:
+    def has_dek(cls, subject_id: str, con: Any = None) -> bool:
         with cls._lock:
             if subject_id in cls._shredded:
                 return False
             if subject_id in cls._keys:
                 return True
             try:
-                from src.data.warehouse import ops_con
-
-                with ops_con(read_only=True) as con:
-                    _ensure_dek_table(con)
-                    row = con.execute(
+                def _do_has(c: Any) -> bool:
+                    _ensure_dek_table(c)
+                    row = c.execute(
                         "SELECT shredded FROM subject_deks WHERE subject_id = ?",
                         [subject_id],
                     ).fetchone()
@@ -316,6 +326,14 @@ class SubjectKeyStore:
                             cls._keys.pop(subject_id, None)
                             return False
                         return True
+                    return False
+
+                if con is not None:
+                    return _do_has(con)
+                from src.data.warehouse import ops_con
+
+                with ops_con(read_only=True) as con_ctx:
+                    return _do_has(con_ctx)
             except Exception:
                 pass
             return False
@@ -335,11 +353,11 @@ class SubjectKeyStore:
                 pass
 
 
-def encrypt_subject_pii(subject_id: str, plaintext: str) -> str:
+def encrypt_subject_pii(subject_id: str, plaintext: str, *, con: Any = None) -> str:
     """Encrypt PII under the subject's dedicated DEK."""
     if not plaintext:
         return ""
-    dek = SubjectKeyStore.get_or_create_dek(subject_id)
+    dek = SubjectKeyStore.get_or_create_dek(subject_id, con=con)
     nonce = secrets.token_bytes(12)
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -349,7 +367,13 @@ def encrypt_subject_pii(subject_id: str, plaintext: str) -> str:
     return TOKEN_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def decrypt_subject_pii(subject_id: str, token: str, *, allow_legacy: bool = False) -> str:
+def decrypt_subject_pii(
+    subject_id: str,
+    token: str,
+    *,
+    allow_legacy: bool = False,
+    con: Any = None,
+) -> str:
     """Decrypt PII.
 
     Raises KeyError if the key has been shredded, PiiIntegrityError if the
@@ -371,9 +395,9 @@ def decrypt_subject_pii(subject_id: str, token: str, *, allow_legacy: bool = Fal
             )
     elif not token.startswith(TOKEN_PREFIX):
         return token
-    if not SubjectKeyStore.has_dek(subject_id):
+    if not SubjectKeyStore.has_dek(subject_id, con=con):
         raise KeyError(f"Subject DEK for '{subject_id}' has been shredded (GDPR/CCPA Art. 17)")
-    dek = SubjectKeyStore.get_or_create_dek(subject_id)
+    dek = SubjectKeyStore.get_or_create_dek(subject_id, con=con)
     prefix = LEGACY_XOR_PREFIX if legacy else TOKEN_PREFIX
     try:
         raw = base64.urlsafe_b64decode(token[len(prefix):].encode("ascii"))

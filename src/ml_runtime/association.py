@@ -50,7 +50,7 @@ class PopulationIndex:
                 self.n_both[(cat, ent)] = self.n_both.get((cat, ent), 0) + 1
 
     def __len__(self) -> int:
-        return len(self.rows)
+        return self.n or len(self.rows)
 
     def __iter__(self):
         return iter(self.rows)
@@ -178,7 +178,7 @@ def association_score(
 
 
 def population_support(
-    population: Sequence[dict[str, Any]],
+    population: Sequence[dict[str, Any]] | PopulationIndex,
     *,
     category: str,
     entity_2: str,
@@ -191,31 +191,34 @@ def population_support(
     the other.
     """
     c_cat, c_ent = _norm(category), _norm(entity_2)
-    n = len(population) or 1
-    n_both = n_cat = n_ent = 0
-    for row in population:
-        cat, ent = _norm(row.get("category")), _norm(row.get("entity_2"))
-        if cat == c_cat:
-            n_cat += 1
-        if ent == c_ent:
-            n_ent += 1
-        if cat == c_cat and ent == c_ent:
-            n_both += 1
+    if isinstance(population, PopulationIndex):
+        n, n_both, n_cat, n_ent = population.get_counts(c_cat, c_ent)
+    else:
+        n = len(population) or 1
+        n_both = n_cat = n_ent = 0
+        for row in population:
+            cat, ent = _norm(row.get("category")), _norm(row.get("entity_2"))
+            if cat == c_cat:
+                n_cat += 1
+            if ent == c_ent:
+                n_ent += 1
+            if cat == c_cat and ent == c_ent:
+                n_both += 1
     return {
-        "n": float(len(population)),
+        "n": float(n),
         "n_cat": float(n_cat),
         "n_ent": float(n_ent),
         "n_both": float(n_both),
-        "support": n_both / n,
-        "p_cat": n_cat / n,
-        "p_ent": n_ent / n,
+        "support": n_both / n if n else 0.0,
+        "p_cat": n_cat / n if n else 0.0,
+        "p_ent": n_ent / n if n else 0.0,
     }
 
 
 def rank_by_association(
     query: dict[str, Any],
     candidates: Iterable[dict[str, Any]],
-    population: Sequence[dict[str, Any]] | None = None,
+    population: Sequence[dict[str, Any]] | PopulationIndex | None = None,
     *,
     top_k: int = 5,
     id_key: str = "record_id",
@@ -230,9 +233,15 @@ def rank_by_association(
     marked ``assoc_population='candidates-fallback'`` (vs ``'full-corpus'``)
     so candidate-side lift can never masquerade as corpus lift.
     """
-    raw_pop = list(population) if population is not None else list(candidates)
-    pop = PopulationIndex(raw_pop)
-    pop_source = "full-corpus" if population is not None else "candidates-fallback"
+    if isinstance(population, PopulationIndex):
+        pop = population
+        pop_source = "full-corpus"
+    elif population is not None:
+        pop = PopulationIndex(list(population))
+        pop_source = "full-corpus"
+    else:
+        pop = PopulationIndex(list(candidates))
+        pop_source = "candidates-fallback"
     qid = _norm(query.get(id_key) or query.get("interaction_id"))
     scored: list[tuple[float, float, dict[str, Any]]] = []
     for c in candidates:

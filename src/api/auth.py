@@ -456,9 +456,10 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail='WebSocket auth required: first message must be {"type":"auth","api_key":"..."} or {"type":"auth","session":"..."}',
         )
-    if raw.get("session"):
+    session_val = raw.get("session") or raw.get("token")
+    if session_val:
         try:
-            body = verify_session(str(raw["session"]))
+            body = verify_session(str(session_val))
             return store_ws_principal(
                 websocket,
                 Principal(credential="session", subject=str(body.get("sub") or ""), session=body),
