@@ -21,6 +21,7 @@ _HOOK = "https://hooks.example.test/slack"
 def locked(reset_ops_db, seed_automotive_pack, monkeypatch):
     monkeypatch.setenv("FRONTLINE_API_KEY", KEY)
     monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+    monkeypatch.setenv("FRONTLINE_SERVICE_IS_ADMIN", "1")
     with TestClient(app) as c:
         yield c
     monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)

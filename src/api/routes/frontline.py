@@ -1609,18 +1609,6 @@ async def create_archive(interaction_id: str) -> dict[str, Any]:
 # ── Alert dead-letter admin (L3) ─────────────────────────────────────────────
 
 
-def _caller_is_agent(request: Request, role: str) -> bool:
-    if role != "agent":
-        return False
-    if not _is_open_mode():
-        return True
-    tok = (
-        request.headers.get("x-frontline-session")
-        or (request.cookies.get("frontline_session") if hasattr(request, "cookies") else None)
-    )
-    return bool(tok)
-
-
 @router.get("/alerts/dead-letter")
 async def list_alert_dead_letters(
     request: Request,
@@ -1631,8 +1619,15 @@ async def list_alert_dead_letters(
     _role: str = Depends(get_role),
 ) -> dict[str, Any]:
     """List failed webhook deliveries (requires ops:read)."""
-    if _caller_is_agent(request, _role):
-        raise HTTPException(status_code=403, detail="agent lacks ops:read permission")
+    has_cred = bool(
+        request.headers.get("x-frontline-session")
+        or (request.cookies.get("frontline_session") if hasattr(request, "cookies") else None)
+        or (request.cookies.get("__Host-frontline_session") if hasattr(request, "cookies") else None)
+        or request.headers.get("x-api-key")
+        or request.headers.get("authorization")
+    )
+    if has_cred or not _is_open_mode():
+        require_perm(_role, "ops:read", open_mode_ok=False)
     from src.api.pagination import paginate_list
     from src.frontline.alerts import list_dead_letters
 
@@ -1648,8 +1643,7 @@ async def replay_alert_dead_letter(
     _role: str = Depends(get_role),
 ) -> dict[str, Any]:
     """Re-POST a pending dead-letter payload once (requires ops:write)."""
-    if _caller_is_agent(request, _role):
-        raise HTTPException(status_code=403, detail="agent lacks ops:write permission")
+    require_perm(_role, "ops:write", open_mode_ok=False)
     from src.frontline.alerts import replay_dead_letter
 
     ok = await replay_dead_letter(dead_letter_id)
@@ -1690,8 +1684,7 @@ async def connector_config_put(
     _role: str = Depends(get_role),
 ) -> dict[str, Any]:
     """Enable/disable connector and set webhook URL + optional shared secret."""
-    if _caller_is_agent(request, _role):
-        raise HTTPException(status_code=403, detail="agent lacks ops:write permission")
+    require_perm(_role, "ops:write", open_mode_ok=False)
     from src.frontline.connectors import get_connector_config, set_connector_config
 
     if not isinstance(body, dict):

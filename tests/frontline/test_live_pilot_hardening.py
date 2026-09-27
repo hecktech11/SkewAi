@@ -34,17 +34,24 @@ def test_health_ready_ok(reset_ops_db, seed_automotive_pack, monkeypatch):
 
     monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
     with TestClient(app) as c:
-        r = c.get("/health/ready")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ready"] is True
-    assert body["failing_component"] is None
-    checks = body["checks"]
-    assert checks["pack"]["ok"] is True
-    assert checks["gazetteers"]["ok"] is True
-    assert checks["gazetteer_lookup"]["ok"] is True
-    assert checks["database"]["ok"] is True
-    assert checks["domain_warehouse"]["ok"] is True
+        # Unauthenticated request receives minimal public response
+        r_anon = c.get("/health/ready")
+        assert r_anon.status_code == 200
+        assert r_anon.json() == {"status": "ready", "ready": True}
+
+        # Authenticated request receives full inspection checks
+        monkeypatch.setenv("FRONTLINE_API_KEY", "health_check_key")
+        r = c.get("/health/ready", headers={"X-API-Key": "health_check_key"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ready"] is True
+        assert body["failing_component"] is None
+        checks = body["checks"]
+        assert checks["pack"]["ok"] is True
+        assert checks["gazetteers"]["ok"] is True
+        assert checks["gazetteer_lookup"]["ok"] is True
+        assert checks["database"]["ok"] is True
+        assert checks["domain_warehouse"]["ok"] is True
 
 
 def test_health_ready_503_names_component(reset_ops_db, seed_automotive_pack, monkeypatch):
@@ -55,13 +62,20 @@ def test_health_ready_503_names_component(reset_ops_db, seed_automotive_pack, mo
     set_active_pack_id("pack_does_not_exist")
     try:
         with TestClient(app) as c:
-            r = c.get("/health/ready")
-        assert r.status_code == 503
-        body = r.json()
-        assert body["ready"] is False
-        assert body["failing_component"]
-        assert body["failing_component"] in body["failing_components"]
-        assert "pack" in body["failing_components"]
+            # Unauthenticated request receives minimal public response
+            r_anon = c.get("/health/ready")
+            assert r_anon.status_code == 503
+            assert r_anon.json() == {"status": "not_ready", "ready": False}
+
+            # Authenticated request receives component failure details
+            monkeypatch.setenv("FRONTLINE_API_KEY", "health_check_key")
+            r = c.get("/health/ready", headers={"X-API-Key": "health_check_key"})
+            assert r.status_code == 503
+            body = r.json()
+            assert body["ready"] is False
+            assert body["failing_component"]
+            assert body["failing_component"] in body["failing_components"]
+            assert "pack" in body["failing_components"]
     finally:
         clear_active_pack_override()
 
