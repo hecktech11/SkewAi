@@ -53,6 +53,8 @@ def _isolate_test_databases(tmp_path_factory):
     lockers = root / "lockers"
     lockers.mkdir(parents=True, exist_ok=True)
     os.environ["QUBOT_LOCKER_DIR"] = str(lockers)
+    os.environ.setdefault("SESSION_SECRET", "test_secret_key_frontline_v2_12345")
+    os.environ.setdefault("FRONTLINE_ALLOW_CALL_HASH_OVERRIDE", "1")
     # Never allow accidental wipe of pilot path during tests.
     os.environ.pop("FRONTLINE_ALLOW_DEFAULT_DB_RESET", None)
     yield root

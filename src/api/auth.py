@@ -175,7 +175,9 @@ def check_api_key(
         )
     # A key configured as both is the service key: never widen a credential.
     return Principal(
-        credential="service" if matches_service else "dsr", api_key=provided
+        credential="service" if matches_service else "dsr",
+        api_key=provided,
+        subject="dsr_officer" if (matches_dsr and not matches_service) else "",
     )
 
 

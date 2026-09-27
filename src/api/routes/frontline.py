@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from src.api.auth import check_api_key, require_api_key, require_api_key_strict
 from src.api.export import build_audit_export
 from src.api.limiter import limiter
-from src.api.rbac import get_actor, get_role, require_perm, require_perm_dep
+from src.api.rbac import _is_open_mode, get_actor, get_role, require_perm, require_perm_dep
 from src.config import settings
 from src.data.warehouse import ops_con, ops_in_thread
 from src.frontline.simulator import simulate as run_simulate
@@ -1306,25 +1306,46 @@ async def list_alert_rules(pack_id: str | None = None) -> dict[str, Any]:
 
 
 @router.post("/alert-rules/evaluate")
-async def evaluate_alert_rule(body: dict[str, Any]) -> dict[str, Any]:
+async def evaluate_alert_rule(
+    body: dict[str, Any],
+    _role: str = Depends(get_role),
+) -> dict[str, Any]:
+    from src.api.rbac import require_perm
     from src.frontline.alert_rules import (
         apply_triggered_rule,
         evaluate_cluster_rule,
+        fetch_cluster_metrics,
         get_rule,
     )
 
-    rule = body.get("rule") or get_rule(str(body.get("rule_id") or ""))
-    if not rule:
-        raise HTTPException(status_code=404, detail="rule not found")
+    apply_side_effects = bool(body.get("apply"))
+    if apply_side_effects:
+        require_perm(_role, "ops:write", open_mode_ok=False)
+        rule_id = str(body.get("rule_id") or "")
+        rule = get_rule(rule_id)
+        if not rule:
+            raise HTTPException(status_code=404, detail="rule not found")
+        pack_id = str(body.get("pack_id") or rule.get("pack_id") or "automotive_nhtsa")
+        cluster_id = int(body.get("cluster_id") or 0)
+        case_count, max_severity = fetch_cluster_metrics(pack_id, cluster_id)
+    else:
+        rule = body.get("rule") or get_rule(str(body.get("rule_id") or ""))
+        if not rule:
+            raise HTTPException(status_code=404, detail="rule not found")
+        pack_id = str(body.get("pack_id") or rule.get("pack_id") or "automotive_nhtsa")
+        cluster_id = int(body.get("cluster_id") or 0)
+        case_count = int(body.get("case_count") or 0)
+        max_severity = str(body.get("max_severity") or "Low")
+
     ev = evaluate_cluster_rule(
         rule,
-        pack_id=str(body.get("pack_id") or rule.get("pack_id") or "automotive_nhtsa"),
-        cluster_id=int(body.get("cluster_id") or 0),
-        case_count=int(body.get("case_count") or 0),
-        max_severity=str(body.get("max_severity") or "Low"),
+        pack_id=pack_id,
+        cluster_id=cluster_id,
+        case_count=case_count,
+        max_severity=max_severity,
     )
     applied = None
-    if ev.get("triggered") and body.get("apply"):
+    if ev.get("triggered") and apply_side_effects:
         applied = await apply_triggered_rule(ev, title=str(body.get("title") or ""))
     return {"evaluation": ev, "applied": applied}
 
@@ -1381,22 +1402,31 @@ async def flag_embedding_shadow(interaction_id: str, body: dict[str, Any] | None
 
 
 @router.get("/eval/labels/next")
-async def eval_next(annotator_id: str = Query(..., min_length=7)) -> dict[str, Any]:
+async def eval_next(
+    annotator_id: str | None = None,
+    actor: str = Depends(get_actor),
+) -> dict[str, Any]:
     from src.eval.embedding_labels import LABEL_CLASSES, next_unlabeled_item as _next
 
-    item = _next(annotator_id)
+    eff_annotator = annotator_id or (actor if actor.startswith("human-") else f"human-{actor}")
+    item = _next(eff_annotator)
     if item is None:
         return {"item": None}
     return {"item": item, "classes": list(LABEL_CLASSES)}
 
 
 @router.post("/eval/labels")
-async def eval_submit(body: dict[str, Any]) -> dict[str, Any]:
+async def eval_submit(
+    body: dict[str, Any],
+    actor: str = Depends(get_actor),
+    _role: str = Depends(get_role),
+) -> dict[str, Any]:
     from src.eval.embedding_labels import submit_label
 
+    annotator = actor if actor.startswith("human-") else f"human-{actor}"
     rid = submit_label(
         eval_id=str(body.get("eval_id") or ""),
-        annotator_id=str(body.get("annotator_id") or ""),
+        annotator_id=annotator,
         label=str(body.get("label") or ""),
         source_record_id=body.get("source_record_id"),
         notes=str(body.get("notes") or ""),
@@ -1405,12 +1435,19 @@ async def eval_submit(body: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/eval/labels/adjudicate")
-async def eval_adjudicate(body: dict[str, Any]) -> dict[str, Any]:
+async def eval_adjudicate(
+    body: dict[str, Any],
+    actor: str = Depends(get_actor),
+    _role: str = Depends(get_role),
+) -> dict[str, Any]:
+    from src.api.rbac import require_perm
     from src.eval.embedding_labels import adjudicate
 
+    require_perm(_role, "approval:decide", open_mode_ok=False)
+    adjudicator = actor if actor.startswith("human-") else f"human-{actor}"
     rid = adjudicate(
         eval_id=str(body.get("eval_id") or ""),
-        adjudicator_id=str(body.get("adjudicator_id") or ""),
+        adjudicator_id=adjudicator,
         label=str(body.get("label") or ""),
         notes=str(body.get("notes") or ""),
     )
@@ -1572,14 +1609,30 @@ async def create_archive(interaction_id: str) -> dict[str, Any]:
 # ── Alert dead-letter admin (L3) ─────────────────────────────────────────────
 
 
+def _caller_is_agent(request: Request, role: str) -> bool:
+    if role != "agent":
+        return False
+    if not _is_open_mode():
+        return True
+    tok = (
+        request.headers.get("x-frontline-session")
+        or (request.cookies.get("frontline_session") if hasattr(request, "cookies") else None)
+    )
+    return bool(tok)
+
+
 @router.get("/alerts/dead-letter")
 async def list_alert_dead_letters(
+    request: Request,
     status: str = "pending",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     cursor: str | None = None,
+    _role: str = Depends(get_role),
 ) -> dict[str, Any]:
-    """List failed webhook deliveries (requires FRONTLINE_API_KEY when set)."""
+    """List failed webhook deliveries (requires ops:read)."""
+    if _caller_is_agent(request, _role):
+        raise HTTPException(status_code=403, detail="agent lacks ops:read permission")
     from src.api.pagination import paginate_list
     from src.frontline.alerts import list_dead_letters
 
@@ -1589,8 +1642,14 @@ async def list_alert_dead_letters(
 
 
 @router.post("/alerts/dead-letter/{dead_letter_id}/replay")
-async def replay_alert_dead_letter(dead_letter_id: str) -> dict[str, Any]:
-    """Re-POST a pending dead-letter payload once."""
+async def replay_alert_dead_letter(
+    request: Request,
+    dead_letter_id: str,
+    _role: str = Depends(get_role),
+) -> dict[str, Any]:
+    """Re-POST a pending dead-letter payload once (requires ops:write)."""
+    if _caller_is_agent(request, _role):
+        raise HTTPException(status_code=403, detail="agent lacks ops:write permission")
     from src.frontline.alerts import replay_dead_letter
 
     ok = await replay_dead_letter(dead_letter_id)
@@ -1625,8 +1684,14 @@ async def connector_status() -> dict[str, Any]:
 
 
 @router.put("/connectors/config")
-async def connector_config_put(body: dict[str, Any]) -> dict[str, Any]:
+async def connector_config_put(
+    request: Request,
+    body: dict[str, Any],
+    _role: str = Depends(get_role),
+) -> dict[str, Any]:
     """Enable/disable connector and set webhook URL + optional shared secret."""
+    if _caller_is_agent(request, _role):
+        raise HTTPException(status_code=403, detail="agent lacks ops:write permission")
     from src.frontline.connectors import get_connector_config, set_connector_config
 
     if not isinstance(body, dict):

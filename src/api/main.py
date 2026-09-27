@@ -620,14 +620,18 @@ async def health(request: Request) -> dict:
 
 
 @app.get("/health/ready", tags=["meta"])
-async def health_ready() -> dict:
+async def health_ready(request: Request) -> dict:
     """Readiness probe: pack, gazetteer lookup, ops DB, domain warehouse, secrets.
 
     Returns 200 only when every required component is live. Otherwise 503 with
     ``failing_component`` set to the first failed check name.
+    When authentication is required and caller is unauthenticated, detailed
+    internal checks are omitted to prevent information disclosure.
     """
     from src.data.warehouse import ops_con, ops_in_thread
     from src.domains.loader import load_pack
+    from src.api.auth import auth_required, check_api_key
+    from src.api.rbac import session_token_from_cookies, verify_session
 
     pack_id = resolve_active_pack_id()
     db_ok = False
@@ -646,6 +650,40 @@ async def health_ready() -> dict:
     except Exception:
         pack = None
     report = _readiness_report(pack_id, pack, db_ok=db_ok)
+
+    if auth_required():
+        is_authed = False
+        try:
+            tok = (
+                request.headers.get("x-frontline-session")
+                or session_token_from_cookies(request.cookies)
+            )
+            if tok:
+                verify_session(tok)
+                is_authed = True
+            else:
+                x_k = request.headers.get("x-api-key")
+                auth_h = request.headers.get("authorization")
+                if x_k or auth_h:
+                    check_api_key(
+                        authorization=auth_h,
+                        x_api_key=x_k,
+                        allow_open=False,
+                        allow_query_key=False,
+                    )
+                    is_authed = True
+        except Exception:
+            is_authed = False
+
+        if not is_authed:
+            pub_body = {
+                "status": "ready" if report["ready"] else "not_ready",
+                "ready": report["ready"],
+            }
+            if not report["ready"]:
+                return JSONResponse(status_code=503, content=pub_body)
+            return pub_body
+
     body = {
         "status": "ready" if report["ready"] else "not_ready",
         "ready": report["ready"],
