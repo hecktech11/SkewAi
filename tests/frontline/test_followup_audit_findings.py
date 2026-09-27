@@ -393,3 +393,201 @@ def test_fu16_pack_builder_insight_requires_pack_edit(reset_ops_db, monkeypatch)
     )
     # 400 Bad Request because csv_path is empty, NOT 403 Forbidden!
     assert r_admin.status_code == 400
+
+
+# ============================================================================
+# Additional Target Regressions (FU02, FU05, FU12, FU14, FU15)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_fu02_live_websocket_closed_and_handle_turn_dropped_on_erasure(reset_ops_db):
+    """Already-open customer WebSocket is closed with 1008 on erasure, and handle_customer_turn drops turns."""
+    from src.agents.base import TurnPersistenceError
+    from src.agents.orchestrator import Orchestrator
+    from src.api.routes.interactions import ActiveEntry, _active
+    from src.frontline.dsr import invalidate_active_orchestrator, is_interaction_erased
+
+    iid = "fu02_live_ws_erasure"
+    pack = load_pack("automotive_nhtsa")
+    orch = Orchestrator(interaction_id=iid, pack=pack, channel="web_voice")
+
+    mock_ws = AsyncMock()
+    mock_ws.close = AsyncMock()
+    loop = asyncio.get_running_loop()
+
+    entry = ActiveEntry(orch=orch, capability_token="tok_fu02_ws", customer_ws=mock_ws, loop=loop)
+    _active[iid] = entry
+
+    # Trigger erasure
+    invalidate_active_orchestrator(iid)
+
+    # Allow threadsafe task to run on the event loop
+    await asyncio.sleep(0.05)
+
+    mock_ws.close.assert_called_once_with(code=1008)
+    assert orch._erased is True
+    assert orch.ctx._erased is True
+    assert is_interaction_erased(iid) is True
+
+    # Incoming customer turn must be immediately dropped (no turns added, no speaking)
+    orch.hooks = MagicMock()
+    orch.hooks._maybe = AsyncMock()
+    await orch.handle_customer_turn("hello world after erasure")
+    assert len(orch.ctx.turns) == 0
+    orch.hooks._maybe.assert_not_called()
+
+    # Calling record_turn directly raises TurnPersistenceError
+    with pytest.raises(TurnPersistenceError):
+        orch.ctx.record_turn("customer", "hello")
+
+
+def test_fu05_replaying_orphan_files_replayed_on_startup(reset_ops_db, tmp_path, monkeypatch):
+    """Pre-existing .replaying-* orphan segments left by previous killed process are discovered and replayed."""
+    import json
+    from src.ledger.writer import _wal_path, replay_ledger_wal
+
+    wal_file = tmp_path / "ledger_wal.jsonl"
+    monkeypatch.setattr("src.ledger.writer._wal_path", lambda: wal_file)
+
+    # Simulate an orphan replaying file left behind when process died
+    orphan_file = tmp_path / "ledger_wal.jsonl.replaying-test-orphan"
+    rec1 = {
+        "action": {
+            "interaction_id": "ix_orphan_1",
+            "agent": "orchestrator",
+            "action_type": "state_transition",
+            "input_summary": "inp1",
+            "output_summary": "out1",
+            "created_at": utc_now().isoformat(),
+        },
+        "reason": "err",
+    }
+    orphan_file.write_text(json.dumps(rec1) + "\n", encoding="utf-8")
+
+    # Also have an active wal_file with another record
+    rec2 = {
+        "action": {
+            "interaction_id": "ix_active_2",
+            "agent": "orchestrator",
+            "action_type": "state_transition",
+            "input_summary": "inp2",
+            "output_summary": "out2",
+            "created_at": utc_now().isoformat(),
+        },
+        "reason": "err2",
+    }
+    wal_file.write_text(json.dumps(rec2) + "\n", encoding="utf-8")
+
+    res = replay_ledger_wal(limit=10)
+    assert res["replayed"] >= 2
+    assert not orphan_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_fu12_orchestrator_emits_turn_with_turn_id_and_distinct_ids_not_merged(reset_ops_db):
+    """Orchestrator emits agent turns with turn_id, and distinct turn IDs are not merged even with identical text."""
+    from src.agents.orchestrator import Orchestrator, OrchestratorHooks
+
+    iid = "fu12_test_turns"
+    pack = load_pack("automotive_nhtsa")
+
+    emitted_turns = []
+    async def _mock_emit(text, meta):
+        emitted_turns.append({"text": text, "meta": meta})
+
+    hooks = OrchestratorHooks(emit_customer_turn=_mock_emit)
+    orch = Orchestrator(interaction_id=iid, pack=pack, channel="web_voice", hooks=hooks)
+
+    await orch.start()
+    assert len(emitted_turns) == 1
+    assert emitted_turns[0]["meta"].get("turn_id") is not None
+    assert emitted_turns[0]["meta"].get("utterance_id") is not None
+    assert len(orch.ctx.turns) == 1
+    assert orch.ctx.turns[0]["turn_id"] == emitted_turns[0]["meta"]["turn_id"]
+
+    # Deduplication invariant: Two distinct turns with same text ("yes") but different IDs must NOT be merged
+    turn_a = {"turn_id": "t_1", "speaker": "customer", "text": "yes"}
+    turn_b = {"turn_id": "t_2", "speaker": "customer", "text": "yes"}
+
+    def merge_turns(existing, new_turn):
+        merged = list(existing)
+        found = False
+        for i, row in enumerate(merged):
+            if row.get("turn_id") and new_turn.get("turn_id") and row["turn_id"] == new_turn["turn_id"]:
+                merged[i] = {**row, **new_turn}
+                found = True
+                break
+            if row.get("turn_id") and new_turn.get("turn_id") and row["turn_id"] != new_turn["turn_id"]:
+                continue
+            if row.get("speaker") == new_turn.get("speaker") and row.get("text", "").strip() == new_turn.get("text", "").strip():
+                merged[i] = {**row, **new_turn}
+                found = True
+                break
+        if not found:
+            merged.append(new_turn)
+        return merged
+
+    turns = merge_turns([], turn_a)
+    turns = merge_turns(turns, turn_b)
+    assert len(turns) == 2
+    assert turns[0]["turn_id"] == "t_1"
+    assert turns[1]["turn_id"] == "t_2"
+
+
+def test_fu14_future_cancelled_on_timeout():
+    """predict_category_zero_shot must call cancel() on the embedding future upon timeout."""
+    import concurrent.futures
+    import numpy as np
+    from unittest.mock import MagicMock, patch
+    from src.ml_runtime.category_zeroshot import CategoryCentroids, predict_category_zero_shot
+
+    mock_centroids = CategoryCentroids(
+        pack_id="test_pack",
+        canonical_version="v1",
+        categories=("brakes",),
+        category_set=frozenset(["brakes"]),
+        centroids={"brakes": np.zeros(384, dtype=np.float32)},
+    )
+
+    mock_future = MagicMock()
+    mock_future.result.side_effect = concurrent.futures.TimeoutError("timed out")
+    mock_future.cancel = MagicMock()
+
+    with patch("src.ml_runtime.category_zeroshot.get_category_centroids", return_value=mock_centroids), \
+         patch("src.ml_runtime.category_zeroshot._EMBED_EXECUTOR.submit", return_value=mock_future):
+        res = predict_category_zero_shot("brake pedal", pack=MagicMock(), embedder=MagicMock(), timeout_ms=50.0)
+
+    mock_future.cancel.assert_called_once()
+    assert res.category is None
+
+
+@pytest.mark.asyncio
+async def test_fu15_websocket_auth_accepts_token_key(reset_ops_db, monkeypatch):
+    """WebSocket authenticate_websocket accepts {'type': 'auth', 'token': tok} as alias for session."""
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("FRONTLINE_OPEN_MODE", "0")
+    from src.api.auth import authenticate_websocket
+
+    session_tok = issue_session("test_user", "agent", issuer_role="admin")["token"]
+
+    mock_ws = AsyncMock()
+    mock_ws.client_state.name = "CONNECTED"
+    mock_ws.headers = {}
+    mock_ws.cookies = {}
+    mock_ws.query_params = {}
+    mock_ws.state = MagicMock()
+    mock_ws.receive_json = AsyncMock(return_value={"type": "auth", "token": session_tok})
+
+    p = await authenticate_websocket(mock_ws)
+    assert p is not None
+    assert p.subject == "test_user"
+    assert p.session.get("role") == "agent"
+
+    # Also verify with {"type": "auth", "session": session_tok}
+    mock_ws.receive_json = AsyncMock(return_value={"type": "auth", "session": session_tok})
+    p2 = await authenticate_websocket(mock_ws)
+    assert p2 is not None
+    assert p2.subject == "test_user"
+
+
+

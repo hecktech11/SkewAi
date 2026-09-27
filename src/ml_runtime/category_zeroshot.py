@@ -312,11 +312,13 @@ def predict_category_zero_shot(
         )
 
     timeout_s = max(0.001, max_ms / 1000.0)
+    fut = None
     try:
         fut = _EMBED_EXECUTOR.submit(embedder.embed, clean)
         try:
             emb = fut.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError:
+            fut.cancel()
             step_down("slm_understanding", reason=f"latency_breach: embedding timed out after {max_ms:.1f}ms")
             return ZeroShotCategoryResult(
                 category=None,
@@ -338,6 +340,8 @@ def predict_category_zero_shot(
         if norm > 1e-9:
             u_v = u_v / norm
     except Exception as e:
+        if fut is not None:
+            fut.cancel()
         step_down("slm_understanding", reason=f"embed_text_failed: {e}")
         return ZeroShotCategoryResult(
             category=None,

@@ -96,6 +96,8 @@ class ActiveEntry:
     turn_seq: int = 0
     owner_subject: str = ""
     capability_token: str = ""
+    customer_ws: Any = None
+    loop: Any = None
 
 
 _active: dict[str, ActiveEntry] = {}
@@ -1233,10 +1235,15 @@ class _WSHooks(OrchestratorHooks):
             pass
 
     async def emit_customer_turn(self, text: str, meta: dict[str, Any]) -> None:
+        from src.frontline.dsr import is_interaction_erased
+        if is_interaction_erased(self._interaction_id):
+            return
+        entry = _active.get(self._interaction_id)
+        if entry is not None and (getattr(entry.orch, "_erased", False) or getattr(entry.orch.ctx, "_erased", False)):
+            return
         # Remember this utterance for barge-in. A later generation must not
         # replace the one the caller is already hearing.
         try:
-            entry = _active.get(self._interaction_id)
             if entry is not None:
                 uid = entry.orch.note_emitted_utterance(
                     text,
@@ -1480,6 +1487,8 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
         return
     channel = WebVoiceChannel(websocket)
     orch.hooks = _WSHooks(channel, interaction_id)
+    entry.customer_ws = websocket
+    entry.loop = asyncio.get_running_loop()
     # Track whether the customer left on purpose; only then do we drop the
     # registry entry in `finally` (otherwise the contact stays resumable).
     hung_up = False
@@ -1512,6 +1521,13 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
 
     try:
         while True:
+            from src.frontline.dsr import is_interaction_erased
+            if getattr(orch, "_erased", False) or getattr(orch.ctx, "_erased", False) or is_interaction_erased(interaction_id):
+                try:
+                    await websocket.close(code=1008)
+                except Exception:
+                    pass
+                break
             try:
                 msg = await websocket.receive_json()
             except WebSocketDisconnect:
@@ -1705,6 +1721,8 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
         except Exception:
             pass
     finally:
+        if getattr(entry, "customer_ws", None) is websocket:
+            entry.customer_ws = None
         if hung_up or orch.ctx.state in ("DONE", "ABANDONED"):
             await _unregister(interaction_id)
         else:
@@ -1782,6 +1800,12 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
             pass
         return
     orch = entry.orch
+    from src.frontline.dsr import is_interaction_erased
+    if getattr(orch, "_erased", False) or is_interaction_erased(interaction_id):
+        await websocket.close(code=1008)
+        return
+    entry.customer_ws = websocket
+    entry.loop = asyncio.get_running_loop()
     try:
         from src.channels.stt_tts import ServerSpeechStack
         from src.voice.wiring import check_drive_mode, telephony_bridge_for
@@ -1848,6 +1872,8 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
     except Exception:
         pass
     finally:
+        if getattr(entry, "customer_ws", None) is websocket:
+            entry.customer_ws = None
         await _detach_customer_ws(interaction_id)
         try:
             await websocket.close()

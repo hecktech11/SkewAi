@@ -485,114 +485,125 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
     to the same WAL). On full success the WAL file is rotated aside.
     """
     path = _wal_path()
-    segment_path = None
+    segment_paths: list[Any] = []
     with _wal_lock:
         try:
-            if not path.exists():
+            # 1. Recover any existing orphan .replaying-* files from prior crashes (FU05 leftover)
+            if path.parent.exists():
+                existing_replaying = sorted(path.parent.glob(f"{path.name}.replaying-*"))
+                segment_paths.extend(existing_replaying)
+
+            # 2. If active WAL exists and has content, rotate it into a new replaying segment
+            if path.exists():
+                raw_text = path.read_text(encoding="utf-8")
+                if raw_text.strip():
+                    new_seg = path.with_name(f"{path.name}.replaying-{time.time_ns()}")
+                    path.rename(new_seg)
+                    segment_paths.append(new_seg)
+
+            if not segment_paths:
                 return {"replayed": 0, "failed": 0, "remaining": 0}
-            raw_text = path.read_text(encoding="utf-8")
-            if not raw_text.strip():
-                return {"replayed": 0, "failed": 0, "remaining": 0}
-            segment_name = f"{path.name}.replaying-{time.time_ns()}"
-            segment_path = path.with_name(segment_name)
-            path.rename(segment_path)
         except OSError as e:
             return {"replayed": 0, "failed": 1, "remaining": -1, "error": str(e)}
 
-    try:
-        lines = segment_path.read_text(encoding="utf-8").splitlines()
-    except OSError as e:
-        return {"replayed": 0, "failed": 1, "remaining": -1, "error": str(e)}
-
-    replayed, failed = 0, []
-    kept: list[str] = []
+    replayed = 0
+    failed: list[str] = []
+    all_rest: list[str] = []
     processed_iids: set[str] = set()
+    budget_remaining = limit
 
-    for line in lines[:limit]:
-        line = line.strip()
-        if not line:
-            continue
+    for segment_path in segment_paths:
         try:
-            entry = json.loads(line)
-            a = entry.get("action") or {}
-            act = AgentAction(
-                interaction_id=a.get("interaction_id", "unknown"),
-                agent=a.get("agent", "orchestrator"),
-                action_type=a.get("action_type", "state_transition"),
-                input_summary=a.get("input_summary") or "",
-                output_summary=((a.get("output_summary") or "") + " [replayed-from-wal]"),
-                evidence_ids=list(a.get("evidence_ids") or []),
-                case_id=a.get("case_id"),
-                ok=bool(a.get("ok", True)),
-                error=a.get("error"),
-                duration_ms=a.get("duration_ms"),
-            )
-            act.action_id = a.get("action_id") or act.action_id
-            if "ts" in a and a["ts"]:
-                try:
-                    from datetime import datetime
+            lines = segment_path.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            failed.append(f"{type(e).__name__}: {e}")
+            continue
 
-                    act.ts = datetime.fromisoformat(str(a["ts"]).replace("Z", "+00:00"))
+        seg_kept: list[str] = []
+        batch = lines[:budget_remaining] if budget_remaining > 0 else []
+        overflow = lines[budget_remaining:] if budget_remaining > 0 else lines
+
+        for line in batch:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                a = entry.get("action") or {}
+                act = AgentAction(
+                    interaction_id=a.get("interaction_id", "unknown"),
+                    agent=a.get("agent", "orchestrator"),
+                    action_type=a.get("action_type", "state_transition"),
+                    input_summary=a.get("input_summary") or "",
+                    output_summary=((a.get("output_summary") or "") + " [replayed-from-wal]"),
+                    evidence_ids=list(a.get("evidence_ids") or []),
+                    case_id=a.get("case_id"),
+                    ok=bool(a.get("ok", True)),
+                    error=a.get("error"),
+                    duration_ms=a.get("duration_ms"),
+                )
+                act.action_id = a.get("action_id") or act.action_id
+                if "ts" in a and a["ts"]:
+                    try:
+                        from datetime import datetime
+
+                        act.ts = datetime.fromisoformat(str(a["ts"]).replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+
+                already_persisted = False
+                try:
+                    with ops_con(read_only=True) as con:
+                        existing = con.execute(
+                            "SELECT 1 FROM agent_actions WHERE action_id = ?",
+                            [act.action_id],
+                        ).fetchone()
+                        if existing:
+                            already_persisted = True
                 except Exception:
                     pass
 
-            # Persistence-only path: check idempotency then insert directly via _record_action_inner.
-            # Must raise on failure rather than catching and re-appending to WAL.
-            already_persisted = False
-            try:
-                with ops_con(read_only=True) as con:
-                    existing = con.execute(
-                        "SELECT 1 FROM agent_actions WHERE action_id = ?",
-                        [act.action_id],
-                    ).fetchone()
-                    if existing:
-                        already_persisted = True
-            except Exception:
-                pass
+                if not already_persisted:
+                    _record_action_inner(act, None, [], {}, None)
 
-            if not already_persisted:
-                _record_action_inner(act, None, [], {}, None)
+                replayed += 1
+                budget_remaining -= 1
+                if act.interaction_id:
+                    processed_iids.add(act.interaction_id)
+            except Exception as e:
+                failed.append(f"{type(e).__name__}: {e}")
+                seg_kept.append(line)
 
-            replayed += 1
-            if act.interaction_id:
-                processed_iids.add(act.interaction_id)
-        except Exception as e:
-            failed.append(f"{type(e).__name__}: {e}")
-            kept.append(line)
+        seg_rest = seg_kept + [ln for ln in overflow if ln.strip()]
+        all_rest.extend(seg_rest)
 
-    rest = kept + [ln for ln in lines[limit:] if ln.strip()]
+        try:
+            if not seg_rest:
+                rotated = path.with_name(path.name + f".replayed-{int(time.time())}")
+                try:
+                    segment_path.rename(rotated)
+                except OSError:
+                    segment_path.unlink()
+            else:
+                segment_path.unlink()
+        except OSError:
+            pass
 
-    # Safely handle concurrent appends during replay: restore un-replayed lines under _wal_lock
-    if rest:
+    # Safely restore any un-replayed lines from all segments back into active WAL under _wal_lock
+    if all_rest:
         with _wal_lock:
             try:
                 existing_in_path = path.read_text(encoding="utf-8") if path.exists() else ""
             except Exception:
                 existing_in_path = ""
-            new_content = "\n".join(rest) + ("\n" + existing_in_path if existing_in_path else "\n")
+            new_content = "\n".join(all_rest) + ("\n" + existing_in_path if existing_in_path else "\n")
             try:
                 path.write_text(new_content, encoding="utf-8")
-                segment_path.unlink()
             except OSError:
                 pass
-    else:
-        rotated = path.with_name(path.name + f".replayed-{int(time.time())}")
-        try:
-            segment_path.rename(rotated)
-        except OSError:
-            pass
 
-    if replayed and not kept:
-        # Clear degraded_ledger ONLY for interactions that have NO remaining entries in rest
-        remaining_iids = set()
-        for ln in rest:
-            try:
-                iid = (json.loads(ln).get("action") or {}).get("interaction_id")
-                if iid:
-                    remaining_iids.add(iid)
-            except Exception:
-                pass
-        clear_iids = {iid for iid in processed_iids if iid not in remaining_iids}
+    if replayed and not failed and not all_rest:
+        clear_iids = {iid for iid in processed_iids if iid}
         if clear_iids:
             try:
                 with ops_con() as con:
@@ -608,7 +619,7 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
     return {
         "replayed": replayed,
         "failed": len(failed),
-        "remaining": len(rest),
+        "remaining": len(all_rest),
         "errors": failed[:5],
     }
 

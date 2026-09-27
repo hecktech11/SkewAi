@@ -196,12 +196,18 @@ class Orchestrator:
             input_summary="pack greeting (fast-path, no LLM)",
             output_summary=greeting,
         ))
+        turn = self.ctx.record_turn("agent", greeting, llm_used=False, latency_ms=0)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             greeting,
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", greeting, llm_used=False, latency_ms=0)
         self._record_state(COLLECTING)
         return greeting
 
@@ -226,6 +232,16 @@ class Orchestrator:
         ``drive_hint``: client-reported driving state for drive_mode_guard.
         ``locale``: BCP-47 client locale; pack locale wins when set.
         """
+        if getattr(self, "_erased", False) or getattr(self.ctx, "_erased", False):
+            return
+        try:
+            from src.frontline.dsr import is_interaction_erased
+            if is_interaction_erased(self.ctx.interaction_id):
+                self._erased = True
+                self.ctx._erased = True
+                return
+        except Exception:
+            pass
         # 2.1/2.4 observability: turn latency + budget
         import time as _t
         _turn_start = _t.perf_counter()
@@ -324,12 +340,18 @@ class Orchestrator:
                 input_summary="security rejection; canned rephrase request",
                 output_summary=decline,
             ))
+            turn = self.ctx.record_turn("agent", decline, llm_used=False)
             await self.hooks._maybe(
                 self.hooks.emit_customer_turn,
                 decline,
-                {"speaker": "agent", "fast_path": True, "llm_used": False},
+                {
+                    "speaker": "agent",
+                    "fast_path": True,
+                    "llm_used": False,
+                    "turn_id": turn.get("turn_id"),
+                    "utterance_id": turn.get("turn_id"),
+                },
             )
-            self.ctx.record_turn("agent", decline, llm_used=False)
             return
         text = v.text
 
@@ -390,13 +412,19 @@ class Orchestrator:
                 output_summary=script[:500],
             ))
             if not supervised:
+                turn = self.ctx.record_turn("agent", script, llm_used=False)
                 await self.hooks._maybe(
                     self.hooks.emit_customer_turn,
                     script,
-                    {"speaker": "agent", "fast_path": True, "llm_used": False,
-                     "consent_required": True},
+                    {
+                        "speaker": "agent",
+                        "fast_path": True,
+                        "llm_used": False,
+                        "consent_required": True,
+                        "turn_id": turn.get("turn_id"),
+                        "utterance_id": turn.get("turn_id"),
+                    },
                 )
-                self.ctx.record_turn("agent", script, llm_used=False)
             await self.hooks._maybe(
                 getattr(self.hooks, "emit_consent_required", None),
                 {"region": self.ctx.region, "script": script,
@@ -435,13 +463,19 @@ class Orchestrator:
                     "ok": True,
                 })
                 if not supervised:
+                    turn = self.ctx.record_turn("agent", _dscript, llm_used=False)
                     await self.hooks._maybe(
                         self.hooks.emit_customer_turn,
                         _dscript,
-                        {"speaker": "agent", "fast_path": True, "llm_used": False,
-                         "drive_mode": True},
+                        {
+                            "speaker": "agent",
+                            "fast_path": True,
+                            "llm_used": False,
+                            "drive_mode": True,
+                            "turn_id": turn.get("turn_id"),
+                            "utterance_id": turn.get("turn_id"),
+                        },
                     )
-                    self.ctx.record_turn("agent", _dscript, llm_used=False)
                 # Do not return: driving callers still get intake, but prompts
                 # downstream stay short and the callback offer is queued.
         except Exception:
@@ -480,14 +514,20 @@ class Orchestrator:
                     output_summary=_vin.get("prompt", "")[:500],
                 ))
                 if not supervised:
+                    vin_prompt = str(_vin.get("prompt") or "Please read the VIN again slowly.")
+                    turn = self.ctx.record_turn("agent", vin_prompt, llm_used=False)
                     await self.hooks._maybe(
                         self.hooks.emit_customer_turn,
-                        str(_vin.get("prompt") or "Please read the VIN again slowly."),
-                        {"speaker": "agent", "fast_path": True, "llm_used": False,
-                         "vin_retry": True},
+                        vin_prompt,
+                        {
+                            "speaker": "agent",
+                            "fast_path": True,
+                            "llm_used": False,
+                            "vin_retry": True,
+                            "turn_id": turn.get("turn_id"),
+                            "utterance_id": turn.get("turn_id"),
+                        },
                     )
-                    self.ctx.record_turn(
-                        "agent", str(_vin.get("prompt") or ""), llm_used=False)
                 return
         except Exception:
             pass
@@ -601,12 +641,18 @@ class Orchestrator:
                     "ok": True,
                 })
             else:
+                turn = self.ctx.record_turn("agent", offer, llm_used=False)
                 await self.hooks._maybe(
                     self.hooks.emit_customer_turn,
                     offer,
-                    {"speaker": "agent", "fast_path": True, "llm_used": False},
+                    {
+                        "speaker": "agent",
+                        "fast_path": True,
+                        "llm_used": False,
+                        "turn_id": turn.get("turn_id"),
+                        "utterance_id": turn.get("turn_id"),
+                    },
                 )
-                self.ctx.record_turn("agent", offer, llm_used=False)
             await self.hooks._maybe(self.hooks.emit_handoff_offer)
 
         # ── Intake ────────────────────────────────────────────────────────
@@ -671,12 +717,18 @@ class Orchestrator:
                 input_summary=f"kill-switch term: '{ires['kill_switch']}'",
                 output_summary=ires["question"],
             ))
+            turn = self.ctx.record_turn("agent", ires["question"], llm_used=False)
             await self.hooks._maybe(
                 self.hooks.emit_customer_turn,
                 ires["question"],                # the escalation script
-                {"speaker": "agent", "fast_path": True, "llm_used": False},
+                {
+                    "speaker": "agent",
+                    "fast_path": True,
+                    "llm_used": False,
+                    "turn_id": turn.get("turn_id"),
+                    "utterance_id": turn.get("turn_id"),
+                },
             )
-            self.ctx.record_turn("agent", ires["question"], llm_used=False)
             self._register_spoken_turn(ires["question"])
             # Supervisor whisper (Tier-A): coach on the P1 without the caller hearing.
             try:
@@ -788,6 +840,7 @@ class Orchestrator:
                 )
             except Exception:
                 pass
+            turn = self.ctx.record_turn("agent", offer, llm_used=False)
             await self.hooks._maybe(
                 self.hooks.emit_customer_turn,
                 offer,
@@ -796,9 +849,10 @@ class Orchestrator:
                     "fast_path": True,
                     "llm_used": False,
                     "escalate_low_confidence": True,
+                    "turn_id": turn.get("turn_id"),
+                    "utterance_id": turn.get("turn_id"),
                 },
             )
-            self.ctx.record_turn("agent", offer, llm_used=False)
             await self.hooks._maybe(self.hooks.emit_handoff_offer)
             await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
             return
@@ -834,12 +888,18 @@ class Orchestrator:
                     )
                 )
         if question:
+            turn = self.ctx.record_turn("agent", question, llm_used=False)
             await self.hooks._maybe(
                 self.hooks.emit_customer_turn,
                 question,
-                {"speaker": "agent", "fast_path": True, "llm_used": False},
+                {
+                    "speaker": "agent",
+                    "fast_path": True,
+                    "llm_used": False,
+                    "turn_id": turn.get("turn_id"),
+                    "utterance_id": turn.get("turn_id"),
+                },
             )
-            self.ctx.record_turn("agent", question, llm_used=False)
             await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
 
         # If slots complete AND no question is pending (safety or slot) → ENRICHING.
@@ -1041,11 +1101,17 @@ class Orchestrator:
             self.ctx.confirmation_phase = "done"
             if reply and not res.get("ok"):
                 try:
+                    turn = self.ctx.record_turn("agent", reply, llm_used=False)
                     await self.hooks._maybe(
                         self.hooks.emit_customer_turn, reply,
-                        {"speaker": "agent", "fast_path": True, "llm_used": False},
+                        {
+                            "speaker": "agent",
+                            "fast_path": True,
+                            "llm_used": False,
+                            "turn_id": turn.get("turn_id"),
+                            "utterance_id": turn.get("turn_id"),
+                        },
                     )
-                    self.ctx.record_turn("agent", reply, llm_used=False)
                     return True
                 except Exception:
                     return False
@@ -1064,12 +1130,18 @@ class Orchestrator:
             input_summary="full slot frame readback before enrichment",
             output_summary=prompt[:500],
         ))
+        turn = self.ctx.record_turn("agent", prompt, llm_used=False)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn, prompt,
-            {"speaker": "agent", "fast_path": True, "llm_used": False,
-             "frame_confirmation": True},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "frame_confirmation": True,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", prompt, llm_used=False)
         self._register_spoken_turn(prompt)
         await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
         return True
@@ -1118,12 +1190,18 @@ class Orchestrator:
                     input_summary=f"slots corrected: {sorted(changed)}",
                     output_summary=summary,
                 ))
+                turn = self.ctx.record_turn("agent", summary, llm_used=False)
                 await self.hooks._maybe(
                     self.hooks.emit_customer_turn,
                     summary,
-                    {"speaker": "agent", "fast_path": True, "llm_used": False},
+                    {
+                        "speaker": "agent",
+                        "fast_path": True,
+                        "llm_used": False,
+                        "turn_id": turn.get("turn_id"),
+                        "utterance_id": turn.get("turn_id"),
+                    },
                 )
-                self.ctx.record_turn("agent", summary, llm_used=False)
                 return True
             # No change extracted, or second round: proceed (bounded, no loops).
             slots.pop("__confirm_pending__", None)
@@ -1137,12 +1215,18 @@ class Orchestrator:
             input_summary="slot confirmation readback",
             output_summary=summary,
         ))
+        turn = self.ctx.record_turn("agent", summary, llm_used=False)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             summary,
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", summary, llm_used=False)
         await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
         return True
 
@@ -1539,13 +1623,18 @@ class Orchestrator:
         # Notify both caller and console that this is now a live queue item.
         # This also keeps a spoken request visually consistent with the button.
         await self.hooks._maybe(self.hooks.emit_handoff_offer)
+        spoken = "Connecting you to a human specialist now — thanks for holding."
+        turn = self.ctx.record_turn("agent", spoken, llm_used=False)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
-            "Connecting you to a human specialist now — thanks for holding.",
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
-        )
-        self.ctx.record_turn(
-            "agent", "Connecting you to a human specialist now.", llm_used=False
+            spoken,
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
         return {"accepted": True, "handoff_id": hid, "sla_s": HANDOFF_SLA_S}
 
@@ -1692,12 +1781,19 @@ class Orchestrator:
             input_summary=f"max_turns={settings.max_turns} force wrap-up",
             output_summary=BUDGET_WRAP_SCRIPT,
         ))
+        turn = self.ctx.record_turn("agent", BUDGET_WRAP_SCRIPT, llm_used=False)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             BUDGET_WRAP_SCRIPT,
-            {"speaker": "agent", "fast_path": True, "llm_used": False, "max_turns_reached": True},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "max_turns_reached": True,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", BUDGET_WRAP_SCRIPT, llm_used=False)
         await self._move_to_closing()
 
     async def _enter_enriching(self) -> None:
@@ -1815,12 +1911,18 @@ class Orchestrator:
 
         if sres.get("advisory_match"):
             notice = sres["notice"]
+            turn = self.ctx.record_turn("agent", notice, llm_used=False)
             await self.hooks._maybe(
                 self.hooks.emit_customer_turn,
                 notice,
-                {"speaker": "agent", "fast_path": True, "llm_used": False},
+                {
+                    "speaker": "agent",
+                    "fast_path": True,
+                    "llm_used": False,
+                    "turn_id": turn.get("turn_id"),
+                    "utterance_id": turn.get("turn_id"),
+                },
             )
-            self.ctx.record_turn("agent", notice, llm_used=False)
             await self.hooks._maybe(self.hooks.emit_activity, {
                 "agent": "sentinel",
                 "action_type": "advisory_check",
@@ -2000,12 +2102,18 @@ class Orchestrator:
                 case_id=case_id,
             )
         )
+        turn = self.ctx.record_turn("agent", goodbye, llm_used=False)
         await self.hooks._maybe(
             self.hooks.emit_customer_turn,
             goodbye,
-            {"speaker": "agent", "fast_path": True, "llm_used": False},
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
         )
-        self.ctx.record_turn("agent", goodbye, llm_used=False)
 
         self._transition(CLOSING, DONE)
         self._record_state(DONE)

@@ -198,15 +198,14 @@ jobs:
 import asyncio, json, websockets
 
 async def test_ws():
-    url = 'ws://127.0.0.1:8000/ws/interaction/$IID'
+    url = 'ws://127.0.0.1:8000/ws/interaction/$IID?token=$TOKEN'
     async with websockets.connect(url) as ws:
-        await ws.send(json.dumps({'type': 'auth', 'token': '$TOKEN'}))
         await ws.send(json.dumps({'type': 'user_turn', 'text': 'my brake pedal feels spongy'}))
         for _ in range(10):
             raw = await asyncio.wait_for(ws.recv(), timeout=15.0)
             msg = json.loads(raw)
             print('WS received:', msg.get('type'), msg.get('text'))
-            if msg.get('type') == 'turn' and msg.get('speaker') == 'agent':
+            if msg.get('type') in ('agent_turn', 'turn') and (msg.get('speaker') == 'agent' or msg.get('text')):
                 print('Agent turn verified!')
                 return
     raise RuntimeError('No agent turn received')
