@@ -73,10 +73,13 @@ def build_draft_pack(
     csv_path: Path,
     mapping: dict[str, str] | None = None,
     out_root: Path | None = None,
+    seed_warehouse: bool = False,
 ) -> dict[str, Any]:
     """Create domains/<pack_id>/ scaffold + seed sample records from CSV."""
     if not _SAFE_ID.match(pack_id):
         raise ValueError("pack_id must be snake_case [a-z][a-z0-9_]{1,48}")
+    if pack_id in ("automotive_nhtsa", "finance_cfpb"):
+        raise ValueError(f"Cannot overwrite protected runtime pack: {pack_id}")
     root = out_root or (REPO_ROOT / "domains")
     pack_dir = root / pack_id
     if pack_dir.exists() and any(pack_dir.iterdir()):
@@ -223,12 +226,13 @@ taxonomy_ref: taxonomy.yaml
     # Build records from the CSV sample (up to 50 rows) + an empty advisories
     # table so the pack is immediately usable. The user can re-run with a
     # larger CSV + advisories CSV to build the full warehouse.
-    try:
-        _seed_domain_warehouse(pack_id, samples)
-    except Exception as e:
-        # Don't fail the build if seeding fails — the pack.yaml is still valid
-        # and the user can run a separate ingest later.
-        print(f"   (note) domain warehouse seed skipped: {e}", file=sys.stderr)
+    if seed_warehouse:
+        try:
+            _seed_domain_warehouse(pack_id, samples)
+        except Exception as e:
+            # Don't fail the build if seeding fails — the pack.yaml is still valid
+            # and the user can run a separate ingest later.
+            print(f"   (note) domain warehouse seed skipped: {e}", file=sys.stderr)
 
     return {
         "pack_id": pack_id,
@@ -327,6 +331,7 @@ def first_insight_from_csv(
         csv_path=Path(csv_path),
         mapping=map_,
         out_root=out_root,
+        seed_warehouse=False,
     )
     samples = []
     seed = Path(built["pack_dir"]) / "data" / "seed_sample.json"

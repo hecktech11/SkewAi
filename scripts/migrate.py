@@ -173,8 +173,54 @@ def migrate_duckdb(db_path: Path, *, target: str = "ops") -> list[str]:
     return applied
 
 
+def validate_postgres_dsn_security(dsn: str) -> None:
+    """Ensure remote PostgreSQL connections use verified TLS (verify-full or verify-ca).
+
+    Loopback addresses (localhost, 127.0.0.1, ::1) and local Unix domain sockets
+    are permitted without TLS for local testing.
+    """
+    if not dsn:
+        raise ValueError("PostgreSQL DSN is empty.")
+
+    host: str | None = None
+    sslmode: str | None = None
+
+    if dsn.startswith("postgres://") or dsn.startswith("postgresql://"):
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(dsn)
+        host = parsed.hostname
+        query = parse_qs(parsed.query)
+        if "sslmode" in query:
+            sslmode = query["sslmode"][0].lower()
+    else:
+        # Key-value format e.g. "host=... sslmode=..."
+        for k, v1, v2 in re.findall(r'(\w+)=(?:"([^"]*)"|(\S+))', dsn):
+            val = v1 or v2
+            if k == "host":
+                host = val
+            elif k == "sslmode":
+                sslmode = val.lower()
+
+    # Determine if host is local loopback or local socket
+    is_local = False
+    if not host or host.startswith("/"):
+        # Local Unix domain socket
+        is_local = True
+    elif host in ("localhost", "127.0.0.1", "::1", "127.0.0.1:5432") or host.startswith("127."):
+        is_local = True
+
+    if not is_local:
+        if sslmode not in ("verify-full", "verify-ca"):
+            raise ValueError(
+                f"Remote PostgreSQL connection requires verified TLS (sslmode=verify-full or sslmode=verify-ca). "
+                f"Got sslmode={sslmode!r} for host {host!r}."
+            )
+
+
 def migrate_postgres(dsn: str) -> list[str]:
     """Apply pending migrations to Postgres via psycopg. Returns applied."""
+    validate_postgres_dsn_security(dsn)
     import psycopg
 
     applied: list[str] = []
@@ -192,7 +238,7 @@ def migrate_postgres(dsn: str) -> list[str]:
             )
             cur.execute("SELECT version FROM schema_migrations")
             done = {str(r[0]) for r in cur.fetchall()}
-        for version, path in available_migrations():
+        for version, path in available_migrations(target="postgres"):
             if version in done:
                 continue
             sql = path.read_text(encoding="utf-8")

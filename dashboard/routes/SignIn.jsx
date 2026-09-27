@@ -186,6 +186,7 @@ export default function SignIn({ initialMode = "signin", onNavigate }) {
   // Operator API-key entry (key-only operators can't reach Settings ungated)
   const [showApiKeyBox, setShowApiKeyBox] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [rememberApiKey, setRememberApiKey] = useState(false);
 
   async function handleApiKeySubmit(e) {
     e.preventDefault();
@@ -198,7 +199,7 @@ export default function SignIn({ initialMode = "signin", onNavigate }) {
     }
     setBusy(true);
     try {
-      setApiKey(key, { remember: true });
+      setApiKey(key, { remember: rememberApiKey });
       const access = await hasConsoleAccess();
       if (access.allowed) {
         setApiKeyInput("");
@@ -873,6 +874,16 @@ export default function SignIn({ initialMode = "signin", onNavigate }) {
                             onChange={(e) => setApiKeyInput(e.target.value)}
                           />
                         </label>
+                        <div className="auth-options-row" style={{ marginTop: "0.25rem", marginBottom: "0.5rem" }}>
+                          <label className="checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={rememberApiKey}
+                              onChange={(e) => setRememberApiKey(e.target.checked)}
+                            />
+                            <span>Remember on this device</span>
+                          </label>
+                        </div>
                         <button
                           type="submit"
                           className="btn btn-secondary btn-block btn-sm"

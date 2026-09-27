@@ -45,7 +45,9 @@ fi
 # refuses to start, even outside hardened mode. Loopback-only dev keeps the
 # intentional open escape hatch; acknowledged local pilots opt in explicitly.
 case "${API_HOST:-0.0.0.0}" in
-  0.0.0.0|::)
+  127.*|localhost|::1)
+    ;;
+  *)
     if [ "${FRONTLINE_AUTH_REQUIRED:-0}" != "1" ] && [ "${FRONTLINE_OPEN_BIND_ACK:-0}" != "1" ]; then
       echo "ERROR: API_HOST=${API_HOST:-0.0.0.0} binds beyond loopback but FRONTLINE_AUTH_REQUIRED=1 is not set." >&2
       echo "Refusing to start open on a shared network. Set FRONTLINE_AUTH_REQUIRED=1 + a 32-byte FRONTLINE_API_KEY," >&2

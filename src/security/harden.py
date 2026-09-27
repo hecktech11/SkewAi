@@ -44,8 +44,24 @@ WEAK_KEY_VALUES = frozenset({
     "example", "letmein", "qwerty", "admin", "frontline",
 })
 
+import ipaddress
+
 #: Binds that expose the process beyond loopback.
 WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", "0:0:0:0:0:0:0:0"})
+
+
+def is_loopback_host(host: str | None = None) -> bool:
+    """True when the host binds loopback only (safe for unauthenticated local dev)."""
+    h = (host or api_host()).strip().lower()
+    if not h:
+        return False
+    if h in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_loopback
+    except ValueError:
+        return False
 
 
 def api_host() -> str:
@@ -54,8 +70,8 @@ def api_host() -> str:
 
 
 def is_wildcard_bind(host: str | None = None) -> bool:
-    """True when the API binds beyond loopback (LAN/container-wide)."""
-    return (host or api_host()).strip() in WILDCARD_HOSTS
+    """True when the API binds beyond loopback (LAN/container-wide or non-loopback IP)."""
+    return not is_loopback_host(host)
 
 
 def auth_explicitly_required() -> bool:

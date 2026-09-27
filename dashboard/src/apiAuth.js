@@ -308,7 +308,7 @@ export async function loginWithPassword({ email, password, remember = false }) {
       method: "POST",
       headers: { "Content-Type": "application/json", ...apiHeaders() },
       credentials: "same-origin",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember: Boolean(remember) }),
     });
     if (r.ok) {
       const data = await r.json();

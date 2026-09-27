@@ -25,7 +25,7 @@ dashboard/dist/
 *.duckdb.wal
 data/**/*.duckdb
 data/**/*.duckdb.wal
-data/connectors/outbox/
+data/connectors/
 data/uploads/demo_*.csv
 data/uploads/evil_*.csv
 reports/qubot/contacts/

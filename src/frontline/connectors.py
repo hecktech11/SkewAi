@@ -113,9 +113,17 @@ def set_connector_config(
         if webhook_url is not None:
             cleaned = webhook_url.strip()
             if cleaned:
+                from urllib.parse import urlparse
+
+                p = urlparse(cleaned)
+                if p.username or p.password:
+                    raise ValueError("Webhook URL must not contain embedded user credentials")
                 # Reject SSRF targets at config time (not only at dispatch).
                 validate_outbound_url(cleaned)
+            old_url = current.get("webhook_url") or ""
             current["webhook_url"] = cleaned
+            if cleaned != old_url and shared_secret is None:
+                current["shared_secret"] = ""
         if shared_secret is not None:
             current["shared_secret"] = shared_secret.strip()
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -137,12 +145,13 @@ def reset_connector_config_cache() -> None:
 def _redact_url(url: str) -> str:
     if not url:
         return ""
-    # Keep scheme + host, drop path/query secrets.
+    # Keep scheme + host (excluding userinfo), drop path/query secrets.
     try:
         from urllib.parse import urlparse
 
         p = urlparse(url)
-        host = p.netloc or "…"
+        h = p.hostname or "…"
+        host = f"{h}:{p.port}" if p.port else h
         return f"{p.scheme}://{host}/…" if p.scheme else f"{host}/…"
     except Exception:
         return url[:24] + "…" if len(url) > 24 else url
