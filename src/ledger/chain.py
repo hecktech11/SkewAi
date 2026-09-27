@@ -193,8 +193,14 @@ def verify_chain(
                             "first_bad_action_id": rows[-1].get("action_id"),
                             "detail": "chain_incomplete",
                         }
-            except Exception:
-                pass
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "error": "head_lookup_failed",
+                    "checked": 0,
+                    "first_bad_action_id": rows[-1].get("action_id") if rows else None,
+                    "detail": f"failed to check stored head for complete chain: {e}",
+                }
 
     prev = GENESIS
     for i, row in enumerate(rows):

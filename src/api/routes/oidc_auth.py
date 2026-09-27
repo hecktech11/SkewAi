@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Any
 from urllib.parse import quote
 
@@ -24,7 +25,7 @@ from src.frontline.oidc import (
 router = APIRouter(prefix="/api/frontline", tags=["auth-oidc"])
 
 
-def _session_cookie(resp: JSONResponse | RedirectResponse, token: str, *, max_age: int = 3600) -> None:
+def _session_cookie(resp: JSONResponse | RedirectResponse, token: str, *, max_age: int | None = 3600) -> None:
     """Set the session cookie with production-compatible attributes (item 19).
 
     - ``__Host-`` prefix + Secure + HttpOnly + SameSite=Lax + Path=/ when
@@ -32,6 +33,7 @@ def _session_cookie(resp: JSONResponse | RedirectResponse, token: str, *, max_ag
     - unprefixed name over local http dev (Secure cookies would not store).
     Login always mints and sets a FRESH token, rotating any pre-existing
     session (fixation defense); logout clears both names.
+    If max_age is None, a browser-session cookie (no Max-Age/Expires) is set.
     """
     if not token:
         return
@@ -43,15 +45,17 @@ def _session_cookie(resp: JSONResponse | RedirectResponse, token: str, *, max_ag
         _secure = is_production_like()
     except Exception:
         _secure = False
-    resp.set_cookie(
-        key=session_cookie_name(),
-        value=token,
-        httponly=True,
-        secure=_secure,
-        samesite="lax",
-        path="/",
-        max_age=max(60, int(max_age)),
-    )
+    cookie_kwargs: dict[str, Any] = {
+        "key": session_cookie_name(),
+        "value": token,
+        "httponly": True,
+        "secure": _secure,
+        "samesite": "lax",
+        "path": "/",
+    }
+    if max_age is not None:
+        cookie_kwargs["max_age"] = max(60, int(max_age))
+    resp.set_cookie(**cookie_kwargs)
 
 
 @router.get("/auth/oidc/status")
@@ -118,15 +122,32 @@ async def oidc_config_put(
 
 
 @router.get("/auth/oidc/start")
-async def oidc_start(next: str | None = Query(default=None)) -> RedirectResponse:
+async def oidc_start(request: Request, next: str | None = Query(default=None)) -> RedirectResponse:
+    binding = secrets.token_urlsafe(24)
     try:
-        begun = begin_login(next_url=next)
+        begun = begin_login(next_url=next, browser_binding=binding)
     except RuntimeError:
         raise HTTPException(
             status_code=503,
             detail="Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
         ) from None
-    return RedirectResponse(begun["authorize_url"], status_code=302)
+    try:
+        from src.security.harden import is_production_like
+
+        _secure = is_production_like()
+    except Exception:
+        _secure = False
+    resp = RedirectResponse(begun["authorize_url"], status_code=302)
+    resp.set_cookie(
+        "oidc_browser_binding",
+        binding,
+        httponly=True,
+        secure=_secure,
+        samesite="lax",
+        path="/",
+        max_age=600,
+    )
+    return resp
 
 
 @router.get("/auth/oidc/callback")
@@ -142,22 +163,40 @@ async def oidc_callback(
         return RedirectResponse(f"{dest_err}?error={quote(str(error))}", status_code=302)
     if not code or not state:
         return RedirectResponse(f"{dest_err}?error=missing_code", status_code=302)
+    browser_binding = request.cookies.get("oidc_browser_binding") or ""
     try:
-        done = finish_callback(code=code, state=state)
+        done = finish_callback(code=code, state=state, browser_binding=browser_binding)
     except ValueError as exc:
         return RedirectResponse(f"{dest_err}?error={quote(str(exc))}", status_code=302)
     nxt = done.get("next_url") or dest_ok
     if nxt.endswith("#signin"):
         nxt = nxt[: -len("signin")] + "command"
-    # SECURITY: Use URL fragment instead of query string so proxies, access logs,
-    # and Referer headers never leak the handoff ID.
+    # SECURITY: Match dashboard App.jsx: window.location.hash.slice(1).indexOf("?")
     if "#" in nxt:
         base_url, frag = nxt.split("#", 1)
-        loc = f"{base_url}#{frag}&handoff={done['handoff']}" if frag else f"{base_url}#handoff={done['handoff']}"
+        target = frag or "command"
+        loc = f"{base_url}#{target}?handoff={done['handoff']}"
     else:
-        loc = f"{nxt}#handoff={done['handoff']}"
+        loc = f"{nxt}#command?handoff={done['handoff']}"
+    try:
+        from src.security.harden import is_production_like
+
+        _secure = is_production_like()
+    except Exception:
+        _secure = False
     resp = RedirectResponse(loc, status_code=302)
     _session_cookie(resp, str(done.get("token") or ""))
+    binding_val = str(done.get("browser_binding") or browser_binding or "")
+    if binding_val:
+        resp.set_cookie(
+            "oidc_handoff_binding",
+            binding_val,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            path="/",
+            max_age=300,
+        )
     return resp
 
 
@@ -191,14 +230,27 @@ async def auth_logout(request: Request = None) -> JSONResponse:  # type: ignore[
 
 
 @router.post("/auth/oidc/complete")
-async def oidc_complete(body: dict[str, Any]) -> JSONResponse:
+async def oidc_complete(request: Request, body: dict[str, Any]) -> JSONResponse:
+    binding = (
+        request.cookies.get("oidc_handoff_binding")
+        or request.cookies.get("oidc_browser_binding")
+        or ""
+    )
     try:
-        out = consume_handoff(str(body.get("handoff") or ""))
+        out = consume_handoff(str(body.get("handoff") or ""), browser_binding=binding)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     token = out.pop("token", "")
     resp = JSONResponse(out)
     _session_cookie(resp, token)
+    try:
+        from src.security.harden import is_production_like
+
+        _secure = is_production_like()
+    except Exception:
+        _secure = False
+    resp.delete_cookie("oidc_handoff_binding", path="/", secure=_secure, samesite="lax")
+    resp.delete_cookie("oidc_browser_binding", path="/", secure=_secure, samesite="lax")
     return resp
 
 
@@ -356,7 +408,7 @@ async def auth_login(request: Request, body: dict[str, Any]) -> JSONResponse:
 
     email = str(body.get("email") or "").strip().lower()[:254]
     password = str(body.get("password") or "")
-    remember = bool(body.get("remember", True))
+    remember = bool(body.get("remember", False))
 
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required.")
@@ -425,5 +477,8 @@ async def auth_login(request: Request, body: dict[str, Any]) -> JSONResponse:
     })
     import time as _time
 
-    _session_cookie(resp, token, max_age=max(60, int(session_data["exp"] - _time.time())))
+    if remember:
+        _session_cookie(resp, token, max_age=max(60, int(session_data["exp"] - _time.time())))
+    else:
+        _session_cookie(resp, token, max_age=None)
     return resp
