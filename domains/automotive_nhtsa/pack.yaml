@@ -139,10 +139,11 @@ severity:
   - when: description_matches_fire|smoke|crash|injury
     severity: Critical
     reason: Severity-critical language in description
-  - when: category in [SERVICE BRAKES, AIR BAGS, FUEL SYSTEM, STEERING]
+  - when: category in [SERVICE BRAKES, AIR BAGS, FUEL SYSTEM, FUEL/PROPULSION SYSTEM,
+      STEERING]
     severity: Medium
     reason: Safety-critical system
-  - when: category in [ELECTRICAL, ENGINE, POWER TRAIN]
+  - when: category in [ELECTRICAL SYSTEM, ENGINE, POWER TRAIN]
     severity: Medium
     reason: Drivetrain component
   - when: default
