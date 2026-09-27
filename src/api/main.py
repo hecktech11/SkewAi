@@ -651,38 +651,37 @@ async def health_ready(request: Request) -> dict:
         pack = None
     report = _readiness_report(pack_id, pack, db_ok=db_ok)
 
-    if auth_required():
-        is_authed = False
-        try:
-            tok = (
-                request.headers.get("x-frontline-session")
-                or session_token_from_cookies(request.cookies)
-            )
-            if tok:
-                verify_session(tok)
+    is_authed = False
+    try:
+        tok = (
+            request.headers.get("x-frontline-session")
+            or session_token_from_cookies(request.cookies)
+        )
+        if tok:
+            verify_session(tok)
+            is_authed = True
+        else:
+            x_k = request.headers.get("x-api-key")
+            auth_h = request.headers.get("authorization")
+            if x_k or auth_h:
+                check_api_key(
+                    authorization=auth_h,
+                    x_api_key=x_k,
+                    allow_open=False,
+                    allow_query_key=False,
+                )
                 is_authed = True
-            else:
-                x_k = request.headers.get("x-api-key")
-                auth_h = request.headers.get("authorization")
-                if x_k or auth_h:
-                    check_api_key(
-                        authorization=auth_h,
-                        x_api_key=x_k,
-                        allow_open=False,
-                        allow_query_key=False,
-                    )
-                    is_authed = True
-        except Exception:
-            is_authed = False
+    except Exception:
+        is_authed = False
 
-        if not is_authed:
-            pub_body = {
-                "status": "ready" if report["ready"] else "not_ready",
-                "ready": report["ready"],
-            }
-            if not report["ready"]:
-                return JSONResponse(status_code=503, content=pub_body)
-            return pub_body
+    if not is_authed:
+        pub_body = {
+            "status": "ready" if report["ready"] else "not_ready",
+            "ready": report["ready"],
+        }
+        if not report["ready"]:
+            return JSONResponse(status_code=503, content=pub_body)
+        return pub_body
 
     body = {
         "status": "ready" if report["ready"] else "not_ready",

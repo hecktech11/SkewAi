@@ -349,20 +349,64 @@ def test_row_11_alert_rules_evaluate_requires_ops_write(reset_ops_db):
 
 # ── Row 12: PUT /connectors/config requires ops:write ──
 
-def test_row_12_connector_config_put_requires_ops_write(reset_ops_db):
+def test_row_12_connector_config_put_requires_ops_write(reset_ops_db, monkeypatch):
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("SESSION_SECRET", "session_secret_for_row12_test")
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", "srv_key_123")
+
     from src.api.rbac import issue_session
 
-    sess_agent = issue_session("agent_user", role="agent", ttl_s=3600)
+    sess_admin = issue_session("admin_user", role="admin")
+    sess_agent = issue_session("agent_user", role="agent")
+    sess_sup = issue_session("sup_user", role="supervisor", issuer_role="admin")
+    sess_dsr = issue_session("dsr_user", role="dsr_officer", issuer_role="admin")
+
     with TestClient(app) as client:
-        r = client.put(
+        payload = {
+            "webhook_url": "https://webhook.example.com/dest",
+            "enabled": True,
+        }
+        # Agent lacks ops:write -> 403
+        r_agent = client.put(
             "/api/frontline/connectors/config",
             headers={"X-Frontline-Session": sess_agent["token"]},
-            json={
-                "webhook_url": "https://webhook.example.com/dest",
-                "enabled": True,
-            },
+            json=payload,
         )
-        assert r.status_code == 403
+        assert r_agent.status_code == 403
+
+        # Supervisor lacks ops:write -> 403
+        r_sup = client.put(
+            "/api/frontline/connectors/config",
+            headers={"X-Frontline-Session": sess_sup["token"]},
+            json=payload,
+        )
+        assert r_sup.status_code == 403
+
+        # DSR officer lacks ops:write -> 403
+        r_dsr = client.put(
+            "/api/frontline/connectors/config",
+            headers={"X-Frontline-Session": sess_dsr["token"]},
+            json=payload,
+        )
+        assert r_dsr.status_code == 403
+
+        # Service key lacks ops:write -> 403
+        r_srv = client.put(
+            "/api/frontline/connectors/config",
+            headers={"X-API-Key": "srv_key_123"},
+            json=payload,
+        )
+        assert r_srv.status_code == 403
+
+        # Admin has ops:write -> 200
+        r_admin = client.put(
+            "/api/frontline/connectors/config",
+            headers={"X-Frontline-Session": sess_admin["token"]},
+            json=payload,
+        )
+        assert r_admin.status_code == 200
+        assert r_admin.json()["enabled"] is True
 
 
 # ── Row 13: Eval review identities derived from authenticated actor ──
@@ -398,24 +442,81 @@ def test_row_13_eval_labels_derive_actor_and_adjudicate_requires_approval(reset_
 
 # ── Row 15: Dead-letter list and replay routes require ops permissions ──
 
-def test_row_15_dead_letter_permissions(reset_ops_db):
+def test_row_15_dead_letter_permissions(reset_ops_db, monkeypatch):
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("SESSION_SECRET", "session_secret_for_row15_test")
+    monkeypatch.setenv("FRONTLINE_BOOTSTRAP_ADMIN", "1")
+    monkeypatch.setenv("FRONTLINE_API_KEY", "srv_key_123")
+
     from src.api.rbac import issue_session
 
-    sess_agent = issue_session("agent_user", role="agent", ttl_s=3600)
+    sess_admin = issue_session("admin_user", role="admin")
+    sess_agent = issue_session("agent_user", role="agent")
+    sess_sup = issue_session("sup_user", role="supervisor", issuer_role="admin")
+    sess_dsr = issue_session("dsr_user", role="dsr_officer", issuer_role="admin")
+
     with TestClient(app) as client:
         # GET dead-letter requires ops:read
-        r_get = client.get(
+        # Agent lacks ops:read -> 403
+        assert client.get(
             "/api/frontline/alerts/dead-letter",
             headers={"X-Frontline-Session": sess_agent["token"]},
-        )
-        assert r_get.status_code == 403
+        ).status_code == 403
+
+        # DSR officer lacks ops:read -> 403
+        assert client.get(
+            "/api/frontline/alerts/dead-letter",
+            headers={"X-Frontline-Session": sess_dsr["token"]},
+        ).status_code == 403
+
+        # Supervisor has ops:read -> 200
+        assert client.get(
+            "/api/frontline/alerts/dead-letter",
+            headers={"X-Frontline-Session": sess_sup["token"]},
+        ).status_code == 200
+
+        # Service key has ops:read -> 200
+        assert client.get(
+            "/api/frontline/alerts/dead-letter",
+            headers={"X-API-Key": "srv_key_123"},
+        ).status_code == 200
+
+        # Admin has ops:read -> 200
+        assert client.get(
+            "/api/frontline/alerts/dead-letter",
+            headers={"X-Frontline-Session": sess_admin["token"]},
+        ).status_code == 200
 
         # POST replay requires ops:write
-        r_post = client.post(
+        # Agent lacks ops:write -> 403
+        assert client.post(
             "/api/frontline/alerts/dead-letter/dl_01/replay",
             headers={"X-Frontline-Session": sess_agent["token"]},
-        )
-        assert r_post.status_code == 403
+        ).status_code == 403
+
+        # DSR officer lacks ops:write -> 403
+        assert client.post(
+            "/api/frontline/alerts/dead-letter/dl_01/replay",
+            headers={"X-Frontline-Session": sess_dsr["token"]},
+        ).status_code == 403
+
+        # Supervisor lacks ops:write -> 403
+        assert client.post(
+            "/api/frontline/alerts/dead-letter/dl_01/replay",
+            headers={"X-Frontline-Session": sess_sup["token"]},
+        ).status_code == 403
+
+        # Service key lacks ops:write -> 403
+        assert client.post(
+            "/api/frontline/alerts/dead-letter/dl_01/replay",
+            headers={"X-API-Key": "srv_key_123"},
+        ).status_code == 403
+
+        # Admin has ops:write -> passes permission check (returns 404 since dl_01 is not found, not 403)
+        assert client.post(
+            "/api/frontline/alerts/dead-letter/dl_01/replay",
+            headers={"X-Frontline-Session": sess_admin["token"]},
+        ).status_code == 404
 
 
 # ── Rows 17 & 21: Query DSR key resolves to dsr_officer role, not service ──
@@ -558,3 +659,21 @@ def test_row_23_health_ready_minimal_for_unauthenticated_under_auth(monkeypatch)
         assert r_auth.status_code in (200, 503)
         data_auth = r_auth.json()
         assert "checks" in data_auth
+
+
+def test_row_23_health_ready_minimal_when_auth_off(monkeypatch):
+    monkeypatch.delenv("FRONTLINE_AUTH_REQUIRED", raising=False)
+    monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
+    monkeypatch.setenv("FRONTLINE_OPEN_MODE", "1")
+
+    with TestClient(app) as client:
+        # Anonymous request with auth turned off STILL returns only public status
+        r_unauth = client.get("/health/ready")
+        assert r_unauth.status_code in (200, 503)
+        data_unauth = r_unauth.json()
+        assert "ready" in data_unauth
+        assert "status" in data_unauth
+        assert "checks" not in data_unauth
+        assert "failing_component" not in data_unauth
+        assert "failing_components" not in data_unauth
+        assert "active_pack" not in data_unauth
