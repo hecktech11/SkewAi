@@ -176,6 +176,7 @@ export default function CallWidget() {
       setSpeakPhase("normal");
       drainingSpeakRef.current = false;
       speakQueueRef.current = [];
+      if (finalizePendingTerminal()) return;
       armListenCooldown();
       setInfo("Voice output stalled — mic is live, keep speaking or type below");
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -212,6 +213,19 @@ export default function CallWidget() {
       clearTimeout(thinkingTimeoutRef.current);
       thinkingTimeoutRef.current = null;
     }
+  }
+
+  function finalizePendingTerminal() {
+    if (!pendingTerminalRef.current) return false;
+    const summary = pendingTerminalRef.current;
+    pendingTerminalRef.current = null;
+    markCallTerminal();
+    setEnded(summary);
+    setState(CALL_STATE.ENDED);
+    setWsStatus("disconnected");
+    cleanupCall();
+    closeWsQuietly();
+    return true;
   }
 
   /** Ask the server to finalize the contact (REST path, works with no socket). */
@@ -394,16 +408,7 @@ export default function CallWidget() {
     const next = speakQueueRef.current.shift();
     if (!next) {
       drainingSpeakRef.current = false;
-      if (pendingTerminalRef.current) {
-        const summary = pendingTerminalRef.current;
-        pendingTerminalRef.current = null;
-        setEnded(summary);
-        setState(CALL_STATE.ENDED);
-        setWsStatus("disconnected");
-        cleanupCall();
-        closeWsQuietly();
-        return;
-      }
+      if (finalizePendingTerminal()) return;
       armListenCooldown();
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && !humanControlRef.current) {
         setState(CALL_STATE.LISTENING);
@@ -498,7 +503,16 @@ export default function CallWidget() {
       cancelAnimationFrame(bargeRafRef.current);
       bargeRafRef.current = null;
     }
-    if (speakQueueRef.current.length) drainSpeakQueue();
+    if (speakQueueRef.current.length) {
+      drainSpeakQueue();
+    } else {
+      if (finalizePendingTerminal()) return;
+      if (!callEndedRef.current && !mutedRef.current) {
+        listenReadyAtRef.current = Date.now();
+        setState(CALL_STATE.LISTENING);
+        startRecognitionSafe();
+      }
+    }
   }
 
   function startBargeWatch() {
@@ -956,6 +970,8 @@ export default function CallWidget() {
     setHumanControl(false);
     controlGenRef.current = 0;
     pendingTerminalRef.current = null;
+    callEndedRef.current = false;
+    intentionalCloseRef.current = false;
     setDriving(false);
     setFrustration(0);
     setLatency(null);

@@ -475,8 +475,8 @@ def test_migrate_legacy_xor_tokens_script(reset_ops_db):
             [turn_id, iid, legacy_enc_v1],
         )
 
-    # Run migration
-    stats = migrate(dry_run=False)
+    # Run migration with explicit provenance
+    stats = migrate(dry_run=False, proven_legacy_turn_ids=[turn_id])
     assert stats["legacy"] >= 1
     assert stats["migrated"] >= 1
     assert stats["errors"] == 0

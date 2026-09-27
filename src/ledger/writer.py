@@ -409,6 +409,9 @@ SAFETY_ACTION_TYPES = frozenset({
 })
 
 
+_wal_lock = _threading.Lock()
+
+
 def _wal_path() -> Any:
     from pathlib import Path as _P
 
@@ -453,10 +456,11 @@ def _wal_append(action: AgentAction, cause: BaseException) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
-        fh.flush()
-        _os.fsync(fh.fileno())
+    with _wal_lock:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+            fh.flush()
+            _os.fsync(fh.fileno())
 
 
 def _mark_degraded_ledger(interaction_id: str) -> None:
@@ -481,18 +485,28 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
     to the same WAL). On full success the WAL file is rotated aside.
     """
     path = _wal_path()
+    segment_path = None
+    with _wal_lock:
+        try:
+            if not path.exists():
+                return {"replayed": 0, "failed": 0, "remaining": 0}
+            raw_text = path.read_text(encoding="utf-8")
+            if not raw_text.strip():
+                return {"replayed": 0, "failed": 0, "remaining": 0}
+            segment_name = f"{path.name}.replaying-{time.time_ns()}"
+            segment_path = path.with_name(segment_name)
+            path.rename(segment_path)
+        except OSError as e:
+            return {"replayed": 0, "failed": 1, "remaining": -1, "error": str(e)}
+
     try:
-        raw_text = path.read_text(encoding="utf-8")
-        lines = raw_text.splitlines()
-    except FileNotFoundError:
-        return {"replayed": 0, "failed": 0, "remaining": 0}
+        lines = segment_path.read_text(encoding="utf-8").splitlines()
     except OSError as e:
         return {"replayed": 0, "failed": 1, "remaining": -1, "error": str(e)}
 
     replayed, failed = 0, []
     kept: list[str] = []
     processed_iids: set[str] = set()
-    succeeded_lines: set[str] = set()
 
     for line in lines[:limit]:
         line = line.strip()
@@ -540,32 +554,33 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
                 _record_action_inner(act, None, [], {}, None)
 
             replayed += 1
-            succeeded_lines.add(line)
             if act.interaction_id:
                 processed_iids.add(act.interaction_id)
         except Exception as e:
             failed.append(f"{type(e).__name__}: {e}")
             kept.append(line)
 
-    # Safely handle concurrent appends during replay
-    try:
-        current_lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        rest = []
-        for ln in current_lines:
-            if ln in succeeded_lines:
-                continue
-            rest.append(ln)
-    except Exception:
-        rest = kept + [ln for ln in lines[limit:] if ln.strip()]
+    rest = kept + [ln for ln in lines[limit:] if ln.strip()]
 
-    try:
-        if rest:
-            path.write_text("\n".join(rest) + "\n", encoding="utf-8")
-        else:
-            rotated = path.with_name(path.name + f".replayed-{int(time.time())}")
-            path.rename(rotated)
-    except OSError:
-        pass
+    # Safely handle concurrent appends during replay: restore un-replayed lines under _wal_lock
+    if rest:
+        with _wal_lock:
+            try:
+                existing_in_path = path.read_text(encoding="utf-8") if path.exists() else ""
+            except Exception:
+                existing_in_path = ""
+            new_content = "\n".join(rest) + ("\n" + existing_in_path if existing_in_path else "\n")
+            try:
+                path.write_text(new_content, encoding="utf-8")
+                segment_path.unlink()
+            except OSError:
+                pass
+    else:
+        rotated = path.with_name(path.name + f".replayed-{int(time.time())}")
+        try:
+            segment_path.rename(rotated)
+        except OSError:
+            pass
 
     if replayed and not kept:
         # Clear degraded_ledger ONLY for interactions that have NO remaining entries in rest

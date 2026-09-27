@@ -16,20 +16,21 @@ def persist_turn(interaction_id: str, turn: dict[str, Any]) -> None:
         return
     raw_ts = turn.get("ts")
     ts = to_naive_utc(raw_ts) if raw_ts is not None else utc_now()
+    speaker = turn.get("speaker") or "customer"
+    text = turn.get("text") or ""
+    if speaker == "customer" and text:
+        from src.security.pii import encrypt_subject_pii
+
+        text = encrypt_subject_pii(interaction_id, text)
+        if not str(text).startswith("enc:v1:"):
+            raise RuntimeError("customer_turn_encrypt_failed")
+
     with ops_con() as con:
         exists = con.execute(
             "SELECT 1 FROM interaction_turns WHERE turn_id = ?", [turn_id]
         ).fetchone()
         if exists:
             return
-        speaker = turn.get("speaker") or "customer"
-        text = turn.get("text") or ""
-        if speaker == "customer" and text:
-            from src.security.pii import encrypt_subject_pii
-
-            text = encrypt_subject_pii(interaction_id, text)
-            if not str(text).startswith("enc:v1:"):
-                raise RuntimeError("customer_turn_encrypt_failed")
         con.execute(
             """
             INSERT INTO interaction_turns
