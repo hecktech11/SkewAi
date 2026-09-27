@@ -20,15 +20,43 @@ function mergeConsoleTurns(existing, incoming) {
   const out = [...(existing || [])];
   for (const turn of incoming || []) {
     if (!turn || !turn.text) continue;
+    const turnId = turn.turn_id || turn.id;
+    const utteranceId = turn.utterance_id;
     const idx = out.findIndex((row) => {
-      if (turn.turn_id && row.turn_id && row.turn_id === turn.turn_id) return true;
-      if (turn.utterance_id && row.utterance_id && row.utterance_id === turn.utterance_id) return true;
-      return row.speaker === turn.speaker && row.text === turn.text;
+      const rowId = row.turn_id || row.id;
+      const rowUtt = row.utterance_id;
+      if (turnId && rowId) {
+        return rowId === turnId;
+      }
+      if (utteranceId && rowUtt) {
+        return rowUtt === utteranceId;
+      }
+      if (turnId && rowUtt && turnId === rowUtt) {
+        return true;
+      }
+      if (utteranceId && rowId && utteranceId === rowId) {
+        return true;
+      }
+      // If either has an ID and did not match, never merge (distinct turns, e.g. multiple "yes" turns)
+      if (turnId || rowId || utteranceId || rowUtt) {
+        return false;
+      }
+      return false;
     });
     if (idx >= 0) {
-      out[idx] = { ...out[idx], ...turn, turn_id: turn.turn_id || out[idx].turn_id };
+      const resolvedId = turnId || out[idx].turn_id || out[idx].id;
+      out[idx] = {
+        ...out[idx],
+        ...turn,
+        turn_id: resolvedId,
+        id: resolvedId,
+      };
     } else {
-      out.push(turn);
+      out.push({
+        ...turn,
+        turn_id: turnId,
+        id: turnId || turn.id,
+      });
     }
   }
   return out.slice(-200);

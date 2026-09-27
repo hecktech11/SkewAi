@@ -142,6 +142,17 @@ class InteractionContext:
         return not self.required_slots_remaining()
 
     def record_turn(self, speaker: str, text: str, **extra: Any) -> dict[str, Any]:
+        if getattr(self, "_erased", False):
+            raise TurnPersistenceError(f"interaction {self.interaction_id} has been erased")
+        try:
+            from src.frontline.dsr import is_interaction_erased
+            if is_interaction_erased(self.interaction_id):
+                self._erased = True
+                raise TurnPersistenceError(f"interaction {self.interaction_id} has been erased")
+        except TurnPersistenceError:
+            raise
+        except Exception:
+            pass
         seq = len(self.turns) + 1
         turn = {
             "turn_id": f"{self.interaction_id}_t{seq}",
