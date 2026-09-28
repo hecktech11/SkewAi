@@ -17,6 +17,7 @@ from scripts.ingest_nhtsa import (
     _FLAT_FIELDS,
     flat_line_to_mapping_row,
     preflight_local_csv,
+    record_key,
     write_mapping_csv_from_flat,
 )
 from src.domains.nhtsa_components import UNKNOWN, category_values
@@ -48,6 +49,16 @@ def _complete_line(**overrides: str) -> str:
     }
     base.update(overrides)
     return _flat_line(**base)
+
+
+def _convert(lines, dest, *, limit=1000):
+    """write_mapping_csv_from_flat takes a factory: it reads the source twice."""
+    return write_mapping_csv_from_flat(lambda: list(lines), dest, limit=limit)
+
+
+def _rows(dest):
+    with dest.open(newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
 
 
 # ── Field layout ─────────────────────────────────────────────────────────────
@@ -154,21 +165,25 @@ def test_conversion_report_accounts_for_every_line(tmp_path):
         "too\tshort",  # unparseable
     ]
     dest = tmp_path / "out.csv"
-    report = write_mapping_csv_from_flat(lines, dest, limit=1000)
+    report = _convert(lines, dest)
     assert report["read"] == 5
     assert report["written"] == 2
     assert report["skipped_blank_line"] == 1
     assert report["skipped_unparseable"] == 2
     assert report["unknown_component"] == 1
+    assert report["collapsed"] == 0
     assert (
-        report["written"] + report["skipped_blank_line"] + report["skipped_unparseable"]
+        report["written"]
+        + report["skipped_blank_line"]
+        + report["skipped_unparseable"]
+        + report["collapsed"]
         == report["read"]
     ), "every line read must be accounted for by exactly one outcome"
 
 
 def test_written_csv_has_the_declared_headers(tmp_path):
     dest = tmp_path / "out.csv"
-    write_mapping_csv_from_flat([_complete_line()], dest, limit=10)
+    _convert([_complete_line()], dest)
     with dest.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         assert reader.fieldnames == CSV_HEADERS
@@ -179,8 +194,135 @@ def test_written_csv_has_the_declared_headers(tmp_path):
 
 def test_limit_stops_the_conversion(tmp_path):
     lines = [_complete_line(ODINO=str(11555000 + i)) for i in range(10)]
-    report = write_mapping_csv_from_flat(lines, tmp_path / "out.csv", limit=3)
+    report = _convert(lines, tmp_path / "out.csv", limit=3)
     assert report["written"] == 3
+    assert report["distinct_keys"] == 10
+    assert report["truncated_by_limit"] == 7, "a bounded load must say what it left out"
+
+
+# ── Composite record key: one row per complaint/vehicle/component ────────────
+
+
+def test_record_key_is_odino_vehicle_component():
+    row = flat_line_to_mapping_row(_complete_line())
+    assert row["RECORD_KEY"] == "11555001|2019|HONDA|CR-V|SERVICE BRAKES"
+    assert record_key(row) == row["RECORD_KEY"]
+
+
+def test_one_complaint_naming_two_components_becomes_two_rows(tmp_path):
+    """NHTSA emits one line per component; both are real, distinct failures."""
+    lines = [
+        _complete_line(CMPLID="1", COMPDESC="SERVICE BRAKES, HYDRAULIC"),
+        _complete_line(CMPLID="2", COMPDESC="ENGINE AND ENGINE COOLING"),
+    ]
+    dest = tmp_path / "out.csv"
+    report = _convert(lines, dest)
+    assert report["written"] == 2
+    assert {r["COMPONENT"] for r in _rows(dest)} == {"SERVICE BRAKES", "ENGINE"}
+
+
+def test_two_lines_for_the_same_pair_collapse_to_one_row(tmp_path):
+    """The old CMPLID key made these two records, double-counting one failure.
+
+    NHTSA's COMPDESC hierarchy is finer than the pack's category vocabulary,
+    so two sub-components of the same top-level component arrive as two lines
+    that normalize to the same category.
+    """
+    lines = [
+        _complete_line(CMPLID="1", COMPDESC="SERVICE BRAKES, HYDRAULIC:DISC:ROTOR"),
+        _complete_line(CMPLID="2", COMPDESC="SERVICE BRAKES, HYDRAULIC:LINES:HOSE"),
+    ]
+    dest = tmp_path / "out.csv"
+    report = _convert(lines, dest)
+    assert report["written"] == 1
+    assert report["collapsed"] == 1
+    assert report["distinct_keys"] == 1
+
+
+def test_collapse_keeps_the_longest_narrative(tmp_path):
+    lines = [
+        _complete_line(CMPLID="1", CDESCR="SHORT"),
+        _complete_line(CMPLID="2", CDESCR="A MUCH LONGER AND MORE USEFUL NARRATIVE"),
+        _complete_line(CMPLID="3", CDESCR="MID LENGTH"),
+    ]
+    dest = tmp_path / "out.csv"
+    _convert(lines, dest)
+    rows = _rows(dest)
+    assert len(rows) == 1
+    assert rows[0]["CDESC"] == "A MUCH LONGER AND MORE USEFUL NARRATIVE"
+    assert rows[0]["CMPLID"] == "2"
+
+
+def test_collapse_is_order_independent(tmp_path):
+    """The winner must not depend on where in a 2.25M-line file it appears.
+
+    22,532 ODINOs reappear non-contiguously in the corpus, so a key's best
+    line can be millions of lines after its first — which is why the
+    conversion takes two passes instead of collapsing adjacent runs.
+    """
+    long_text = "A MUCH LONGER AND MORE USEFUL NARRATIVE"
+    first = [
+        _complete_line(CMPLID="2", CDESCR=long_text),
+        _complete_line(CMPLID="1", CDESCR="SHORT"),
+    ]
+    last = [
+        _complete_line(CMPLID="1", CDESCR="SHORT"),
+        _complete_line(CMPLID="2", CDESCR=long_text),
+    ]
+    for i, lines in enumerate((first, last)):
+        dest = tmp_path / f"out{i}.csv"
+        _convert(lines, dest)
+        assert _rows(dest)[0]["CDESC"] == long_text
+
+
+def test_collapse_reports_discarded_narratives(tmp_path):
+    """The merge loses text; the count must be honest about how much."""
+    lines = [
+        _complete_line(CMPLID="1", CDESCR="AAA"),
+        _complete_line(CMPLID="2", CDESCR="BBBB"),  # different text, discarded
+        _complete_line(ODINO="11555099", CMPLID="3", CDESCR="CCC"),
+        _complete_line(ODINO="11555099", CMPLID="4", CDESCR="CCC"),  # same text
+    ]
+    report = _convert(lines, tmp_path / "out.csv")
+    assert report["collapsed"] == 2
+    assert report["conflicting_narrative"] == 1, "identical duplicates lose nothing"
+
+
+def test_same_component_on_different_vehicles_stays_separate(tmp_path):
+    """41,616 ODINOs span more than one year/make/model.
+
+    Dropping the vehicle from the key would merge distinct vehicles into one
+    record — and the vehicle is exactly the grain every anomaly baseline is
+    computed over.
+    """
+    lines = [
+        _complete_line(CMPLID="1", MODELTXT="CR-V"),
+        _complete_line(CMPLID="2", MODELTXT="ACCORD"),
+        _complete_line(CMPLID="3", YEARTXT="2020"),
+    ]
+    dest = tmp_path / "out.csv"
+    report = _convert(lines, dest)
+    assert report["written"] == 3
+    assert len({r["RECORD_KEY"] for r in _rows(dest)}) == 3
+
+
+def test_record_keys_in_the_output_are_unique(tmp_path):
+    """The invariant upsert_records depends on: it is INSERT OR REPLACE, so a
+    duplicate key is silently overwritten rather than reported."""
+    lines = [
+        _complete_line(CMPLID=str(i), COMPDESC="SERVICE BRAKES, HYDRAULIC:PART%d" % (i % 3))
+        for i in range(12)
+    ] + [_complete_line(CMPLID="90", ODINO="11555002")]
+    dest = tmp_path / "out.csv"
+    _convert(lines, dest)
+    keys = [r["RECORD_KEY"] for r in _rows(dest)]
+    assert len(keys) == len(set(keys))
+
+
+def test_key_separator_is_absent_from_the_component_vocabulary():
+    """A separator occurring inside a field would make the key ambiguous."""
+    for value in category_values():
+        assert "|" not in value
 
 
 # ── Local-CSV preflight ──────────────────────────────────────────────────────
@@ -198,15 +340,29 @@ def _valid_local_row(**overrides):
     row = {h: "" for h in CSV_HEADERS}
     row.update(
         {
+            "RECORD_KEY": "11555001|2019|HONDA|CR-V|SERVICE BRAKES",
             "ODINO": "11555001",
             "CMPLID": "16123456",
             "DATEA": "20240115",
+            "MODEL_YR": "2019",
+            "MAKETXT": "HONDA",
+            "MODELTXT": "CR-V",
             "COMPONENT": "SERVICE BRAKES",
             "CDESC": "grinding",
         }
     )
     row.update(overrides)
     return row
+
+
+def _keyed_row(n, **overrides):
+    """A distinct row whose RECORD_KEY matches its ODINO."""
+    odino = str(11555000 + n)
+    return _valid_local_row(
+        ODINO=odino,
+        RECORD_KEY=f"{odino}|2019|HONDA|CR-V|SERVICE BRAKES",
+        **overrides,
+    )
 
 
 def test_preflight_accepts_a_normalized_local_csv(tmp_path):
@@ -240,11 +396,30 @@ def test_preflight_rejects_a_csv_missing_the_component_column(tmp_path):
 
 def test_preflight_only_checks_rows_that_will_be_loaded(tmp_path):
     """--limit bounds the load, so it bounds the check too."""
-    rows = [_valid_local_row(ODINO=str(11555000 + i)) for i in range(3)]
-    rows.append(_valid_local_row(ODINO="99", COMPONENT="not a category"))
+    rows = [_keyed_row(i) for i in range(3)]
+    rows.append(_keyed_row(9, COMPONENT="not a category"))
     path = _write_csv(tmp_path / "tail.csv", rows)
     assert preflight_local_csv(path, limit=3)["checked"] == 3
     with pytest.raises(ValueError):
+        preflight_local_csv(path, limit=100)
+
+
+def test_preflight_rejects_duplicate_record_keys(tmp_path):
+    """upsert_records is INSERT OR REPLACE: a duplicate is silently dropped.
+
+    The row count then comes up short of `mapped` with no error, which reads
+    as a partial load rather than a malformed input.
+    """
+    path = _write_csv(tmp_path / "dupe.csv", [_keyed_row(1), _keyed_row(1)])
+    with pytest.raises(ValueError, match="duplicate RECORD_KEY"):
+        preflight_local_csv(path, limit=100)
+
+
+def test_preflight_rejects_a_csv_missing_the_record_key_column(tmp_path):
+    headers = [h for h in CSV_HEADERS if h != "RECORD_KEY"]
+    row = {h: v for h, v in _valid_local_row().items() if h != "RECORD_KEY"}
+    path = _write_csv(tmp_path / "nokey.csv", [row], headers=headers)
+    with pytest.raises(ValueError, match="RECORD_KEY"):
         preflight_local_csv(path, limit=100)
 
 
@@ -266,6 +441,7 @@ def test_mapping_yaml_points_category_at_the_normalized_column():
         (settings.pack_dir("automotive_nhtsa") / "data" / "mapping.yaml").read_text()
     )
     records = mapping["records"]
+    assert records["record_id"] == "RECORD_KEY"
     assert records["category"] == "COMPONENT"
     assert records["subcategory"] == "COMPDESC"
     assert records["text"] == "CDESC"

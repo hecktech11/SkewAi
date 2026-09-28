@@ -687,7 +687,10 @@ async def list_records(
             sel = [c for c in want if c in cols]
             cur = con.execute(
                 f"SELECT {', '.join(sel)} FROM records{where} "
-                "ORDER BY received_at DESC LIMIT ?",
+                # record_id breaks the tie: every component of one NHTSA
+                # complaint shares a received_at, so ordering on that alone
+                # makes the returned page non-deterministic between calls.
+                "ORDER BY received_at DESC, record_id DESC LIMIT ?",
                 [*params, int(limit)],
             )
             return [dict(zip(sel, r)) for r in cur.fetchall()]

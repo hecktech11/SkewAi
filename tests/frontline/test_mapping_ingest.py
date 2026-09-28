@@ -18,7 +18,7 @@ from src.ml_runtime.embeddings import cosine, embed_text
 def test_load_automotive_mapping_has_required_keys():
     m = load_mapping(REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml")
     rec = m["records"]
-    assert rec["record_id"] == "CMPLID"
+    assert rec["record_id"] == "RECORD_KEY"
     assert rec["text"] == "CDESC"
     assert rec["entity_2"] == "MAKETXT"
     # The category must come from the normalized column, never the narrative.
@@ -29,7 +29,8 @@ def test_load_automotive_mapping_has_required_keys():
 def test_map_row_uses_source_columns_and_literal_source():
     m = load_mapping(REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml")
     row = {
-        "CMPLID": "NHTSA-UNIT-1",
+        "RECORD_KEY": "11555001|2019|HONDA|CR-V|SERVICE BRAKES",
+        "CMPLID": "16123456",
         "DATEA": "20240115",
         "DATEC": "20240110",
         "MODEL_YR": "2019",
@@ -43,7 +44,7 @@ def test_map_row_uses_source_columns_and_literal_source():
     }
     rec = map_row(row, m["records"])
     assert rec is not None
-    assert rec["record_id"] == "NHTSA-UNIT-1"
+    assert rec["record_id"] == "11555001|2019|HONDA|CR-V|SERVICE BRAKES"
     assert rec["entity_1"] == "2019"
     assert rec["entity_2"] == "HONDA"
     assert rec["entity_3"] == "CR-V"
@@ -70,7 +71,7 @@ def test_mapped_category_is_always_a_gazetteer_value():
     for component in ("SERVICE BRAKES", "ENGINE", "UNKNOWN OR OTHER"):
         rec = map_row(
             {
-                "CMPLID": "X",
+                "RECORD_KEY": f"1|2019|HONDA|CR-V|{component}",
                 "DATEA": "20240115",
                 "COMPONENT": component,
                 "CDESC": "text",
@@ -86,10 +87,11 @@ def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
 
     csv_path = tmp_path / "nhtsa_sample.csv"
     csv_path.write_text(
-        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
-        "NHTSA-A,20260801,20260728,2019,HONDA,CR-V,SERVICE BRAKES,"
+        "RECORD_KEY,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+        "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        "NHTSA-A,16000001,20260801,20260728,2019,HONDA,CR-V,SERVICE BRAKES,"
         "SERVICE BRAKES HYDRAULIC:DISC,grinding noise when braking,4,CA\n"
-        "NHTSA-B,20260802,20260729,2018,TOYOTA,CAMRY,AIR BAGS,"
+        "NHTSA-B,16000002,20260802,20260729,2018,TOYOTA,CAMRY,AIR BAGS,"
         "AIR BAGS:FRONTAL,airbag warning light stays on,4,TX\n",
         encoding="utf-8",
     )
@@ -125,10 +127,11 @@ def test_iter_mapped_rows_skips_empty_text(tmp_path):
     mapping = load_mapping(REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml")
     csv_path = tmp_path / "mixed.csv"
     csv_path.write_text(
-        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
-        "KEEP,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,has text,4,CA\n"
-        ",20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,no id,4,CA\n"
-        "DROP,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,,4,CA\n",
+        "RECORD_KEY,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+        "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        "KEEP,1,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,has text,4,CA\n"
+        ",2,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,no id,4,CA\n"
+        "DROP,3,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,,4,CA\n",
         encoding="utf-8",
     )
     rows = list(iter_mapped_rows(csv_path, mapping))

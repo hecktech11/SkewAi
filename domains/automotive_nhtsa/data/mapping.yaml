@@ -4,7 +4,12 @@
 
 source: NHTSA complaints CSV
 records:
-  record_id: CMPLID
+  # Composite: ODINO|MODEL_YR|MAKETXT|MODELTXT|COMPONENT, built by
+  # scripts.ingest_nhtsa.record_key so the dedup key and the record id
+  # cannot drift apart. CMPLID — the old key — is unique per FLAT line, and
+  # NHTSA emits one line per component, so a complaint naming several
+  # components became several records and was counted up to 17 times.
+  record_id: RECORD_KEY
   received_at: DATEA
   occurred_at: DATEC
   entity_1: MODEL_YR
