@@ -21,6 +21,9 @@ def test_load_automotive_mapping_has_required_keys():
     assert rec["record_id"] == "CMPLID"
     assert rec["text"] == "CDESC"
     assert rec["entity_2"] == "MAKETXT"
+    # The category must come from the normalized column, never the narrative.
+    assert rec["category"] == "COMPONENT"
+    assert rec["category"] != rec["text"]
 
 
 def test_map_row_uses_source_columns_and_literal_source():
@@ -32,6 +35,8 @@ def test_map_row_uses_source_columns_and_literal_source():
         "MODEL_YR": "2019",
         "MAKETXT": "HONDA",
         "MODELTXT": "CR-V",
+        "COMPONENT": "SERVICE BRAKES",
+        "COMPDESC": "SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS",
         "CDESC": "grinding noise when braking",
         "NUM_CYLS": "4",
         "STATE": "CA",
@@ -42,11 +47,37 @@ def test_map_row_uses_source_columns_and_literal_source():
     assert rec["entity_1"] == "2019"
     assert rec["entity_2"] == "HONDA"
     assert rec["entity_3"] == "CR-V"
-    assert rec["category"] == "grinding noise when braking"
+    assert rec["category"] == "SERVICE BRAKES"
+    assert rec["subcategory"] == "SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS"
     assert rec["text"] == "grinding noise when braking"
     assert rec["region"] == "CA"
     assert rec["source"] == "NHTSA"
     assert rec["received_at"] is not None
+
+
+def test_mapped_category_is_always_a_gazetteer_value():
+    """The Phase 0 done-when condition at the mapping boundary.
+
+    `category` is joined by exact string equality by the advisory match, the
+    anomaly baselines, the cluster signatures and the severity rules. A value
+    outside the gazetteer does not raise — it silently matches nothing, so
+    only an explicit check catches a regression here.
+    """
+    from src.domains.nhtsa_components import category_values
+
+    m = load_mapping(REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml")
+    vocabulary = category_values()
+    for component in ("SERVICE BRAKES", "ENGINE", "UNKNOWN OR OTHER"):
+        rec = map_row(
+            {
+                "CMPLID": "X",
+                "DATEA": "20240115",
+                "COMPONENT": component,
+                "CDESC": "text",
+            },
+            m["records"],
+        )
+        assert rec["category"] in vocabulary
 
 
 def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
@@ -55,9 +86,11 @@ def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
 
     csv_path = tmp_path / "nhtsa_sample.csv"
     csv_path.write_text(
-        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,CDESC,NUM_CYLS,STATE\n"
-        "NHTSA-A,20260801,20260728,2019,HONDA,CR-V,grinding noise when braking,4,CA\n"
-        "NHTSA-B,20260802,20260729,2018,TOYOTA,CAMRY,airbag warning light stays on,4,TX\n",
+        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        "NHTSA-A,20260801,20260728,2019,HONDA,CR-V,SERVICE BRAKES,"
+        "SERVICE BRAKES HYDRAULIC:DISC,grinding noise when braking,4,CA\n"
+        "NHTSA-B,20260802,20260729,2018,TOYOTA,CAMRY,AIR BAGS,"
+        "AIR BAGS:FRONTAL,airbag warning light stays on,4,TX\n",
         encoding="utf-8",
     )
     mapping = REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml"
@@ -72,7 +105,8 @@ def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
     with domain_con("automotive_nhtsa") as con:
         n = con.execute("SELECT COUNT(*) FROM records").fetchone()[0]
         rows = con.execute(
-            "SELECT record_id, entity_2, text, source, embedding FROM records ORDER BY record_id"
+            "SELECT record_id, entity_2, text, source, embedding, category, subcategory "
+            "FROM records ORDER BY record_id"
         ).fetchall()
     assert n == 2
     by_id = {r[0]: r for r in rows}
@@ -81,16 +115,20 @@ def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
     assert by_id["NHTSA-A"][3] == "NHTSA"
     emb = list(by_id["NHTSA-A"][4])
     assert cosine(emb, embed_text("grinding noise when braking")) > 0.999
+    # The category is the normalized component, not the narrative.
+    assert by_id["NHTSA-A"][5] == "SERVICE BRAKES"
+    assert by_id["NHTSA-B"][5] == "AIR BAGS"
+    assert by_id["NHTSA-A"][6] == "SERVICE BRAKES HYDRAULIC:DISC"
 
 
 def test_iter_mapped_rows_skips_empty_text(tmp_path):
     mapping = load_mapping(REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml")
     csv_path = tmp_path / "mixed.csv"
     csv_path.write_text(
-        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,CDESC,NUM_CYLS,STATE\n"
-        "KEEP,20240115,20240110,2019,HONDA,CR-V,has text,4,CA\n"
-        ",20240115,20240110,2019,HONDA,CR-V,no id,4,CA\n"
-        "DROP,20240115,20240110,2019,HONDA,CR-V,,4,CA\n",
+        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        "KEEP,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,has text,4,CA\n"
+        ",20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,no id,4,CA\n"
+        "DROP,20240115,20240110,2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,,4,CA\n",
         encoding="utf-8",
     )
     rows = list(iter_mapped_rows(csv_path, mapping))

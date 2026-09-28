@@ -10,7 +10,16 @@ records:
   entity_1: MODEL_YR
   entity_2: MAKETXT
   entity_3: MODELTXT
-  category: CDESC
+  # COMPONENT is COMPDESC normalized onto gazetteers/categories.csv by
+  # scripts.ingest_nhtsa. It must stay a closed vocabulary: the advisory
+  # join, the anomaly baselines, the cluster signatures and the severity
+  # rules all match category by exact string equality, so a free-text
+  # value here does not error — it silently matches nothing.
+  category: COMPONENT
+  # Full raw NHTSA hierarchy, e.g.
+  # "SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS:DISC:ROTOR". Kept for
+  # investigators; no consumer groups on it.
+  subcategory: COMPDESC
   text: CDESC
   severity_label: NUM_CYLS  # placeholder; NHTSA has no severity label
   region: STATE
