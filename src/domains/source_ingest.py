@@ -19,6 +19,29 @@ from src.domains.mapping_ingest import (
 )
 
 
+#: Values ``records.provenance`` accepts. ``observed`` is something that
+#: happened and was recorded; ``inferred`` is something the system derived
+#: and the anomaly scan leaves out; ``fixture`` is demo or seed data that
+#: must never be counted as evidence of a real failure.
+PROVENANCE_VALUES = ("observed", "inferred", "fixture")
+DEFAULT_PROVENANCE = "observed"
+
+
+def normalize_provenance(value: str | None) -> str:
+    """Validate a provenance tag, defaulting when unset.
+
+    Raises rather than silently downgrading: a demo file loaded as
+    ``observed`` is indistinguishable from real evidence once it is in
+    ``records``, and the anomaly scan would treat it as a live signal.
+    """
+    tag = (value or "").strip().lower() or DEFAULT_PROVENANCE
+    if tag not in PROVENANCE_VALUES:
+        raise ValueError(
+            f"unknown provenance {value!r}; expected one of {', '.join(PROVENANCE_VALUES)}"
+        )
+    return tag
+
+
 def default_source_mapping(pack_id: str, source: str) -> Path:
     return REPO_ROOT / "domains" / pack_id / "data" / f"mapping.{source}.yaml"
 
@@ -43,13 +66,22 @@ def ingest_source(
     *,
     mapping_path: str | Path | None = None,
     limit: int | None = None,
+    provenance: str | None = None,
 ) -> dict[str, Any]:
-    """Ingest one source CSV into canonical records. Returns the run report."""
+    """Ingest one source CSV into canonical records. Returns the run report.
+
+    ``provenance`` tags every row written by this run. Demo and sample files
+    should load as ``fixture`` so the anomaly scan and the early-warning
+    board can exclude them; see ``PROVENANCE_VALUES``.
+    """
     from src.security.identifiers import safe_csv_path, safe_mapping_path
 
     tag = (source or "").strip().lower()
     if not tag:
         raise ValueError("source tag required (e.g. warranty, service)")
+    # Validate before touching the filesystem: a rejected tag should fail
+    # the same way whether or not the CSV happens to exist.
+    prov = normalize_provenance(provenance)
     # Jail caller-supplied paths here too: this is reachable from the job
     # queue, not only from the upload route that jails its own input (R01).
     csv_path = safe_csv_path(csv_path)
@@ -88,6 +120,7 @@ def ingest_source(
         mapped += 1
         rec["source"] = tag.upper()
         rec["record_id"] = namespace_id(tag, rec["record_id"])
+        rec["provenance"] = prov
         if not rec["record_id"] or not (rec.get("text") or "").strip():
             skipped += 1
             continue
@@ -101,7 +134,15 @@ def ingest_source(
         "mapped": mapped,
         "upserted": written,
         "skipped": skipped,
+        "provenance": prov,
     }
 
 
-__all__ = ["default_source_mapping", "namespace_id", "ingest_source"]
+__all__ = [
+    "PROVENANCE_VALUES",
+    "DEFAULT_PROVENANCE",
+    "normalize_provenance",
+    "default_source_mapping",
+    "namespace_id",
+    "ingest_source",
+]

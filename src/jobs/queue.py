@@ -148,6 +148,13 @@ def validate_job_payload(job_type: str, payload: Any) -> dict[str, Any]:
         if not _SOURCE_TAG_RE.match(tag):
             raise ValueError("ingest_source requires a short alphanumeric source tag")
         out["source"] = tag
+        # Reject an unknown provenance at enqueue rather than at run: a job
+        # that fails in the worker has already been accepted, and the caller
+        # is long gone by the time it does.
+        if out.get("provenance") not in (None, ""):
+            from src.domains.source_ingest import normalize_provenance
+
+            out["provenance"] = normalize_provenance(str(out["provenance"]))
     elif out.get("csv_path") not in (None, "") or out.get("mapping_path") not in (None, ""):
         raise ValueError(f"{job_type} does not accept file paths")
 
@@ -540,6 +547,8 @@ def _default_handler(jtype: str, payload: dict[str, Any]) -> dict[str, Any]:
                 payload.get("source") or "service",
                 payload.get("csv_path") or "",
                 mapping_path=payload.get("mapping_path"),
+                limit=payload.get("limit"),
+                provenance=payload.get("provenance"),
             )
         except Exception as e:
             return {"ok": False, "error": str(e)}
