@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from src.data.timeutil import utc_now
 from src.data.warehouse import domain_con, ops_con
@@ -150,29 +150,88 @@ def _ensure(con) -> None:
     )
 
 
-def persist_trust(pack_id: str, evaluation: dict[str, Any]) -> str:
-    tid = "tr_" + new_ulid()
+#: Evaluations buffered before one write to ``record_trust``. A per-row
+#: persist opens its own ops connection — measured at 20.2 ms/row, of which
+#: 11.7 ms is connect-and-close — so a 500k load spent ~2.8 hours here alone,
+#: dwarfing both the embedding cost and the domain-warehouse write.
+_TRUST_BATCH_ROWS = 10_000
+
+_TRUST_INSERT_COLUMNS = (
+    "trust_id",
+    "pack_id",
+    "record_id",
+    "trusted",
+    "badge_json",
+    "checks_json",
+    "content_hash",
+    "evaluated_at",
+)
+
+
+def _trust_arrow_schema():
+    import pyarrow as pa
+
+    return pa.schema(
+        [
+            ("trust_id", pa.string()),
+            ("pack_id", pa.string()),
+            ("record_id", pa.string()),
+            ("trusted", pa.bool_()),
+            ("badge_json", pa.string()),
+            ("checks_json", pa.string()),
+            ("content_hash", pa.string()),
+            # utc_now() is naive UTC, which is what the column stores.
+            ("evaluated_at", pa.timestamp("us")),
+        ]
+    )
+
+
+def _trust_staged_row(pack_id: str, evaluation: dict[str, Any], tid: str, now) -> dict[str, Any]:
+    return {
+        "trust_id": tid,
+        "pack_id": pack_id,
+        "record_id": evaluation.get("record_id") or "",
+        "trusted": bool(evaluation.get("trusted")),
+        "badge_json": json.dumps(evaluation.get("badge") or {}, default=str),
+        "checks_json": json.dumps(evaluation.get("checks") or {}, default=str),
+        "content_hash": evaluation.get("content_hash") or "",
+        "evaluated_at": now,
+    }
+
+
+def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+    """Write a batch of evaluations over one ops connection.
+
+    Returns the new trust_ids in input order. An empty batch is a no-op and
+    must not open a connection — a load whose rows are all rejected still
+    reaches here once per batch.
+    """
+    import pyarrow as pa
+
+    now = utc_now()
+    staged: list[dict[str, Any]] = []
+    tids: list[str] = []
+    for ev in evaluations:
+        tid = "tr_" + new_ulid()
+        tids.append(tid)
+        staged.append(_trust_staged_row(pack_id, ev, tid, now))
+    if not staged:
+        return []
+    cols = ", ".join(_TRUST_INSERT_COLUMNS)
+    table = pa.Table.from_pylist(staged, schema=_trust_arrow_schema())
     with ops_con() as con:
         _ensure(con)
-        con.execute(
-            """
-            INSERT INTO record_trust
-            (trust_id, pack_id, record_id, trusted, badge_json, checks_json,
-             content_hash, evaluated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                tid,
-                pack_id,
-                evaluation.get("record_id") or "",
-                bool(evaluation.get("trusted")),
-                json.dumps(evaluation.get("badge") or {}, default=str),
-                json.dumps(evaluation.get("checks") or {}, default=str),
-                evaluation.get("content_hash") or "",
-                utc_now(),
-            ],
-        )
-    return tid
+        con.register("_trust_batch", table)
+        try:
+            con.execute(f"INSERT INTO record_trust ({cols}) SELECT {cols} FROM _trust_batch")
+        finally:
+            con.unregister("_trust_batch")
+    return tids
+
+
+def persist_trust(pack_id: str, evaluation: dict[str, Any]) -> str:
+    """Write one evaluation. Batch loads should use ``persist_trust_many``."""
+    return persist_trust_many(pack_id, [evaluation])[0]
 
 
 def load_seen(pack_id: str) -> tuple[set[str], set[str]]:
@@ -213,6 +272,63 @@ def load_seen(pack_id: str) -> tuple[set[str], set[str]]:
     return seen_ids, seen_hashes
 
 
+def iter_trusted(
+    pack_id: str,
+    rows: Iterable[dict[str, Any]],
+    *,
+    sla_days: int = DEFAULT_FRESHNESS_SLA_DAYS,
+    persist: bool = True,
+    keep_untrusted: bool = False,
+) -> tuple[dict[str, int], Iterator[dict[str, Any]]]:
+    """Stream rows through the trust contract, yielding the ones to write.
+
+    Returns ``(stats, stream)``. ``stats`` is filled in as the stream is
+    consumed and is complete once it is exhausted; reading it early gives a
+    partial count, not a wrong one.
+
+    This exists so a bulk load never holds the whole CSV in memory:
+    ``evaluate_ingest`` accumulates every mapped row plus every evaluation,
+    which is ~1.5 GB over a 500k load and does not fit a full-corpus one.
+
+    The dedup seed is loaded eagerly, before the generator is returned, and
+    that ordering is load-bearing rather than incidental. ``load_seen``
+    opens the pack's domain warehouse, and the caller feeds this stream to
+    ``upsert_records``, which holds a write connection to that same
+    warehouse for the length of the iteration. DuckDB is single-writer and
+    ``domain_con`` takes a non-reentrant per-pack lock, so seeding from
+    inside the generator body would run under the writer and deadlock.
+    """
+    seen_ids, seen_hashes = load_seen(pack_id)
+    stats: dict[str, int] = {"evaluated": 0, "trusted": 0, "rejected": 0}
+
+    def _gen() -> Iterator[dict[str, Any]]:
+        pending: list[dict[str, Any]] = []
+        for row in rows:
+            ev = evaluate_record(
+                row, seen_ids=seen_ids, seen_hashes=seen_hashes, sla_days=sla_days
+            )
+            stats["evaluated"] += 1
+            rid = ev["record_id"]
+            if rid:
+                seen_ids.add(rid)
+            seen_hashes.add(ev["content_hash"])
+            if ev["trusted"]:
+                stats["trusted"] += 1
+            else:
+                stats["rejected"] += 1
+            if persist:
+                pending.append(ev)
+                if len(pending) >= _TRUST_BATCH_ROWS:
+                    persist_trust_many(pack_id, pending)
+                    pending = []
+            if ev["trusted"] or keep_untrusted:
+                yield row
+        if persist and pending:
+            persist_trust_many(pack_id, pending)
+
+    return stats, _gen()
+
+
 def evaluate_ingest(
     pack_id: str,
     rows: Iterable[dict[str, Any]],
@@ -220,10 +336,15 @@ def evaluate_ingest(
     sla_days: int = DEFAULT_FRESHNESS_SLA_DAYS,
     persist: bool = True,
 ) -> dict[str, Any]:
-    """Evaluate a batch. Trusted rows may proceed to warehouse upsert."""
+    """Evaluate a batch and return every evaluation.
+
+    Holds one evaluation per row, so it suits a preview or a sandbox sample.
+    A bulk load should use ``iter_trusted``, which streams.
+    """
     seen_ids, seen_hashes = load_seen(pack_id)
     results: list[dict[str, Any]] = []
     trusted_rows: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
     for row in rows:
         ev = evaluate_record(
             row, seen_ids=seen_ids, seen_hashes=seen_hashes, sla_days=sla_days
@@ -236,7 +357,12 @@ def evaluate_ingest(
         if ev["trusted"]:
             trusted_rows.append(row)
         if persist:
-            persist_trust(pack_id, ev)
+            pending.append(ev)
+            if len(pending) >= _TRUST_BATCH_ROWS:
+                persist_trust_many(pack_id, pending)
+                pending = []
+    if persist and pending:
+        persist_trust_many(pack_id, pending)
     return {
         "pack_id": pack_id,
         "evaluated": len(results),
@@ -287,9 +413,11 @@ __all__ = [
     "DEFAULT_FRESHNESS_SLA_DAYS",
     "evaluate_record",
     "evaluate_ingest",
+    "iter_trusted",
     "load_seen",
     "lineage_for_record",
     "persist_trust",
+    "persist_trust_many",
     "schema_contract_ok",
     "completeness_ok",
     "freshness_ok",
