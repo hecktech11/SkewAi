@@ -42,8 +42,18 @@ def parse_spoken_alphanumerics(transcript: str) -> str:
     Converts phrases like: '1 F as in Frank T Y 2 8 Kilo' -> '1FTY28K'
     """
     text = (transcript or "").lower()
-    # Normalize 'X as in Y' (e.g. 'H as in Henry' -> 'Henry' -> 'H')
-    text = re.sub(r"([a-z0-9])\s+as\s+in\s+([a-z]+)", r"\2", text)
+
+    def _as_in(match: re.Match[str]) -> str:
+        spoken = match.group(1)
+        word = match.group(2)
+        # Known phonetic word wins. An unknown word must not drop the letter.
+        if word in PHONETIC_LEXICON:
+            return PHONETIC_LEXICON[word].lower()
+        return spoken
+
+    text = re.sub(r"([a-z0-9])\s+as\s+in\s+([a-z]+)", _as_in, text)
+    # Keep the lexicon key intact. A hyphen split would turn "x-ray" into "x" + "ray".
+    text = text.replace("x-ray", "xray")
     tokens = re.split(r"[\s\-]+", text)
 
     extracted_chars: list[str] = []

@@ -41,11 +41,11 @@ from src.voice.whisper_generator import generate_supervisor_whisper
 # ── 1. ISO 3779 Checksum Invariant Tests ────────────────────────────────────
 
 def test_iso3779_checksum_valid_and_invalid():
-    # Synthetic invariant test fixture (Check digit 4 at index 8)
-    assert validate_iso3779_vin("1HGCR2F84HA000000") is True
+    # ISO 3779 check digit for this body is 5.
+    assert validate_iso3779_vin("1HGCR2F85HA000000") is True
 
-    # Tampered Check Digit (Changed '4' to '5')
-    assert validate_iso3779_vin("1HGCR2F85HA000000") is False
+    # Tampered check digit (5 changed to 4).
+    assert validate_iso3779_vin("1HGCR2F84HA000000") is False
 
     # Real North American VINs with mathematical check digit
     assert validate_iso3779_vin("1HGCM82633A004352") is True

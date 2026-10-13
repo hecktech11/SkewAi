@@ -658,6 +658,47 @@ class IntakeAgent(Agent):
         ctx = self.ctx
         extracted: dict[str, str] = {}
 
+        # Recognized emergencies preempt routine intake gates (low-ASR
+        # readback, DTMF, case-status, pending safety-answer binding).
+        # Hedged and negated lexicon hits stay on the downgrade path.
+        kill_term = _check_kill_switch(customer_turn, ctx) if customer_turn else None
+        if kill_term and customer_turn and _term_hedged_or_negated(customer_turn, kill_term):
+            record_action(self._action(
+                action_type="safety_flag_raised",
+                input_summary=f"hedged/negated lexicon mention: '{kill_term}'",
+                output_summary="downgraded to safety_question (no escalation flag)",
+                evidence_ids=[],
+                ok=True,
+            ))
+            safety_q = self._next_safety_question() or (
+                "Are you in a safe location right now?"
+            )
+            return {
+                "extracted": {},
+                "question": safety_q,
+                "fast_path": True,
+                "kill_switch": None,
+                "slots_filled_now": False,
+                "safety_question": True,
+                "safety_downgraded": kill_term,
+            }
+        if kill_term:
+            ctx.safety_flags["escalation"] = True
+            ctx.safety_flags[kill_term] = True
+            record_action(self._action(
+                action_type="safety_flag_raised",
+                input_summary=f"customer utterance matched lexicon: '{kill_term}'",
+                output_summary=f"safety_flag[{kill_term}]=True; intake will skip remaining slots",
+                evidence_ids=[],
+            ))
+            return {
+                "extracted": {},
+                "question": ctx.pack.manifest.safety.escalation_script,
+                "fast_path": True,
+                "kill_switch": kill_term,
+                "slots_filled_now": False,
+            }
+
         # ── 10/10: ASR confidence → readback + DTMF + identity (pilot voice) ─
         # kwargs: asr_confidence={slot: 0..1}, dtmf="1", identity={"verified": bool}
         # Low-confidence entities never silently accept: force readback turn.
@@ -819,49 +860,6 @@ class IntakeAgent(Agent):
                 asked_after = ctx.slots.get(_SAFETY_ASKED_KEY)
                 if pending_after != pending_before or asked_after != asked_before:
                     safety_answered = True
-
-        # ── Kill-switch check FIRST ──────────────────────────────────────
-        kill_term = _check_kill_switch(customer_turn, ctx) if customer_turn else None
-        if kill_term and customer_turn and _term_hedged_or_negated(customer_turn, kill_term):
-            # Downgrade (audit 2.3): negated/hedged mention ("no fire, just a
-            # smell", "worried it might catch fire") becomes a safety
-            # QUESTION, not a Critical/P1 escalation — still ledgered, still
-            # safe, without burning supervisor trust.
-            record_action(self._action(
-                action_type="safety_flag_raised",
-                input_summary=f"hedged/negated lexicon mention: '{kill_term}'",
-                output_summary="downgraded to safety_question (no escalation flag)",
-                evidence_ids=[],
-                ok=True,
-            ))
-            safety_q = self._next_safety_question() or (
-                "Are you in a safe location right now?"
-            )
-            return {
-                "extracted": {},
-                "question": safety_q,
-                "fast_path": True,
-                "kill_switch": None,
-                "slots_filled_now": False,
-                "safety_question": True,
-                "safety_downgraded": kill_term,
-            }
-        if kill_term:
-            ctx.safety_flags["escalation"] = True
-            ctx.safety_flags[kill_term] = True
-            record_action(self._action(
-                action_type="safety_flag_raised",
-                input_summary=f"customer utterance matched lexicon: '{kill_term}'",
-                output_summary=f"safety_flag[{kill_term}]=True; intake will skip remaining slots",
-                evidence_ids=[],
-            ))
-            return {
-                "extracted": {},
-                "question": ctx.pack.manifest.safety.escalation_script,
-                "fast_path": True,
-                "kill_switch": kill_term,
-                "slots_filled_now": False,
-            }
 
         # ── Slot extraction from the customer turn ────────────────────────
         if customer_turn:
