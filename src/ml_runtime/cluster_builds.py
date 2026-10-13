@@ -14,7 +14,7 @@ import time
 from collections import Counter, defaultdict
 from typing import Any
 
-from src.data.warehouse import apply_domain_schema, domain_con
+from src.data.warehouse import _rollback_quietly, apply_domain_schema, domain_con
 from src.ids import new_ulid
 from src.ml_runtime.clustering import (
     _kmeans,
@@ -86,7 +86,7 @@ def ensure_cluster_build_tables(con) -> None:
             "ALTER TABLE cluster_lineage ADD COLUMN correspondence_kind VARCHAR"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     for col_ddl in (
         "ALTER TABLE cluster_builds ADD COLUMN embedding_model_key VARCHAR",
         "ALTER TABLE cluster_builds ADD COLUMN mean_cosine_intra DOUBLE",
@@ -96,7 +96,7 @@ def ensure_cluster_build_tables(con) -> None:
         try:
             con.execute(col_ddl)
         except Exception:
-            pass
+            _rollback_quietly(con)
     for ddl in (
         "CREATE INDEX IF NOT EXISTS idx_cluster_builds_pack "
         "ON cluster_builds(pack_id, embedding_version, status)",
@@ -108,7 +108,7 @@ def ensure_cluster_build_tables(con) -> None:
         try:
             con.execute(ddl)
         except Exception:
-            pass
+            _rollback_quietly(con)
 
 
 def load_cluster_build(pack_id: str, build_id: str) -> dict[str, Any] | None:

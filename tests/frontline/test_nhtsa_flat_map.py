@@ -9,6 +9,7 @@ narrative.
 from __future__ import annotations
 
 import csv
+import os
 
 import pytest
 
@@ -365,6 +366,26 @@ def _keyed_row(n, **overrides):
     )
 
 
+def test_converted_work_dir_is_readable_only_during_its_ingest(tmp_path, monkeypatch):
+    """A download lands outside the repo. The jail must allow that file, then close."""
+    from src.security.identifiers import InvalidIdentifier, safe_csv_path
+    from scripts.ingest_nhtsa import authorize_converted_work
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("FRONTLINE_TEST_ISOLATION", raising=False)
+    monkeypatch.setenv("FRONTLINE_INGEST_ROOT", str(tmp_path / "kept"))
+    csv_path = tmp_path / "work" / "nhtsa_complaints_mapped.csv"
+    csv_path.parent.mkdir()
+    csv_path.write_text("a\n", encoding="utf-8")
+    with pytest.raises(InvalidIdentifier):
+        safe_csv_path(csv_path)
+    with authorize_converted_work(csv_path.parent):
+        assert safe_csv_path(csv_path) == csv_path.resolve()
+    assert os.environ["FRONTLINE_INGEST_ROOT"] == str(tmp_path / "kept")
+    with pytest.raises(InvalidIdentifier):
+        safe_csv_path(csv_path)
+
+
 def test_preflight_accepts_a_normalized_local_csv(tmp_path):
     path = _write_csv(tmp_path / "ok.csv", [_valid_local_row()])
     report = preflight_local_csv(path, limit=100)
@@ -469,3 +490,63 @@ def test_every_component_the_converter_emits_is_a_gazetteer_value():
         row = flat_line_to_mapping_row(_complete_line(COMPDESC=raw))
         assert row is not None
         assert row["COMPONENT"] in vocabulary, f"{raw!r} → {row['COMPONENT']!r}"
+
+
+# ── The same condition, one hop further: after the rows are in records ───────
+
+
+def test_every_category_in_the_warehouse_came_from_the_gazetteer(tmp_path, monkeypatch):
+    """The Phase 0 done-when condition, checked where it is actually claimed.
+
+    The converter boundary is pinned above and mapping.yaml is pinned by
+    test_mapping_yaml_points_category_at_the_normalized_column, but neither
+    proves the value survives the load. A mapping key that silently resolves
+    to nothing writes a NULL category and both of those tests still pass.
+    """
+    from datetime import timedelta
+
+    from src.data.timeutil import utc_now
+    from src.data.warehouse import domain_con
+    from src.domains.mapping_ingest import ingest_mapped_csv
+
+    monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+    # The real pack, so the real mapping.yaml is the one under test. Only the
+    # warehouse is redirected.
+    pack = "automotive_nhtsa"
+    # Inside the freshness SLA, or the trust contract rejects every row as
+    # stale and the assertion below passes over an empty table.
+    recent = (utc_now() - timedelta(days=3)).strftime("%Y%m%d")
+    raws = [
+        "SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS:DISC:ROTOR",
+        "ENGINE AND ENGINE COOLING:ENGINE:GASOLINE",
+        "ELECTRICAL SYSTEM:WIRING",
+        "FORWARD COLLISION AVOIDANCE: AUTOMATIC EMERGENCY BRAKING",
+        "Other/I am not sure",
+        "",
+        "SOMETHING NHTSA HAS NEVER EMITTED",
+    ]
+    lines = [
+        _complete_line(
+            CMPLID=str(16123456 + i), ODINO=str(11555001 + i),
+            COMPDESC=raw, DATEA=recent, FAILDATE=recent,
+            CDESCR=f"narrative {i} describing the failure in the owner's words",
+        )
+        for i, raw in enumerate(raws)
+    ]
+    dest = tmp_path / "flat_mapped.csv"
+    _convert(lines, dest)
+    report = ingest_mapped_csv(pack, dest)
+    assert report["upserted"] == len(raws)
+
+    with domain_con(pack) as con:
+        categories = [
+            r[0] for r in con.execute(
+                "SELECT DISTINCT category FROM records"
+            ).fetchall()
+        ]
+    vocabulary = category_values()
+    assert categories
+    assert None not in categories, "a NULL category means the mapping key missed"
+    unknown = sorted(c for c in categories if c not in vocabulary)
+    assert not unknown, f"categories not in categories.csv: {unknown}"
+    assert UNKNOWN in categories, "the unmatched and blank values need a bucket"

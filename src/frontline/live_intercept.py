@@ -35,8 +35,9 @@ def slice_is_anomalous(
     with domain_con(pack_id) as con:
         try:
             cur = con.execute(
-                "SELECT received_at, occurred_at, category, entity_2 FROM records "
-                "WHERE provenance IS NULL OR provenance <> 'inferred'"
+                "SELECT received_at, occurred_at, category, entity_2,"
+                " COALESCE(event_count, 1) AS event_count FROM records "
+                "WHERE provenance IS NULL OR provenance NOT IN ('inferred', 'fixture')"
             )
             cols = [d[0] for d in cur.description]
             records = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -71,37 +72,100 @@ def slice_is_anomalous(
     }
 
 
+def _slice_token(category: str | None, entity_2: str | None, entity_3: str | None) -> str:
+    return "|".join(
+        str(part or "").strip().upper() for part in (category, entity_2, entity_3)
+    )
+
+
+def _select_open_investigation(
+    con,
+    pack_id: str,
+    cluster_id: int,
+    category: str | None,
+    entity_2: str | None,
+    entity_3: str | None,
+):
+    """One open investigation for this identity.
+
+    A real cluster id is the identity. Cluster 0 is not: every unmatched
+    slice would otherwise collapse into the same row. Those are keyed by
+    category, make, and model.
+    """
+    if int(cluster_id or 0) > 0:
+        return con.execute(
+            """
+            SELECT investigation_id FROM investigations
+            WHERE pack_id = ? AND cluster_id = ? AND status = 'open'
+            LIMIT 1
+            """,
+            [pack_id, int(cluster_id)],
+        ).fetchone()
+    return con.execute(
+        """
+        SELECT investigation_id FROM investigations
+        WHERE pack_id = ? AND cluster_id = 0 AND status = 'open'
+          AND UPPER(COALESCE(slice_category, '')) = UPPER(?)
+          AND UPPER(COALESCE(slice_entity_2, '')) = UPPER(?)
+          AND UPPER(COALESCE(slice_entity_3, '')) = UPPER(?)
+        LIMIT 1
+        """,
+        [pack_id, category or "", entity_2 or "", entity_3 or ""],
+    ).fetchone()
+
+
+def find_open_investigation(
+    pack_id: str,
+    cluster_id: int,
+    category: str | None = None,
+    entity_2: str | None = None,
+    entity_3: str | None = None,
+) -> str | None:
+    with ops_con(read_only=True) as con:
+        try:
+            row = _select_open_investigation(
+                con, pack_id, cluster_id, category, entity_2, entity_3
+            )
+        except Exception:
+            return None
+    return str(row[0]) if row else None
+
+
 def open_or_link_investigation(
     *,
     pack_id: str,
     cluster_id: int = 0,
     title: str | None = None,
+    category: str | None = None,
+    entity_2: str | None = None,
+    entity_3: str | None = None,
 ) -> str:
     """Open or link an investigation, fleet-safe (audit 4.5).
 
     The slice claim (``inv:{pack}:{cluster}``) guarantees exactly one opener
     across live intercept, CaseAgent, and the fleet scan — in-process locks
     are not enough when a scan process races an API worker. Claim losers
-    re-read and link to the winner's row.
+    re-read and link to the winner's row. Cluster 0 claims include the
+    slice, so two unmatched components do not share one investigation.
     """
     import os as _os
 
+    cid = int(cluster_id or 0)
+    if cid > 0:
+        claim_key = f"inv:{pack_id}:{cid}"
+    else:
+        claim_key = f"inv:{pack_id}:0:{_slice_token(category, entity_2, entity_3)}"
     owner = f"opener-{_os.getpid()}"
     try:
         from src.jobs.registry import acquire_slice_claim
 
-        claimed = acquire_slice_claim(f"inv:{pack_id}:{cluster_id}", owner)
+        claimed = acquire_slice_claim(claim_key, owner)
     except Exception:
         claimed = True
     with ops_con() as con:
-        row = con.execute(
-            """
-            SELECT investigation_id FROM investigations
-            WHERE pack_id = ? AND cluster_id = ? AND status = 'open'
-            LIMIT 1
-            """,
-            [pack_id, cluster_id],
-        ).fetchone()
+        row = _select_open_investigation(
+            con, pack_id, cid, category, entity_2, entity_3
+        )
         if row:
             return str(row[0])
         if not claimed:
@@ -112,14 +176,9 @@ def open_or_link_investigation(
 
             for _ in range(10):
                 _time.sleep(0.05)
-                row = con.execute(
-                    """
-                    SELECT investigation_id FROM investigations
-                    WHERE pack_id = ? AND cluster_id = ? AND status = 'open'
-                    LIMIT 1
-                    """,
-                    [pack_id, cluster_id],
-                ).fetchone()
+                row = _select_open_investigation(
+                    con, pack_id, cid, category, entity_2, entity_3
+                )
                 if row:
                     return str(row[0])
             raise RuntimeError(
@@ -131,16 +190,20 @@ def open_or_link_investigation(
             """
             INSERT INTO investigations
             (investigation_id, pack_id, cluster_id, title, status,
-             opened_at, last_case_at, case_count)
-            VALUES (?, ?, ?, ?, 'open', ?, ?, 1)
+             opened_at, last_case_at, case_count,
+             slice_category, slice_entity_2, slice_entity_3)
+            VALUES (?, ?, ?, ?, 'open', ?, ?, 1, ?, ?, ?)
             """,
             [
                 inv_id,
                 pack_id,
-                cluster_id,
-                title or f"Live intercept cluster {cluster_id}",
+                cid,
+                title or f"Live intercept cluster {cid}",
                 utc_now(),
                 utc_now(),
+                category or None,
+                entity_2 or None,
+                entity_3 or None,
             ],
         )
     return inv_id
@@ -255,10 +318,14 @@ def intercept_contact(ctx: Any) -> dict[str, Any]:
         cluster_id = 0
         if getattr(ctx, "investigation_brief", None) and ctx.investigation_brief.get("cluster_id") is not None:
             cluster_id = int(ctx.investigation_brief["cluster_id"])
+        ent3 = (ctx.slots or {}).get("entity_3")
         inv_id = open_or_link_investigation(
             pack_id=pack_id,
             cluster_id=cluster_id,
             title=f"Live intercept {cat or ''} {ent or ''}".strip(),
+            category=cat,
+            entity_2=ent,
+            entity_3=ent3,
         )
         ctx.investigation_id = inv_id
         record_action(
@@ -276,4 +343,9 @@ def intercept_contact(ctx: Any) -> dict[str, Any]:
     return result
 
 
-__all__ = ["slice_is_anomalous", "open_or_link_investigation", "intercept_contact"]
+__all__ = [
+    "slice_is_anomalous",
+    "find_open_investigation",
+    "open_or_link_investigation",
+    "intercept_contact",
+]

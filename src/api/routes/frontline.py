@@ -13,7 +13,7 @@ Endpoints:
   GET    /api/frontline/cases/{id}/notes         → operator notes
   POST   /api/frontline/cases/{id}/notes        → add operator note
   GET    /api/frontline/investigations           → list investigations
-  PATCH  /api/frontline/investigations/{id}     → open|monitoring|closed
+  PATCH  /api/frontline/investigations/{id}     → open|monitoring|closed; close accepts fixed_at, note, control slice
   GET    /api/frontline/digest                   → generate / fetch the daily digest
   GET    /api/frontline/connectors/status        → outbound connector config + counts
   PUT    /api/frontline/connectors/config        → enable / webhook URL / shared secret
@@ -25,6 +25,7 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +75,21 @@ async def early_warning(window_days: int = 7, include_simulated: bool = False) -
                 ).fetchone()
                 funnel["simulated_count"] = row[0] if row else 0
         funnel["include_simulated"] = bool(include_simulated)
-        return {"live_risk": risk, "funnel": funnel}
+        spikes = {"spike_week": None, "spikes": [], "censored_weeks": []}
+        try:
+            from src.domains.active_pack import resolve_active_pack_id
+            from src.ml_runtime.anomalies import current_spikes
+
+            spikes = current_spikes(resolve_active_pack_id())
+        except Exception:
+            pass
+        return {
+            "live_risk": risk,
+            "funnel": funnel,
+            "spike_week": spikes.get("spike_week"),
+            "spikes": spikes.get("spikes") or [],
+            "censored_weeks": spikes.get("censored_weeks") or [],
+        }
 
     return await ops_in_thread(_load)
 
@@ -633,6 +648,108 @@ async def get_investigation_workspace(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def _parse_sla(raw: Any) -> datetime:
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("sla_due_at required")
+    try:
+        if len(text) == 10:
+            return datetime.fromisoformat(text)
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("sla_due_at must be a date or timestamp") from exc
+
+
+@router.get("/investigations/{investigation_id}/brief")
+async def get_investigation_brief(
+    investigation_id: str,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Slice brief: weekly flags, per-source records, links, lift, recall."""
+    from src.frontline.investigation_brief import build_investigation_brief
+    from src.security.identifiers import safe_token_id
+
+    try:
+        safe_token_id(investigation_id, kind="investigation_id")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _load() -> dict[str, Any]:
+        return build_investigation_brief(investigation_id)
+
+    try:
+        return await ops_in_thread(_load)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.patch("/investigations/{investigation_id}/workspace")
+@limiter.limit("60 per minute")
+async def patch_investigation_workspace(
+    request: Request,
+    investigation_id: str,
+    body: dict[str, Any],
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Set assignee, SLA, and hypotheses. The next GET returns the same values."""
+    from src.enterprise.investigation_workspace import (
+        add_hypothesis,
+        update_investigation,
+    )
+    from src.security.identifiers import safe_token_id
+
+    try:
+        safe_token_id(investigation_id, kind="investigation_id")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+    assignee = str(body["assignee"]).strip()[:120] if "assignee" in body else None
+    sla = None
+    if str(body.get("sla_due_at") or "").strip():
+        try:
+            sla = _parse_sla(body.get("sla_due_at"))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    items = body.get("hypotheses") or []
+    if isinstance(body.get("hypothesis"), str) and body.get("hypothesis").strip():
+        items = list(items) + [
+            {
+                "body": body.get("hypothesis"),
+                "status": body.get("hypothesis_status") or "open",
+            }
+        ]
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="hypotheses must be a list")
+    if assignee is None and sla is None and not items:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    try:
+        inv = None
+        if assignee is not None or sla is not None:
+            inv = update_investigation(
+                investigation_id,
+                assignee=assignee,
+                sla_due_at=sla,
+            )
+        for item in items:
+            if isinstance(item, str):
+                text, status = item, "open"
+            elif isinstance(item, dict):
+                text, status = str(item.get("body") or ""), item.get("status") or "open"
+            else:
+                raise ValueError("hypothesis must be a string or object")
+            if not str(text).strip():
+                continue
+            inv = add_hypothesis(investigation_id, str(text), status=str(status))
+        if inv is None:
+            raise ValueError("hypothesis body required")
+        return inv
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/records")
 async def list_records(
     pack_id: str | None = None,
@@ -989,7 +1106,12 @@ async def patch_investigation(
     actor: str = Depends(get_actor),
     _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
 ) -> dict[str, Any]:
-    """Set investigation status: open | monitoring | closed."""
+    """Set investigation status: open | monitoring | closed.
+
+    A close accepts ``fixed_at`` (default today), ``note``, and a control
+    slice (``control_entity_2`` sibling make or ``control_entity_3`` sibling
+    model). The fix date is that value, not the last case timestamp.
+    """
     from src.frontline.ops import update_investigation
 
     if not isinstance(body, dict) or "status" not in body:
@@ -999,6 +1121,10 @@ async def patch_investigation(
             investigation_id,
             status=str(body["status"]),
             author=actor,
+            fixed_at=body.get("fixed_at"),
+            note=body.get("note"),
+            control_entity_2=body.get("control_entity_2"),
+            control_entity_3=body.get("control_entity_3"),
         )
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

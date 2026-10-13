@@ -17,7 +17,8 @@ Q ?=
 ID ?=
 
 .PHONY: help frontline-db seed-domains pack-lint pack-init contact simulate eval-frontline \
-        audit ask digest test clean ingest-scale ingest-nhtsa backtest verify-chain ci \
+        audit ask digest test clean ingest-scale ingest-nhtsa ingest-recalls recall-lead \
+        recall-lead-sample backtest verify-chain ci \
         dashboard-build compileall run run-hardened security-test slm-probes
 
 help:
@@ -28,6 +29,9 @@ help:
 	@echo "  make pack-init SRC=csv PACK=<id>   Pack Builder MVP (CSV → draft pack)"
 	@echo "  make ingest-scale PACK=<id> N=10000  Synthetic scale corpus + embeddings"
 	@echo "  make ingest-nhtsa N=50000 [CSV=file]  Real NHTSA complaints via mapping.yaml"
+	@echo "  make ingest-recalls          NHTSA recalls into advisories (set DOMAIN_DB_PATH for a side db)"
+	@echo "  make recall-lead             Lead-time markdown for PACK into OUT; needs DOMAIN_DB_PATH outside data/domains"
+	@echo "  make recall-lead-sample      Honda/Ford fixture report; requires DOMAIN_DB_PATH outside data/domains"
 	@echo "  make backtest PACK=<id>      Recompute backtest lead_time_weeks"
 	@echo "  make verify-chain ID=int_xxx Verify ledger hash chain"
 	@echo "  make contact                 Run a scripted text interaction (no mic, deterministic)"
@@ -88,7 +92,27 @@ demo-issue:
 # Real NHTSA complaints via mapping.yaml (not ingest_scale). Optional: CSV=path
 ingest-nhtsa:
 	$(PY) -m scripts.ingest_nhtsa --pack $(or $(PACK),automotive_nhtsa) --limit $(or $(N),50000) \
-		$(if $(CSV),--csv $(CSV),)
+		$(if $(CSV),--csv $(CSV),) \
+		$(if $(MAKES),--makes $(MAKES),) \
+		$(if $(YEAR_MIN),--year-min $(YEAR_MIN),) \
+		$(if $(YEAR_MAX),--year-max $(YEAR_MAX),)
+
+# NHTSA FLAT_RCL → advisories. Same make/year bounds as a complaints load.
+ingest-recalls:
+	$(PY) -m scripts.ingest_recalls --pack $(or $(PACK),automotive_nhtsa) \
+		$(if $(ZIP),--zip $(ZIP),) \
+		$(if $(MAKES),--makes $(MAKES),) \
+		$(if $(YEAR_MIN),--year-min $(YEAR_MIN),) \
+		$(if $(YEAR_MAX),--year-max $(YEAR_MAX),) \
+		$(if $(RCL_TYPE),--rcl-type $(RCL_TYPE),)
+
+recall-lead:
+	$(PY) -m scripts.recall_lead_report --pack $(or $(PACK),automotive_nhtsa) \
+		$(if $(OUT),--out $(OUT),)
+
+# Committed Honda/Ford sample. Refuses data/domains so the pilot file stays put.
+recall-lead-sample:
+	$(PY) -m scripts.recall_lead_sample
 
 backtest:
 	$(PY) -c "from src.backtest.engine import run_backtest, best_lead_time; r=run_backtest('$(PACK)'); print(len(r), 'rows'); print('best', best_lead_time('$(PACK)'))"

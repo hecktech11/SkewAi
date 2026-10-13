@@ -271,6 +271,19 @@ def init_domain_db(pack_id: str) -> None:
         pass  # schema applied in the context manager
 
 
+def _rollback_quietly(con) -> None:
+    """A failed DDL statement can leave DuckDB's transaction aborted.
+
+    ``ALTER TABLE ... ADD COLUMN`` when the column already exists is the
+    usual case. Swallowing that error without rolling back makes every
+    later statement on the connection fail with "transaction is aborted".
+    """
+    try:
+        con.rollback()
+    except Exception:
+        pass
+
+
 def _strip_sql_comments(sql: str) -> str:
     """Strip SQL line comments (-- ...) so they don't break statement splitting."""
     out_lines = []
@@ -282,6 +295,94 @@ def _strip_sql_comments(sql: str) -> str:
             line = line[:idx]
         out_lines.append(line)
     return "\n".join(out_lines)
+
+
+def _migrate_weekly_anomaly_grain(con) -> None:
+    """Put model grain and the censored bit on the weekly_anomalies key.
+
+    CREATE TABLE IF NOT EXISTS does not alter a table that already exists.
+    Adding entity_3 as a nullable column is not enough: the old primary key
+    is (pack, week, category, make), so two models in one week cannot both
+    be stored. Rebuild when entity_3 is not part of that key. Row counts
+    must match before the old table is dropped.
+    """
+    try:
+        info = con.execute(
+            "SELECT name, pk FROM pragma_table_info('weekly_anomalies')"
+        ).fetchall()
+    except Exception:
+        return
+    if not info:
+        return
+    pk = {str(name): int(flag or 0) for name, flag in info}
+    if pk.get("entity_3", 0) > 0 and "censored" in pk:
+        return
+    for ddl in (
+        "ALTER TABLE weekly_anomalies ADD COLUMN entity_3 VARCHAR DEFAULT ''",
+        "ALTER TABLE weekly_anomalies ADD COLUMN censored BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE weekly_anomalies ADD COLUMN p_value DOUBLE",
+        "ALTER TABLE weekly_anomalies ADD COLUMN p_bh DOUBLE",
+        "ALTER TABLE weekly_anomalies ADD COLUMN baseline_weeks INTEGER",
+        "ALTER TABLE weekly_anomalies ADD COLUMN method VARCHAR",
+    ):
+        try:
+            con.execute(ddl)
+        except Exception:
+            _rollback_quietly(con)
+    try:
+        n_old = con.execute("SELECT COUNT(*) FROM weekly_anomalies").fetchone()[0]
+        con.execute("DROP TABLE IF EXISTS weekly_anomalies__grain")
+        con.execute(
+            """
+            CREATE TABLE weekly_anomalies__grain (
+                pack_id             VARCHAR NOT NULL,
+                iso_week            VARCHAR NOT NULL,
+                category            VARCHAR,
+                entity_2            VARCHAR,
+                entity_3            VARCHAR DEFAULT '',
+                record_count        INTEGER NOT NULL,
+                baseline_mean       DOUBLE,
+                baseline_std        DOUBLE,
+                z_score             DOUBLE,
+                is_anomaly          BOOLEAN NOT NULL DEFAULT FALSE,
+                p_value             DOUBLE,
+                p_bh                DOUBLE,
+                baseline_weeks      INTEGER,
+                method              VARCHAR,
+                censored            BOOLEAN DEFAULT FALSE,
+                PRIMARY KEY (pack_id, iso_week, category, entity_2, entity_3)
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO weekly_anomalies__grain
+            SELECT pack_id, iso_week, category, entity_2,
+                   COALESCE(entity_3, ''),
+                   record_count, baseline_mean, baseline_std, z_score,
+                   is_anomaly, p_value, p_bh, baseline_weeks, method,
+                   COALESCE(censored, FALSE)
+            FROM weekly_anomalies
+            """
+        )
+        n_new = con.execute(
+            "SELECT COUNT(*) FROM weekly_anomalies__grain"
+        ).fetchone()[0]
+        if int(n_new) != int(n_old):
+            con.execute("DROP TABLE weekly_anomalies__grain")
+            return
+        con.execute("DROP TABLE weekly_anomalies")
+        con.execute("ALTER TABLE weekly_anomalies__grain RENAME TO weekly_anomalies")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_weekly_anom_pack_week "
+            "ON weekly_anomalies(pack_id, iso_week)"
+        )
+    except Exception:
+        _rollback_quietly(con)
+        try:
+            con.execute("DROP TABLE IF EXISTS weekly_anomalies__grain")
+        except Exception:
+            _rollback_quietly(con)
 
 
 def apply_domain_schema(con) -> None:
@@ -302,15 +403,19 @@ def apply_domain_schema(con) -> None:
         "ALTER TABLE weekly_anomalies ADD COLUMN p_bh DOUBLE",
         "ALTER TABLE weekly_anomalies ADD COLUMN baseline_weeks INTEGER",
         "ALTER TABLE weekly_anomalies ADD COLUMN method VARCHAR",
+        "ALTER TABLE weekly_anomalies ADD COLUMN entity_3 VARCHAR DEFAULT ''",
+        "ALTER TABLE weekly_anomalies ADD COLUMN censored BOOLEAN DEFAULT FALSE",
         "ALTER TABLE records ADD COLUMN entity_key VARCHAR",
         "ALTER TABLE records ADD COLUMN provenance VARCHAR",
         "ALTER TABLE records ADD COLUMN embedding FLOAT[]",
+        "ALTER TABLE records ADD COLUMN event_count INTEGER DEFAULT 1",
         "ALTER TABLE cluster_lineage ADD COLUMN correspondence_kind VARCHAR",
     ):
         try:
             con.execute(ddl)
         except Exception:
-            pass
+            _rollback_quietly(con)
+    _migrate_weekly_anomaly_grain(con)
     # Legacy rows predate provenance tracking: label them honestly so they
     # can never masquerade as observed/computed evidence (item 2).
     try:
@@ -319,13 +424,13 @@ def apply_domain_schema(con) -> None:
             "WHERE provenance IS NULL"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     try:
         con.execute(
             "UPDATE records SET provenance = 'legacy' WHERE provenance IS NULL"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     for _idx_ddl in (
         "CREATE INDEX IF NOT EXISTS idx_records_entity_key ON records(entity_key)",
         "CREATE INDEX IF NOT EXISTS idx_records_source ON records(source)",
@@ -333,14 +438,14 @@ def apply_domain_schema(con) -> None:
         try:
             con.execute(_idx_ddl)
         except Exception:
-            pass
+            _rollback_quietly(con)
     try:
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_backtest_pack_matched "
             "ON backtest_results(pack_id, matched)"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     try:
         con.execute(
             """
@@ -358,14 +463,14 @@ def apply_domain_schema(con) -> None:
             """
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     try:
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_cluster_versions_pack "
             "ON cluster_versions(pack_id, cluster_id)"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     try:
         from src.ml_runtime.embedding_store import ensure_record_embeddings
         from src.ml_runtime.cluster_builds import ensure_cluster_build_tables
@@ -373,7 +478,7 @@ def apply_domain_schema(con) -> None:
         ensure_record_embeddings(con)
         ensure_cluster_build_tables(con)
     except Exception:
-        pass
+        _rollback_quietly(con)
 
 
 def apply_ops_schema(con) -> None:
@@ -452,6 +557,16 @@ def apply_ops_schema(con) -> None:
             (
                 ("assignee", "VARCHAR"),
                 ("sla_due_at", "TIMESTAMP"),
+                ("slice_category", "VARCHAR"),
+                ("slice_entity_2", "VARCHAR"),
+                ("slice_entity_3", "VARCHAR"),
+            ),
+        ),
+        (
+            "recorded_fixes",
+            (
+                ("control_entity_2", "VARCHAR"),
+                ("control_entity_3", "VARCHAR"),
             ),
         ),
     ):

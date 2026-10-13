@@ -405,6 +405,11 @@ async def eval_pack(pack_id: str) -> list[GateResult]:
                 gate.actual = got
         results.append(gate)
 
+    if pack_id == "automotive_nhtsa":
+        from eval.frontline.recall_lead_gate import recall_lead_gate
+
+        results.append(recall_lead_gate())
+
     return results
 
 

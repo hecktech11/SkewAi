@@ -172,6 +172,22 @@ def map_row(row: dict[str, Any], records_map: dict[str, Any]) -> dict[str, Any] 
 
     out["occurred_at"] = _parse_ts(out.get("occurred_at"))
     out["entity_key"] = _norm_entity_key(out.get("entity_key"))
+    spec = records_map.get("event_count")
+    raw_count = _cell(raw_row, spec, headers, field="event_count") if spec is not None else ""
+    try:
+        parsed_count = int(float(raw_count)) if str(raw_count).strip() else 1
+    except (TypeError, ValueError):
+        parsed_count = 1
+    out["event_count"] = parsed_count if parsed_count >= 1 else 1
+    # Optional. A blank category stays blank: normalize_component would
+    # otherwise fill it with UNKNOWN OR OTHER, which then matches nothing
+    # and looks like a real component.
+    if str(records_map.get("normalize_category") or "").strip().lower() == "nhtsa":
+        raw_cat = str(out.get("category") or "").strip()
+        if raw_cat:
+            from src.domains.nhtsa_components import normalize_component
+
+            out["category"] = normalize_component(raw_cat)
     return out
 
 
@@ -231,6 +247,7 @@ def _arrow_schema():
             ("embedding", pa.list_(pa.float32())),
             ("entity_key", pa.string()),
             ("provenance", pa.string()),
+            ("event_count", pa.int64()),
         ]
     )
 
@@ -253,6 +270,7 @@ def _staged_row(rec: dict[str, Any]) -> dict[str, Any]:
         "embedding": embed_text(rec["text"]),
         "entity_key": rec.get("entity_key") or None,
         "provenance": rec.get("provenance") or "observed",
+        "event_count": int(rec.get("event_count") or 1),
     }
 
 

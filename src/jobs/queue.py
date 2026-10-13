@@ -44,6 +44,7 @@ JOB_PERMISSIONS: dict[str, str] = {
     "ingest_source": "ops:write",
     "recompute_anomalies": "ops:write",
     "scheduled_scan": "ops:write",
+    "measure_fix": "ops:write",
     "reenrich": "ops:write",
     "build_digest": "ops:write",
     "embedding_backfill": "ops:write",
@@ -71,6 +72,13 @@ DEFAULT_LEASE_S = 300
 
 #: Payload keys carrying a filesystem reference, by job type.
 _SOURCE_TAG_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def _job_flag(value: Any) -> bool:
+    """True only for real opt-ins. The string ``false`` must stay off."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def permission_for_job(job_type: str) -> str:
@@ -542,7 +550,7 @@ def _default_handler(jtype: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             from src.domains.source_ingest import ingest_source
 
-            return ingest_source(
+            report = ingest_source(
                 pack,
                 payload.get("source") or "service",
                 payload.get("csv_path") or "",
@@ -550,6 +558,24 @@ def _default_handler(jtype: str, payload: dict[str, Any]) -> dict[str, Any]:
                 limit=payload.get("limit"),
                 provenance=payload.get("provenance"),
             )
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        if _job_flag(payload.get("run_anomalies")) and isinstance(report, dict):
+            try:
+                from src.ml_runtime.anomalies import recompute_weekly_anomalies
+
+                scored = recompute_weekly_anomalies(pack)
+                report["anomalies_scored"] = len(scored)
+                report["written"] = report.get("upserted")
+            except Exception as e:
+                report["anomalies_scored"] = None
+                report["error"] = str(e)
+        return report
+    if jtype == "measure_fix":
+        try:
+            from src.enterprise.fix_effectiveness import measure_recorded_fixes
+
+            return measure_recorded_fixes(pack_id=payload.get("pack_id"))
         except Exception as e:
             return {"ok": False, "error": str(e)}
     if jtype == "scheduled_scan":

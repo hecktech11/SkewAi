@@ -34,10 +34,10 @@ def _as_dt(val: Any) -> datetime | None:
 
 
 #: Keys a canonical row may carry that are not in CANONICAL_RECORD_FIELDS.
-#: ``provenance`` is one: it is a real records column, but it is set by the
-#: ingest path rather than read from the source CSV, so mapping.yaml never
-#: names it and map_row never emits it.
-_SCHEMA_OK_EXTRA = frozenset({"embedding", "pack_id", "provenance"})
+#: ``provenance`` is set by the ingest path. ``event_count`` is a records
+#: column map_row fills after the field loop (a literal ``1`` or a summed
+#: telematics bucket), so it is not one of the mapped canonical fields.
+_SCHEMA_OK_EXTRA = frozenset({"embedding", "pack_id", "provenance", "event_count"})
 
 
 def schema_contract_ok(row: dict[str, Any]) -> tuple[bool, str]:

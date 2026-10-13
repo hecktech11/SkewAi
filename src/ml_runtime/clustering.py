@@ -317,13 +317,127 @@ def resolve_cluster_version(
         return dict(zip(cols, row))
 
 
+def novel_candidate_id(pack_id: str, record_id: str) -> str:
+    """Stable id for 'this record is far from every centroid'.
+
+    Deterministic per (pack, record) rather than a fresh ULID per rebuild,
+    because the Early Warning board counts open candidates per
+    (category, entity_2) and calls a slice emerging at three. A ULID would
+    insert a new row for the same record on every rebuild, so one stubborn
+    outlier would manufacture an emerging slice after three nightly runs.
+
+    The pack is part of the key because novel_candidates is an ops-wide
+    table and two packs can carry the same record_id.
+    """
+    return f"nvl_{pack_id}:{record_id}"
+
+
+def _stage_novel(
+    buf: dict[str, dict[str, Any]],
+    pack_id: str,
+    rec: dict[str, Any],
+    top_score: float,
+) -> None:
+    """Buffer one novel candidate for the ops write at the end of a rebuild."""
+    nid = novel_candidate_id(pack_id, str(rec["record_id"]))
+    buf[nid] = {
+        "novel_id": nid,
+        "interaction_id": "",  # a rebuild has no contact behind it
+        "pack_id": pack_id,
+        "category": rec.get("category"),
+        "entity_2": rec.get("entity_2"),
+        "entity_3": rec.get("entity_3"),
+        "top_score": top_score,
+    }
+
+
+def persist_novel_candidates(
+    pack_id: str,
+    candidates: dict[str, dict[str, Any]],
+    clustered_categories: set[str],
+) -> dict[str, int]:
+    """Write a rebuild's novel candidates to the OPS warehouse.
+
+    This is a separate function, and separately connected, because
+    ``novel_candidates`` is declared in OPS_SCHEMA_SQL while
+    ``rebuild_clusters`` holds a writer on the pack's DOMAIN warehouse.
+    The statements used to run on the domain connection inside
+    ``except Exception: pass``, so every one of them failed with "table
+    does not exist" and was swallowed: the board never saw a candidate that
+    clustering found.
+
+    Absorbing runs first and skips anything this rebuild flagged, so a
+    record that is still far from every centroid stays open.
+
+    Insert is ON CONFLICT DO NOTHING rather than an upsert: a candidate an
+    engineer already dismissed must not be reopened by the next nightly run.
+    """
+    out = {"staged": len(candidates), "absorbed": 0, "open": 0}
+    if not candidates and not clustered_categories:
+        return out
+    from src.data.warehouse import ops_con
+
+    try:
+        with ops_con() as con:
+            if clustered_categories:
+                cats = sorted(clustered_categories)
+                ph = ",".join("?" for _ in cats)
+                where = (
+                    f"pack_id=? AND status='open' AND category IN ({ph})"
+                )
+                params: list[Any] = [pack_id, *cats]
+                skip = sorted(candidates)
+                if skip:
+                    where += f" AND novel_id NOT IN ({','.join('?' for _ in skip)})"
+                    params.extend(skip)
+                # Counted before the UPDATE so the number is what this run
+                # absorbed, not the pack's running total.
+                out["absorbed"] = int(
+                    con.execute(
+                        f"SELECT COUNT(*) FROM novel_candidates WHERE {where}", params
+                    ).fetchone()[0]
+                )
+                con.execute(
+                    f"UPDATE novel_candidates SET status='clustered' WHERE {where}",
+                    params,
+                )
+            for row in candidates.values():
+                con.execute(
+                    """
+                    INSERT INTO novel_candidates
+                    (novel_id, interaction_id, pack_id, category, entity_2,
+                     entity_3, top_score, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)
+                    ON CONFLICT (novel_id) DO NOTHING
+                    """,
+                    [
+                        row["novel_id"], row["interaction_id"], row["pack_id"],
+                        row["category"], row["entity_2"], row["entity_3"],
+                        row["top_score"],
+                    ],
+                )
+            out["open"] = int(
+                con.execute(
+                    "SELECT COUNT(*) FROM novel_candidates "
+                    "WHERE pack_id=? AND status='open'",
+                    [pack_id],
+                ).fetchone()[0]
+            )
+    except Exception as e:
+        # A rebuild must not fail because the ops warehouse is unavailable,
+        # but it must say so — silence here is what hid the broken write.
+        logger.warning("novel candidate write failed for pack %s: %s", pack_id, e)
+    return out
+
+
 def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
     """Rebuild clusters for pack from records text/embeddings."""
     with domain_con(pack_id, read_only=False) as con:
         apply_domain_schema(con)
         rows = con.execute(
             """
-            SELECT record_id, text, category, embedding, received_at
+            SELECT record_id, text, category, embedding, received_at,
+                   entity_2, entity_3
             FROM records
             ORDER BY received_at
             LIMIT 5000
@@ -337,11 +451,11 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
         # Fit corpus IDF before embedding so frequent terms don't dominate
         # (item 21). Deterministic for a fixed corpus.
         try:
-            fit_idf([str(t or "") for _, t, _, _, _ in rows], pack_id=pack_id)
+            fit_idf([str(t or "") for _, t, _, _, _, _, _ in rows], pack_id=pack_id)
         except Exception:
             pass
         current_dim = embedding_dim()
-        for rid, text, cat, emb, rec_at in rows:
+        for rid, text, cat, emb, rec_at, ent2, ent3 in rows:
             if emb is None or len(list(emb)) != current_dim:
                 # Missing OR stale-dimension embedding (pre-512 migration):
                 # recompute from text rather than comparing across dims.
@@ -361,6 +475,12 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                     "text": text or "",
                     "category": cat,
                     "received_at": rec_at,
+                    # Carried so a novel candidate keeps its fleet slice. The
+                    # Early Warning board groups open candidates by
+                    # (category, entity_2); without these the whole sampled
+                    # path wrote NULL and every slice collapsed to 'unknown'.
+                    "entity_2": ent2,
+                    "entity_3": ent3,
                 }
             )
             vectors.append(emb)
@@ -444,6 +564,12 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
         written = 0
         cluster_uids: dict[int, str] = {}
         legacy_ids_reused: list[int] = []
+        # Novel candidates live in the OPS warehouse, not this pack's domain
+        # warehouse, so they are buffered here and written once the domain
+        # writer is released. Keyed by novel_id so one rebuild cannot stage
+        # the same record twice.
+        novel: dict[str, dict[str, Any]] = {}
+        clustered_categories: set[str] = set()
         # Modal entity per record for stable signatures (board #5).
         _ent2_by_rid: dict[str, str] = {}
         try:
@@ -607,17 +733,9 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                 except ValueError:
                     _cut = 0.85
                 if dist > _cut:
-                    try:
-                        con.execute(
-                            "INSERT INTO novel_candidates (novel_id, interaction_id, pack_id, "
-                            "category, entity_2, entity_3, top_score, status, created_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', current_timestamp)",
-                            [f"nov_{records[i]['record_id']}", "", pack_id,
-                             records[i].get("category"), records[i].get("entity_2"),
-                             records[i].get("entity_3"), round(1.0 - dist, 3)],
-                        )
-                    except Exception:
-                        pass
+                    _stage_novel(
+                        novel, pack_id, records[i], round(1.0 - dist, 3)
+                    )
                 con.execute(
                     """
                     INSERT INTO cluster_assignments (record_id, cluster_id, distance)
@@ -626,15 +744,14 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                     [records[i]["record_id"], cid, dist],
                 )
                 written += 1
-            # 1.3: absorb open novels whose signature now matches this cluster
-            try:
-                con.execute(
-                    "UPDATE novel_candidates SET status='clustered' "
-                    "WHERE pack_id=? AND status='open' AND category=?",
-                    [pack_id, category],
-                )
-            except Exception:
-                pass
+            # 1.3: absorb open novels whose signature now matches this cluster.
+            # Deferred to the ops write, which runs the absorb BEFORE staging
+            # this rebuild's candidates — otherwise a record flagged as too
+            # far from every centroid was marked 'clustered' by the same pass
+            # that flagged it, purely because some cluster shared its
+            # category, and the feature could never surface anything.
+            if category:
+                clustered_categories.add(str(category))
 
         # R15: Assign all remaining records in the pack so records > 5,000 are not excluded
         sample_rids = {rec["record_id"] for rec in records}
@@ -696,16 +813,15 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                     )
                     written += 1
                     if best_dist > _cut:
-                        try:
-                            con.execute(
-                                "INSERT INTO novel_candidates (novel_id, interaction_id, pack_id, "
-                                "category, entity_2, entity_3, top_score, status, created_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', current_timestamp)",
-                                [f"nov_{rem_rid}", "", pack_id,
-                                 rem_cat, rem_e2, rem_e3, round(1.0 - best_dist, 3)],
-                            )
-                        except Exception:
-                            pass
+                        _stage_novel(
+                            novel,
+                            pack_id,
+                            {
+                                "record_id": rem_rid, "category": rem_cat,
+                                "entity_2": rem_e2, "entity_3": rem_e3,
+                            },
+                            round(1.0 - best_dist, 3),
+                        )
 
             # Update cluster and version member counts with the newly assigned records
             for lab in by_lab:
@@ -740,7 +856,7 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
             warnings.warn(msg, DeprecationWarning, stacklevel=2)
             logger.warning(msg)
 
-        return {
+        result = {
             "pack_id": pack_id,
             "clusters": len(by_lab),
             "assignments": written,
@@ -751,6 +867,13 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
             "cluster_uids": cluster_uids,
             "legacy_ids_reused": sorted(legacy_ids_reused),
         }
+
+    # Outside the domain writer on purpose: novel_candidates is an ops table,
+    # and domain_con holds a non-reentrant per-pack lock for the block above.
+    result["novel"] = persist_novel_candidates(
+        pack_id, novel, clustered_categories
+    )
+    return result
 
 
 def warn_on_legacy_cluster_id(cluster_id: Any, pack_id: str = "default") -> None:
