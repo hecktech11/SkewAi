@@ -23,6 +23,8 @@ class TwilioMediaChannel(ChannelAdapter):
     """Telephony channel adapter with deterministic pilot fallback."""
 
     channel_name = "twilio_media"
+    # Outbound turn payloads retain transcript text. Drop the oldest past this bound.
+    OUTBOUND_LIMIT = 64
 
     def __init__(
         self,
@@ -49,7 +51,7 @@ class TwilioMediaChannel(ChannelAdapter):
             voice=True,
             text=True,
             barge_in=True,
-            server_tts=True,
+            server_tts=self._speech.playable_tts_available(),
             supervisor_takeover=True,
             dtmf=True,
             asr_confidence=True,
@@ -64,6 +66,9 @@ class TwilioMediaChannel(ChannelAdapter):
 
     async def _emit(self, payload: dict[str, Any]) -> None:
         self.outbound.append(payload)
+        overflow = len(self.outbound) - self.OUTBOUND_LIMIT
+        if overflow > 0:
+            del self.outbound[:overflow]
         if self._send is not None:
             await self._send(payload)
 
@@ -71,7 +76,8 @@ class TwilioMediaChannel(ChannelAdapter):
         self, text: str, *, speaker: str = "agent", meta: dict[str, Any] | None = None
     ) -> None:
         meta = meta or {}
-        audio_meta = self._speech.synthesize_meta(text) if self.capabilities().server_tts else {}
+        playable = self._speech.playable_tts_available()
+        audio_meta = self._speech.synthesize_meta(text) if playable else {}
         await self._emit(
             {
                 "type": "agent_turn",
@@ -79,7 +85,7 @@ class TwilioMediaChannel(ChannelAdapter):
                 "text": text,
                 "speaker": speaker,
                 "turn_id": meta.get("turn_id"),
-                "server_tts": True,
+                "server_tts": playable,
                 "tts": audio_meta,
                 "live_twilio": self.live_credentials,
             }
@@ -136,10 +142,21 @@ class TwilioMediaChannel(ChannelAdapter):
         await self._emit({"type": "hangup", "channel": self.channel_name})
 
     def ingest_media_frame(self, frame: dict[str, Any]) -> str | None:
-        """Convert a media/STT frame into customer text (None if partial)."""
+        """Convert a media/STT frame into customer text (None if partial).
+
+        Audio media frames are not a conversation unless operational STT,
+        playable TTS, and interruption handling are all connected. The text
+        pilot path (``type=text``) is unchanged.
+        """
         if frame.get("event") == "media" and frame.get("media", {}).get("payload"):
-            # Pilot: payload may already be base64 audio; STT stack returns text when ready.
-            return self._speech.transcribe_chunk(frame["media"]["payload"])
+            from src.voice.telephony_bridge import (
+                TelephonyServiceUnavailable,
+                streaming_services_ready,
+            )
+
+            if not streaming_services_ready(self._speech, interruption_connected=False):
+                raise TelephonyServiceUnavailable()
+            return self._speech.transcribe_pcm(b"")
         if frame.get("event") == "mark" or frame.get("type") == "text":
             return str(frame.get("text") or frame.get("transcript") or "") or None
         return None

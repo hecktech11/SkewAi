@@ -369,6 +369,33 @@ class Orchestrator:
             {"speaker": "customer", "turn_id": customer_turn.get("turn_id")},
         )
 
+        # Recognized emergencies preempt routine gates: voice consent, a
+        # spoken human request, an invalid-VIN re-ask, and the intake gates
+        # (low-ASR readback, case-status). Hedge and negation stay inside
+        # _check_kill_switch, so "no fire" and "fire drill" do not escalate.
+        from src.agents.intake import _check_kill_switch
+
+        _kill = _check_kill_switch(text, self.ctx) if text else None
+        if _kill:
+            try:
+                _script = str(self.ctx.pack.manifest.safety.escalation_script or "")
+            except Exception:
+                _script = ""
+            self.ctx.safety_flags["escalation"] = True
+            self.ctx.safety_flags[_kill] = True
+            record_action(self._orchestrator_action(
+                "safety_flag_raised",
+                input_summary=f"customer utterance matched lexicon: '{_kill}'",
+                output_summary=f"safety_flag[{_kill}]=True; preempts routine gates",
+            ))
+            if supervised:
+                if _script:
+                    self.ctx.pending_safety_script = _script[:500]
+                await self._supervised_safety_hit(_kill, text)
+                return
+            await self._complete_safety_escalation(_kill, _script)
+            return
+
         # ── P0: explicit voice-consent gate (two-party/biometric regions) ──
         # Until consent is obtained, intake/slots/enrichment are blocked. The
         # script is spoken once; an affirmative reply unlocks the contact.
@@ -704,83 +731,11 @@ class Orchestrator:
             await self._supervised_safety_hit(ires["kill_switch"], text)
             return
 
-        # Kill-switch → SAFETY_ESCALATION
+        # Kill-switch → SAFETY_ESCALATION (intake path, when no earlier gate ran)
         if ires.get("kill_switch"):
-            self._transition(self.ctx.state, SAFETY_ESCALATION)
-            # Enforce Critical/P1 before CaseAgent (Triage is skipped on this path).
-            self.ctx.severity = "Critical"
-            self.ctx.severity_source = "rules"
-            self.ctx.priority = 1
-            # Audit-first: ledger the escalation script BEFORE emitting it.
-            record_action(self._orchestrator_action(
-                "escalation_script_emitted",
-                input_summary=f"kill-switch term: '{ires['kill_switch']}'",
-                output_summary=ires["question"],
-            ))
-            turn = self.ctx.record_turn("agent", ires["question"], llm_used=False)
-            await self.hooks._maybe(
-                self.hooks.emit_customer_turn,
-                ires["question"],                # the escalation script
-                {
-                    "speaker": "agent",
-                    "fast_path": True,
-                    "llm_used": False,
-                    "turn_id": turn.get("turn_id"),
-                    "utterance_id": turn.get("turn_id"),
-                },
+            await self._complete_safety_escalation(
+                str(ires["kill_switch"]), str(ires.get("question") or ""),
             )
-            self._register_spoken_turn(ires["question"])
-            # Supervisor whisper (Tier-A): coach on the P1 without the caller hearing.
-            try:
-                from src.voice.wiring import build_supervisor_whisper
-
-                _wh = build_supervisor_whisper(
-                    self.ctx.interaction_id, dict(self.ctx.slots),
-                    severity="Critical", priority="P1", safety_tripped=True,
-                    kill_terms=[str(ires.get("kill_switch") or "")],
-                    sentiment_peak=float(self.ctx.peak_frustration or 0.0),
-                )
-                if _wh:
-                    await self.hooks._maybe(self.hooks.emit_activity, {
-                        "agent": "supervisor",
-                        "action_type": "supervisor_whisper",
-                        "summary": str(_wh.get("whisper_audio_ssml") or "")[:500],
-                        "ok": True,
-                    })
-                    await self.hooks._maybe(
-                        getattr(self.hooks, "emit_supervisor_whisper", None), _wh)
-            except Exception:
-                pass
-            # Sentinel escalation in parallel
-            await SentinelAgent(self.ctx).run(trigger="escalation")
-            # Fire P1 safety escalation alert (non-blocking)
-            try:
-                from src.frontline.alerts import alert_safety_escalation
-                await alert_safety_escalation(self.ctx.interaction_id, ires["kill_switch"])
-            except Exception:
-                pass
-            try:
-                from src.routing import get_circuit_breaker
-
-                get_circuit_breaker().record_safety_evaluation(missed_safety=False)
-            except Exception:
-                pass
-            # Best-effort enrichment on the escalation path (audit 4.1): a
-            # turn-1 kill-switch fires before slots complete, and the
-            # Critical case that follows is exactly where evidence matters
-            # most. Short timeout, partial results kept, never blocking.
-            try:
-                await asyncio.wait_for(
-                    self._run_enrichment(), timeout=settings.enrich_timeout_s
-                )
-                self.ctx.enrichment_done = True
-            except asyncio.TimeoutError:
-                self.ctx.enrichment_partial = True
-                self.ctx.enrichment_done = True
-            except Exception:
-                self.ctx.enrichment_partial = True
-                self.ctx.enrichment_done = True
-            await self._move_to_closing()
             return
 
         # Normal supervised input (item 6): the turn was validated, scored,
@@ -1018,6 +973,8 @@ class Orchestrator:
         absent, the server uses the utterance it marked as playing — not the
         newest generated text.
         """
+        from src.voice.interruption_reconciler import TruncationPersistError
+
         try:
             from src.voice.wiring import reconcile_barge_in
 
@@ -1056,6 +1013,8 @@ class Orchestrator:
             if uid and uid == self.ctx.playing_utterance_id:
                 self.ctx.playing_utterance_id = None
             return audible or "[INTERRUPTED]"
+        except TruncationPersistError:
+            raise
         except Exception:
             return "[INTERRUPTED]"
 
@@ -1728,6 +1687,84 @@ class Orchestrator:
         except Exception:
             pass
         return True
+
+    async def _complete_safety_escalation(self, kill_term: str, question: str) -> None:
+        """Escalate a recognized emergency and close. Shared by the preemption
+        check and the intake kill-switch return so both paths ledger, speak,
+        and score the same way.
+        """
+        script = question or (
+            "Please hold. A safety specialist will take this immediately."
+        )
+        self.ctx.safety_flags["escalation"] = True
+        if kill_term:
+            self.ctx.safety_flags[kill_term] = True
+        self._transition(self.ctx.state, SAFETY_ESCALATION)
+        self.ctx.severity = "Critical"
+        self.ctx.severity_source = "rules"
+        self.ctx.priority = 1
+        record_action(self._orchestrator_action(
+            "escalation_script_emitted",
+            input_summary=f"kill-switch term: '{kill_term}'",
+            output_summary=script,
+        ))
+        turn = self.ctx.record_turn("agent", script, llm_used=False)
+        await self.hooks._maybe(
+            self.hooks.emit_customer_turn,
+            script,
+            {
+                "speaker": "agent",
+                "fast_path": True,
+                "llm_used": False,
+                "turn_id": turn.get("turn_id"),
+                "utterance_id": turn.get("turn_id"),
+            },
+        )
+        self._register_spoken_turn(script)
+        try:
+            from src.voice.wiring import build_supervisor_whisper
+
+            _wh = build_supervisor_whisper(
+                self.ctx.interaction_id, dict(self.ctx.slots),
+                severity="Critical", priority="P1", safety_tripped=True,
+                kill_terms=[str(kill_term or "")],
+                sentiment_peak=float(self.ctx.peak_frustration or 0.0),
+            )
+            if _wh:
+                await self.hooks._maybe(self.hooks.emit_activity, {
+                    "agent": "supervisor",
+                    "action_type": "supervisor_whisper",
+                    "summary": "Supervisor coach note queued.",
+                    "ok": True,
+                })
+                await self.hooks._maybe(
+                    getattr(self.hooks, "emit_supervisor_whisper", None), _wh)
+        except Exception:
+            pass
+        await SentinelAgent(self.ctx).run(trigger="escalation")
+        try:
+            from src.frontline.alerts import alert_safety_escalation
+            await alert_safety_escalation(self.ctx.interaction_id, kill_term)
+        except Exception:
+            pass
+        try:
+            from src.routing import get_circuit_breaker
+
+            get_circuit_breaker().record_safety_evaluation(missed_safety=False)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(
+                self._run_enrichment(), timeout=settings.enrich_timeout_s
+            )
+            self.ctx.enrichment_done = True
+        except asyncio.TimeoutError:
+            self.ctx.enrichment_partial = True
+            self.ctx.enrichment_done = True
+        except Exception:
+            self.ctx.enrichment_partial = True
+            self.ctx.enrichment_done = True
+        await self._move_to_closing()
 
     # ── Supervised safety (item 6) ─────────────────────────────────────────
     async def _supervised_safety_hit(self, kill_term: str, text: str) -> None:

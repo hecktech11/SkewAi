@@ -236,14 +236,22 @@ def measure_collisions(
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    """True cosine similarity. Raises on dim mismatch (fail loudly, not 0-tie)."""
+    """True cosine similarity. Raises on dim mismatch or non-finite values."""
     if not a or not b:
         return 0.0
     if len(a) != len(b):
         raise ValueError(f"embedding dim mismatch: {len(a)} != {len(b)}")
-    dot = float(sum(x * y for x, y in zip(a, b)))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
+    fa = [float(x) for x in a]
+    fb = [float(x) for x in b]
+    if any(not math.isfinite(x) for x in fa) or any(not math.isfinite(x) for x in fb):
+        raise ValueError("non-finite embedding value")
+    if fa == fb:
+        if any(x != 0.0 for x in fa):
+            return 1.0
+        return 0.0
+    dot = float(sum(x * y for x, y in zip(fa, fb)))
+    na = math.sqrt(sum(x * x for x in fa))
+    nb = math.sqrt(sum(x * x for x in fb))
     if na == 0.0 or nb == 0.0:
         return 0.0
     return max(-1.0, min(1.0, dot / (na * nb)))
