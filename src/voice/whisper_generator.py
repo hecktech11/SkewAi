@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from xml.sax.saxutils import escape
 
 from src.frontline.intake import IntakeSlots
 from src.triage.triage_agent import TriageResult
@@ -30,7 +31,10 @@ def generate_supervisor_whisper(
         f"Customer confirmed details. Connecting you now."
     ).strip()
 
-    whisper_ssml = f"<speak><prosody rate='115%'>{whisper_text}</prosody></speak>"
+    whisper_ssml = (
+        "<speak><prosody rate='115%'>"
+        f"{escape(whisper_text)}</prosody></speak>"
+    )
 
     year_val = int(slots.entity_1) if str(slots.entity_1).isdigit() else 0
 

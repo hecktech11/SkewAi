@@ -29,6 +29,10 @@ from src.config import REPO_ROOT
 from src.data.timeutil import utc_now
 from src.data.warehouse import ops_con
 from src.ids import new_ulid
+from src.ml_runtime.embedding_space import (
+    ArtifactIntegrityError,
+    EmbeddingUnavailableError,
+)
 from src.ml_runtime.onnx_embedder import (
     OnnxSemanticEmbedder,
     ToySemanticEmbedder,
@@ -117,10 +121,18 @@ def slm_artifact_dir() -> Path:
 
 
 def get_slm_embedder():
-    """Retrieve the process ONNX MiniLM embedder (or toy embedder in test mode)."""
+    """Retrieve the process ONNX MiniLM embedder (or toy embedder in test mode).
+
+    A missing or invalid artifact returns None. The failure is not cached,
+    and category classification falls back to rules instead of raising.
+    """
     if os.getenv("FRONTLINE_EMBEDDING_TOY", "").strip() in {"1", "true", "yes"}:
         return ToySemanticEmbedder()
-    return get_process_onnx_embedder(slm_artifact_dir())
+    try:
+        return get_process_onnx_embedder(slm_artifact_dir())
+    except (ArtifactIntegrityError, EmbeddingUnavailableError, OSError) as exc:
+        logger.warning("SLM embedder unavailable: %s", exc)
+        return None
 
 
 # ── Pack Category Cache ──────────────────────────────────────────────────────
@@ -154,6 +166,14 @@ def get_pack_category_vectors(pack) -> CategoryCandidateVectors:
 
     embedder = get_slm_embedder()
     phrases_by_cat: dict[str, list[tuple[str, np.ndarray]]] = {}
+    if embedder is None:
+        # Do not cache an empty result. A later artifact load must be able
+        # to embed these phrases.
+        return CategoryCandidateVectors(
+            pack_id=pack_id,
+            categories=categories,
+            phrases_by_cat={cat: [] for cat in categories},
+        )
 
     for cat in categories:
         phrases = [cat.lower()]
@@ -174,7 +194,7 @@ def get_pack_category_vectors(pack) -> CategoryCandidateVectors:
                     arr = arr / norm
                 embedded_list.append((phrase, arr))
             except Exception as e:
-                logger.debug("Failed to embed phrase %r: %e", phrase, e)
+                logger.debug("Failed to embed phrase %r: %s", phrase, e)
 
         phrases_by_cat[cat] = embedded_list
 
@@ -250,8 +270,16 @@ def predict_category_zero_shot(
             latency_ms=(time.monotonic() - t0) * 1000.0,
         )
 
+    embedder = get_slm_embedder()
+    if embedder is None:
+        return SLMCategoryResult(
+            category=None,
+            score=0.0,
+            confidence_floor=conf_floor,
+            latency_ms=(time.monotonic() - t0) * 1000.0,
+        )
+
     try:
-        embedder = get_slm_embedder()
         u_vec_obj = embedder.embed(clean_text)
         u_vec = np.array(u_vec_obj.values[:384], dtype=np.float32)
         u_norm = np.linalg.norm(u_vec)

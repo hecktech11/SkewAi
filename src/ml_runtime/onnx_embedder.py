@@ -73,8 +73,12 @@ def mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.n
         raise EmbeddingUnavailableError(f"attention_mask rank {mask.ndim} != 2")
     weights = mask[:, :, None]
     summed = (last_hidden_state.astype(np.float64) * weights).sum(axis=1)
-    counts = np.clip(mask.sum(axis=1, keepdims=True), 1e-9, None)
-    return (summed / counts).astype(np.float32)
+    counts = mask.sum(axis=1, keepdims=True)
+    # An all-pad row has no tokens. Dividing by a tiny epsilon explodes it.
+    safe = np.where(counts > 0.0, counts, 1.0)
+    pooled = summed / safe
+    pooled = np.where(counts > 0.0, pooled, 0.0)
+    return pooled.astype(np.float32)
 
 
 def l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:

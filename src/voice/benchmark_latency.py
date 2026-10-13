@@ -123,9 +123,9 @@ class TelephonyLatencyBenchmarker:
         self.mode = mode
 
     def _lognormal_jitter(self, median_ms: float, p95_ms: float) -> float:
-        """Sample heavy-tailed network and vendor API latency using log-normal distribution.
+        """Draw a log-normal delay. Stage samples must not add this value.
 
-        Captures real-world packet drops, TCP retransmissions, and cloud chunk queue variance.
+        Reported latency is the measured elapsed time of the stage.
         """
         if median_ms <= 0.0:
             return 0.0
@@ -160,8 +160,7 @@ class TelephonyLatencyBenchmarker:
                 energy = sum(abs(s) for s in samples) / n_samples
                 is_speech = energy > 500
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_jitter = self._lognormal_jitter(median_ms=7.0, p95_ms=13.0)
-            result.samples_ms.append(elapsed_ms + sim_jitter)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -177,8 +176,7 @@ class TelephonyLatencyBenchmarker:
             # 2. Phonetic parsing & entity normalization
             _ = parse_spoken_alphanumerics("one H G C R two F eight three")
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            streaming_latency = self._lognormal_jitter(median_ms=58.0, p95_ms=82.0)
-            result.samples_ms.append(elapsed_ms + streaming_latency)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -194,8 +192,7 @@ class TelephonyLatencyBenchmarker:
             has_intent = any(w in text.lower() for w in ("brakes", "engine", "airbag", "steering"))
             _ = is_complete and has_intent
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_eval = self._lognormal_jitter(median_ms=16.0, p95_ms=25.0)
-            result.samples_ms.append(elapsed_ms + sim_eval)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -211,8 +208,7 @@ class TelephonyLatencyBenchmarker:
             first_token = next_q.split()[0]
             _ = first_token
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_ttft = self._lognormal_jitter(median_ms=115.0, p95_ms=148.0)
-            result.samples_ms.append(elapsed_ms + sim_ttft)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -226,8 +222,7 @@ class TelephonyLatencyBenchmarker:
             meta = self.speech_stack.synthesize_meta("Thanks for calling support. What's going on?")
             _ = meta
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_ttfb = self._lognormal_jitter(median_ms=50.0, p95_ms=70.0)
-            result.samples_ms.append(elapsed_ms + sim_ttfb)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -252,8 +247,7 @@ class TelephonyLatencyBenchmarker:
             # 4. Transmit over WebSocket
             await mock_ws.send_text(json.dumps(payload))
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_io = self._lognormal_jitter(median_ms=14.0, p95_ms=23.0)
-            result.samples_ms.append(elapsed_ms + sim_io)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -283,8 +277,7 @@ class TelephonyLatencyBenchmarker:
             # 3. Hard barge-in truncation in ledger
             _ = reconciler.handle_barge_in()
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            sim_clear = self._lognormal_jitter(median_ms=28.0, p95_ms=45.0)
-            result.samples_ms.append(elapsed_ms + sim_clear)
+            result.samples_ms.append(elapsed_ms)
 
         return result
 
@@ -320,7 +313,7 @@ class TelephonyLatencyBenchmarker:
             "target": "sub-600ms",
             "trials": self.trials,
             "mode": self.mode,
-            "telemetry_source": "live_carrier_telemetry" if self.mode == "live_vendor" else "offline_lognormal_model",
+            "telemetry_source": "measured_stage_time",
             "overall_status": "PASS" if all_passed else "FAIL",
             "stages": {s.stage_name: s.to_dict() for s in all_stages},
         }
@@ -335,7 +328,7 @@ def format_benchmark_table(report: dict[str, Any]) -> str:
     lines.append("             TELEPHONY LATENCY BENCHMARK — SUB-600ms TTFA BUDGET")
     lines.append("=" * w)
     mode = report.get("mode", "offline_simulated")
-    source = report.get("telemetry_source", "offline_lognormal_model")
+    source = report.get("telemetry_source", "measured_stage_time")
     lines.append(f"Mode: {mode} [{source}] | Trials: {report.get('trials')} | Overall Status: [{report.get('overall_status')}]")
     lines.append("-" * w)
     lines.append(f"{'Pipeline Stage':<30} {'Target':<10} {'p50':<8} {'p90':<8} {'p95':<8} {'p99':<8} {'Max':<8} {'Status'}")

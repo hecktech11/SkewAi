@@ -97,12 +97,12 @@ def evaluate_pairs(
             a = embedder.embed(str(row.get("query") or ""))
             b = embedder.embed(str(row.get("candidate") or ""))
             score = compare_embeddings(a, b)
-            label = str(row.get("label") or "").lower()
-            y = 1 if label in {"positive", "pos", "1", "true"} else 0
-            if label in {"positive", "pos", "1", "true"}:
+            y = _row_polarity(row)
+            if y is None:
+                continue
+            if y == 1:
                 pos_scores.append(score)
-            elif label in {"negative", "neg", "0", "false", "hard_negative"}:
-                y = 0
+            else:
                 neg_scores.append(score)
             labeled.append((score, y))
             if a.native_dimension != a.output_dimension:
@@ -166,12 +166,27 @@ def bootstrap_mean_ci(
     return round(lo, 4), round(hi, 4)
 
 
-def _is_positive_row(row: dict[str, Any]) -> bool:
-    lab = str(row.get("label") or "").lower()
+def _row_polarity(row: dict[str, Any]) -> int | None:
+    """1 positive, 0 negative, None when the row has no usable label.
+
+    ``novel_false`` is a negative class. Unlabeled rows are excluded from
+    scored metrics so they cannot become false negatives.
+    """
     cls = str(row.get("eval_class") or "")
-    if cls in {"paraphrase_positive", "novel_false", "safety_true_positive"}:
-        return True
-    return lab in {"positive", "pos", "1", "true"}
+    lab = str(row.get("label") or "").lower()
+    if cls == "novel_false":
+        return 0
+    if cls in {"paraphrase_positive", "safety_true_positive"}:
+        return 1
+    if lab in {"positive", "pos", "1", "true"}:
+        return 1
+    if lab in {"negative", "neg", "0", "false", "hard_negative"}:
+        return 0
+    return None
+
+
+def _is_positive_row(row: dict[str, Any]) -> bool:
+    return _row_polarity(row) == 1
 
 
 def per_class_scorecard(embedder: Any, pairs: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -183,7 +198,9 @@ def per_class_scorecard(embedder: Any, pairs: Sequence[dict[str, Any]]) -> dict[
         a = embedder.embed(str(row.get("query") or ""))
         b = embedder.embed(str(row.get("candidate") or ""))
         score = compare_embeddings(a, b)
-        y = 1 if _is_positive_row(row) else 0
+        y = _row_polarity(row)
+        if y is None:
+            continue
         by[cls].append((score, y))
     out: dict[str, Any] = {}
     for cls, scored in sorted(by.items()):

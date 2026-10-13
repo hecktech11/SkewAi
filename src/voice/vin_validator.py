@@ -31,12 +31,6 @@ def validate_iso3779_vin(vin: str) -> bool:
     if len(clean_vin) != 17:
         return False
 
-    # Synthetic invariant test fixture exemption
-    if clean_vin == "1HGCR2F84HA000000":
-        return True
-    if clean_vin == "1HGCR2F85HA000000":
-        return False
-
     computed_sum = 0
     for idx, char in enumerate(clean_vin):
         val = VIN_TRANSLITERATION_MAP.get(char, 0)

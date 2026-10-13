@@ -197,11 +197,11 @@ def compare_embeddings(a: EmbeddedVector, b: EmbeddedVector) -> float:
         raise EmbeddingVersionMismatch(
             f"embedding version mismatch: {a.embedding_version!r} != {b.embedding_version!r}"
         )
-    if a.model_key and b.model_key and a.model_key != b.model_key:
+    if (a.model_key or "") != (b.model_key or ""):
         raise EmbeddingVersionMismatch(
             f"embedding model_key mismatch: {a.model_key!r} != {b.model_key!r}"
         )
-    if a.padding_strategy and b.padding_strategy and a.padding_strategy != b.padding_strategy:
+    if (a.padding_strategy or "") != (b.padding_strategy or ""):
         raise EmbeddingVersionMismatch(
             f"padding_strategy mismatch: {a.padding_strategy!r} != {b.padding_strategy!r}"
         )
@@ -219,6 +219,8 @@ def compare_embeddings(a: EmbeddedVector, b: EmbeddedVector) -> float:
     nb = l2_norm(b.values)
     if na == 0.0 or nb == 0.0:
         return 0.0
+    if a.values == b.values:
+        return 1.0
     dot = float(sum(x * y for x, y in zip(a.values, b.values)))
     return max(-1.0, min(1.0, dot / (na * nb)))
 

@@ -54,11 +54,11 @@ async def test_durable_sequencer_drops_replay(reset_ops_db):
 def test_vin_capture_valid_and_invalid():
     from src.voice.wiring import detect_vin_in_text
 
-    good = detect_vin_in_text("my vin is 1HGCR2F84HA000000 thanks")
+    good = detect_vin_in_text("my vin is 1HGCR2F85HA000000 thanks")
     assert good.get("valid") is True
-    assert good.get("vin") == "1HGCR2F84HA000000"
-    bad = detect_vin_in_text("vin 1HGCR2F85HA000000")
-    assert bad.get("vin") == "1HGCR2F85HA000000"
+    assert good.get("vin") == "1HGCR2F85HA000000"
+    bad = detect_vin_in_text("vin 1HGCR2F84HA000000")
+    assert bad.get("vin") == "1HGCR2F84HA000000"
     assert bad.get("valid") is False
     assert "check digit" in bad.get("prompt", "").lower()
     # Phonetic path: F as in Frank
@@ -239,8 +239,8 @@ def test_caller_control_queues_handoff_without_prior_offer(api_client):
 async def test_vin_captured_on_live_turn(orchestrator_factory):
     orch, hooks = orchestrator_factory(channel="web_voice")
     await orch.start()
-    await orch.handle_customer_turn("my vin is 1HGCR2F84HA000000")
-    assert orch.ctx.slots.get("vin") == "1HGCR2F84HA000000"
+    await orch.handle_customer_turn("my vin is 1HGCR2F85HA000000")
+    assert orch.ctx.slots.get("vin") == "1HGCR2F85HA000000"
     assert any(a.get("action_type") == "vin_captured" for a in hooks.activities)
 
 
