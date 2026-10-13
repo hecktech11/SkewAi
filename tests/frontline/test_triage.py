@@ -93,16 +93,78 @@ async def test_triage_service_brakes_yields_medium(pack):
 
 
 async def test_triage_electrical_yields_medium(pack):
-    """ENGINE is a Medium-severity drivetrain component.
-
-    The pack's rules list `category in [ELECTRICAL, ENGINE, POWER TRAIN]` as Medium,
-    but the canonical NHTSA category is 'ELECTRICAL SYSTEM' (not 'ELECTRICAL'),
-    so that rule never matches in practice. ENGINE does match.
-    """
+    """ENGINE is a Medium-severity drivetrain component."""
     ctx = _ctx(pack, category="ENGINE", description="Engine misfires at idle")
     res = await TriageAgent(ctx).run()
     assert res["severity"] == "Medium"
     assert res["priority"] == 2
+
+
+async def test_triage_electrical_system_yields_medium(pack):
+    """The canonical category is 'ELECTRICAL SYSTEM', and the rule must match it.
+
+    The pack listed `category in [ELECTRICAL, ENGINE, POWER TRAIN]`, but
+    `_eval_condition` compares by exact uppercase membership, so the
+    `ELECTRICAL` arm could never fire and ELECTRICAL SYSTEM fell through to
+    the default Low rule — the largest category in the corpus (249,833 NHTSA
+    complaints, and every live electrical call).
+
+    Asserted against `_apply_rule_severity` rather than the full agent because
+    a severity model artifact is configured for this pack and masks the defect
+    end-to-end. The rules are the documented fallback whenever that model
+    fails (SEVERITY_FALLBACK_POLICY), so this is the layer that must be right.
+    """
+    from src.agents.triage import _apply_rule_severity
+
+    ctx = _ctx(
+        pack, category="ELECTRICAL SYSTEM", description="Dash warning lights flicker"
+    )
+    severity, source, reason = _apply_rule_severity(ctx)
+    assert (severity, source) == ("Medium", "rules")
+    assert reason != "Default severity"
+
+
+async def test_triage_fuel_propulsion_system_is_safety_critical(pack):
+    """FUEL/PROPULSION SYSTEM is NHTSA's modern name for the fuel system.
+
+    It carries 62,750 corpus rows and covers EV propulsion. FUEL SYSTEM was
+    already listed as safety-critical; the newer spelling must be too, or the
+    same failure scores differently depending on which name the source used.
+    """
+    from src.agents.triage import _apply_rule_severity
+
+    ctx = _ctx(
+        pack,
+        category="FUEL/PROPULSION SYSTEM",
+        description="Fuel smell under the hood",
+    )
+    severity, source, reason = _apply_rule_severity(ctx)
+    assert (severity, source) == ("Medium", "rules")
+    assert reason == "Safety-critical system"
+
+
+async def test_every_severity_rule_category_is_a_real_gazetteer_value(pack):
+    """No severity rule may name a category the gazetteer does not declare.
+
+    A rule arm that names a non-existent value is dead code that silently
+    downgrades severity — exactly the ELECTRICAL bug above. This guards the
+    whole rule set against the next occurrence.
+    """
+    import re
+
+    from src.domains.nhtsa_components import category_values
+
+    vocabulary = category_values()
+    for rule in pack.manifest.severity.rules:
+        m = re.search(r"category in \[(.*)\]", rule.when)
+        if not m:
+            continue
+        named = [c.strip().strip("'\"") for c in m.group(1).split(",")]
+        unknown = [c for c in named if c and c.upper() not in vocabulary]
+        assert unknown == [], (
+            f"severity rule {rule.when!r} names categories absent from "
+            f"categories.csv: {unknown}"
+        )
 
 
 async def test_triage_default_low(pack):

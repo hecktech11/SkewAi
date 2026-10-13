@@ -355,10 +355,14 @@ def test_ingest_mapped_csv_writes_only_trusted_rows(tmp_path, monkeypatch, reset
     csv_path = tmp_path / "mix.csv"
     now = utc_now().strftime("%Y%m%d")
     csv_path.write_text(
-        "CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,CDESC,NUM_CYLS,STATE\n"
-        f"KEEP1,{now},{now},2019,HONDA,CR-V,grinding noise when braking,4,CA\n"
-        "STALE1,20200101,20200101,2018,FORD,F150,old complaint text here,8,TX\n"
-        f"KEEP1,{now},{now},2019,HONDA,CR-V,grinding noise when braking,4,CA\n",
+        "RECORD_KEY,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+        "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        f"KEEP1,1,{now},{now},2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,"
+        "grinding noise when braking,4,CA\n"
+        "STALE1,2,20200101,20200101,2018,FORD,F150,ENGINE,ENGINE:BLOCK,"
+        "old complaint text here,8,TX\n"
+        f"KEEP1,3,{now},{now},2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,"
+        "grinding noise when braking,4,CA\n",
         encoding="utf-8",
     )
     first = ingest_mapped_csv("automotive_nhtsa", csv_path, mapping_path=mapping)

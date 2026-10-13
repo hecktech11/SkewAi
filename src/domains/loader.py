@@ -32,6 +32,23 @@ from src.domains.schema import PackManifest, SlotSpec
 
 # ── Loaded pack ──────────────────────────────────────────────────────────────
 
+#: Column headers that mark a gazetteer column as holding aliases.
+_ALIAS_HEADERS = frozenset({"alias", "aliases"})
+
+
+def _alias_column_index(header: list[str] | None) -> int | None:
+    """Index of the alias column in a gazetteer CSV, or None if it has none.
+
+    Opt-in by header name so that a `frequency` (or any other) column is never
+    mistaken for an alias. See `Gazetteer.from_csv` for why that matters.
+    """
+    if not header:
+        return None
+    for i, name in enumerate(header):
+        if i > 0 and str(name).strip().lower() in _ALIAS_HEADERS:
+            return i
+    return None
+
 
 @dataclass(frozen=True)
 class Gazetteer:
@@ -53,8 +70,15 @@ class Gazetteer:
         values: list[str] = []
         # CSV format: header row, then one value per row.
         # Column 1 = canonical value (required).
-        # Column 2 (optional) = alias. Multiple rows may share a canonical value
-        # with different aliases (e.g. "JPMORGAN CHASE & CO.,Chase").
+        # Column 2 (optional) = an alias ONLY when the header names it `alias`
+        # (e.g. finance_cfpb "value,alias": "JPMORGAN CHASE & CO.,Chase").
+        # The other column-2 in this repo is `frequency`, a row count written by
+        # src.domains.builder.recompile_gazetteers — treating that as an alias
+        # made every count a lookup key (lookup("1610") -> "AIR BAGS") and, via
+        # intake's gazetteer extraction, let a number in a caller's utterance
+        # select a vehicle system. An unrecognised header fails safe (ignored):
+        # a missed alias degrades matching, a bogus one corrupts the vocabulary.
+        # Multiple rows may share a canonical value with different aliases.
         # The gazetteer is frequency-ranked from the top; aliases inherit the
         # rank of their canonical value's first occurrence.
         canonical: dict[str, str] = {}
@@ -63,6 +87,7 @@ class Gazetteer:
         with path.open(newline="", encoding="utf-8") as f:
             reader = csv.reader(f)
             header = next(reader, None)
+            alias_col = _alias_column_index(header)
             for row in reader:
                 if not row:
                     continue
@@ -73,9 +98,9 @@ class Gazetteer:
                     values.append(value)
                     seen_canonical.add(value)
                 canonical[value.lower()] = value
-                # Optional alias column
-                if len(row) >= 2 and row[1].strip():
-                    alias = row[1].strip()
+                # Optional alias column, only when the header declared one.
+                if alias_col is not None and len(row) > alias_col and row[alias_col].strip():
+                    alias = row[alias_col].strip()
                     aliases[alias.lower()] = value
         value_set = frozenset(canonical.keys()) | frozenset(aliases.keys())
         # Merge canonical + aliases into one lookup map.

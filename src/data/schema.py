@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS investigations (
     case_count         INTEGER NOT NULL DEFAULT 0,
     assignee           VARCHAR,
     sla_due_at         TIMESTAMP,
+    slice_category     VARCHAR,                    -- component the scan opened on
+    slice_entity_2     VARCHAR,                    -- make
+    slice_entity_3     VARCHAR,                    -- model; blank when the series is make-level
     schema_version     INTEGER NOT NULL DEFAULT 1
 );
 
@@ -161,8 +164,26 @@ CREATE TABLE IF NOT EXISTS recorded_fixes (
     entity_3           VARCHAR,
     category           VARCHAR,
     fixed_at           TIMESTAMP NOT NULL,
-    note               TEXT
+    note               TEXT,
+    control_entity_2   VARCHAR,                    -- sibling make the fix should not move
+    control_entity_3   VARCHAR                     -- sibling model the fix should not move
 );
+
+CREATE TABLE IF NOT EXISTS fix_measurements (
+    measurement_id     VARCHAR PRIMARY KEY,
+    fix_id             VARCHAR NOT NULL,
+    measured_at        TIMESTAMP NOT NULL,
+    status             VARCHAR NOT NULL,           -- waiting | improved | not improved
+    before_rate        DOUBLE,
+    after_rate         DOUBLE,
+    before_count       INTEGER,
+    after_count        INTEGER,
+    diff_in_diff       DOUBLE,
+    event_weeks_after  INTEGER,
+    window_days        INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_fix_measurements_fix ON fix_measurements(fix_id, measured_at);
 
 CREATE INDEX IF NOT EXISTS idx_investigations_status ON investigations(status, opened_at);
 CREATE INDEX IF NOT EXISTS idx_investigations_cluster ON investigations(cluster_id, pack_id);
@@ -621,8 +642,9 @@ CREATE TABLE IF NOT EXISTS records (
     source             VARCHAR,                    -- NHTSA | CFPB | internal
     embedding          FLOAT[],                    -- hash-era bag-of-hash vector (blake2b-512-v1); not semantic
     entity_key         VARCHAR,                    -- canonical cross-source join key (declared in mapping.yaml)
-    provenance         VARCHAR NOT NULL DEFAULT 'observed'
+    provenance         VARCHAR NOT NULL DEFAULT 'observed',
     -- observed | fixture | computed | inferred | legacy
+    event_count        INTEGER NOT NULL DEFAULT 1  -- telematics: events rolled into this row
 );
 
 CREATE INDEX IF NOT EXISTS idx_records_received ON records(received_at);
@@ -672,7 +694,8 @@ CREATE TABLE IF NOT EXISTS weekly_anomalies (
     pack_id             VARCHAR NOT NULL,
     iso_week            VARCHAR NOT NULL,           -- e.g. '2026-W22'
     category            VARCHAR,
-    entity_2            VARCHAR,
+    entity_2            VARCHAR,                    -- make (always). Model lives on entity_3.
+    entity_3            VARCHAR DEFAULT '',         -- model when scored at model grain; '' otherwise
     record_count       INTEGER NOT NULL,
     baseline_mean       DOUBLE,
     baseline_std       DOUBLE,
@@ -682,7 +705,8 @@ CREATE TABLE IF NOT EXISTS weekly_anomalies (
     p_bh                DOUBLE,                     -- Benjamini-Hochberg adjusted p (item 10)
     baseline_weeks      INTEGER,                    -- leave-one-out history depth
     method              VARCHAR,                    -- quasi-poisson | zero-baseline | low-history-heuristic | insufficient-history
-    PRIMARY KEY (pack_id, iso_week, category, entity_2)
+    censored            BOOLEAN DEFAULT FALSE,      -- held back for reporting lag; never a page
+    PRIMARY KEY (pack_id, iso_week, category, entity_2, entity_3)
 );
 
 CREATE INDEX IF NOT EXISTS idx_weekly_anom_pack_week ON weekly_anomalies(pack_id, iso_week);

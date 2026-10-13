@@ -21,6 +21,54 @@ def _as_dt(val: Any) -> datetime | None:
         return None
 
 
+def _ensure_fix_columns(con) -> None:
+    """Older ops files created recorded_fixes before the control slice existed."""
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recorded_fixes (
+            fix_id             VARCHAR PRIMARY KEY,
+            pack_id            VARCHAR NOT NULL,
+            investigation_id   VARCHAR,
+            entity_2           VARCHAR,
+            entity_3           VARCHAR,
+            category           VARCHAR,
+            fixed_at           TIMESTAMP NOT NULL,
+            note               TEXT,
+            control_entity_2   VARCHAR,
+            control_entity_3   VARCHAR
+        )
+        """
+    )
+    for ddl in (
+        "ALTER TABLE recorded_fixes ADD COLUMN control_entity_2 VARCHAR",
+        "ALTER TABLE recorded_fixes ADD COLUMN control_entity_3 VARCHAR",
+    ):
+        try:
+            con.execute(ddl)
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fix_measurements (
+            measurement_id     VARCHAR PRIMARY KEY,
+            fix_id             VARCHAR NOT NULL,
+            measured_at        TIMESTAMP NOT NULL,
+            status             VARCHAR NOT NULL,
+            before_rate        DOUBLE,
+            after_rate         DOUBLE,
+            before_count       INTEGER,
+            after_count        INTEGER,
+            diff_in_diff       DOUBLE,
+            event_weeks_after  INTEGER,
+            window_days        INTEGER
+        )
+        """
+    )
+
+
 def record_fix(
     *,
     pack_id: str,
@@ -30,30 +78,20 @@ def record_fix(
     entity_3: str | None = None,
     investigation_id: str | None = None,
     note: str | None = None,
+    control_entity_2: str | None = None,
+    control_entity_3: str | None = None,
 ) -> dict[str, Any]:
     """Persist a fix on an affected slice. Returns the stored row."""
     fid = "fix_" + new_ulid()
     ts = to_naive_utc(fixed_at)
     with ops_con() as con:
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS recorded_fixes (
-                fix_id             VARCHAR PRIMARY KEY,
-                pack_id            VARCHAR NOT NULL,
-                investigation_id   VARCHAR,
-                entity_2           VARCHAR,
-                entity_3           VARCHAR,
-                category           VARCHAR,
-                fixed_at           TIMESTAMP NOT NULL,
-                note               TEXT
-            )
-            """
-        )
+        _ensure_fix_columns(con)
         con.execute(
             """
             INSERT INTO recorded_fixes
-            (fix_id, pack_id, investigation_id, entity_2, entity_3, category, fixed_at, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (fix_id, pack_id, investigation_id, entity_2, entity_3, category,
+             fixed_at, note, control_entity_2, control_entity_3)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 fid,
@@ -64,6 +102,8 @@ def record_fix(
                 category,
                 ts,
                 note,
+                control_entity_2,
+                control_entity_3,
             ],
         )
     return {
@@ -75,6 +115,8 @@ def record_fix(
         "category": category,
         "fixed_at": to_iso_z(ts),
         "note": note,
+        "control_entity_2": control_entity_2,
+        "control_entity_3": control_entity_3,
     }
 
 
@@ -252,6 +294,7 @@ def is_reopen(
                 """
                 SELECT received_at FROM records
                 WHERE category = ? AND entity_key = ? AND received_at > ?
+                  AND (provenance IS NULL OR provenance NOT IN ('inferred', 'fixture'))
                 """,
                 [category, entity_key, pivot],
             ).fetchall()
@@ -269,4 +312,290 @@ def is_reopen(
     }
 
 
-__all__ = ["record_fix", "measure_effectiveness", "is_reopen", "reopen_window_days"]
+# A fix stays waiting until this many distinct event-weeks have been
+# observed after fixed_at. The rate window is the same length.
+MIN_EVENT_WEEKS = 8
+FIX_WINDOW_DAYS = MIN_EVENT_WEEKS * 7
+
+
+def _iso_week(ts: datetime) -> str:
+    year, week, _ = ts.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _event_time(row: dict[str, Any]) -> datetime | None:
+    return _as_dt(row.get("occurred_at")) or _as_dt(row.get("received_at"))
+
+
+def _slice_rows(pack_id: str) -> list[dict[str, Any]]:
+    with domain_con(pack_id, read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT occurred_at, received_at, category, entity_2, entity_3, entity_key
+            FROM records
+            WHERE provenance IS NULL OR provenance NOT IN ('inferred', 'fixture')
+            """
+        ).fetchall()
+    return [
+        {
+            "occurred_at": r[0],
+            "received_at": r[1],
+            "category": r[2],
+            "entity_2": r[3],
+            "entity_3": r[4],
+            "entity_key": r[5],
+        }
+        for r in rows
+    ]
+
+
+def evaluate_fix(
+    *,
+    pack_id: str,
+    fixed_at: datetime,
+    category: str | None = None,
+    entity_2: str | None = None,
+    entity_3: str | None = None,
+    control_entity_2: str | None = None,
+    control_entity_3: str | None = None,
+    records: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Before/after rates once eight event-weeks exist after the fix.
+
+    Fewer than eight distinct event-weeks after ``fixed_at`` stays
+    ``waiting``. Eight or more reports ``improved`` or ``not improved``.
+    The control slice is a sibling make, or a sibling model on the same
+    make. Fixture and inferred rows are not evidence.
+    """
+    pivot = to_naive_utc(fixed_at)
+    window = timedelta(days=FIX_WINDOW_DAYS)
+    before_start = pivot - window
+    after_end = pivot + window
+    try:
+        rows = records if records is not None else _slice_rows(pack_id)
+    except Exception:
+        rows = []
+
+    def _treated(row: dict[str, Any]) -> bool:
+        if category and str(row.get("category") or "") != category:
+            return False
+        if entity_2 and str(row.get("entity_2") or "") != entity_2:
+            return False
+        if entity_3 and str(row.get("entity_3") or "") != entity_3:
+            return False
+        return True
+
+    def _control(row: dict[str, Any]) -> bool:
+        if category and str(row.get("category") or "") != category:
+            return False
+        if control_entity_2:
+            return str(row.get("entity_2") or "") == control_entity_2
+        if control_entity_3:
+            if entity_2 and str(row.get("entity_2") or "") != entity_2:
+                return False
+            return str(row.get("entity_3") or "") == control_entity_3
+        return False
+
+    before_n = after_n = 0
+    ctrl_before_n = ctrl_after_n = 0
+    weeks: set[str] = set()
+    for row in rows:
+        ts = _event_time(row)
+        if ts is None:
+            continue
+        if _treated(row):
+            if ts > pivot:
+                weeks.add(_iso_week(ts))
+            if before_start <= ts < pivot:
+                before_n += 1
+            elif pivot < ts <= after_end:
+                after_n += 1
+        if (control_entity_2 or control_entity_3) and _control(row):
+            if before_start <= ts < pivot:
+                ctrl_before_n += 1
+            elif pivot < ts <= after_end:
+                ctrl_after_n += 1
+
+    days = float(FIX_WINDOW_DAYS)
+    before_rate = before_n / days
+    after_rate = after_n / days
+    did: float | None = None
+    if control_entity_2 or control_entity_3:
+        did = (after_rate - before_rate) - (
+            (ctrl_after_n / days) - (ctrl_before_n / days)
+        )
+    event_weeks = len(weeks)
+    if event_weeks < MIN_EVENT_WEEKS:
+        status = "waiting"
+    elif after_rate < before_rate:
+        status = "improved"
+    else:
+        status = "not improved"
+    return {
+        "pack_id": pack_id,
+        "category": category,
+        "entity_2": entity_2,
+        "entity_3": entity_3,
+        "control_entity_2": control_entity_2,
+        "control_entity_3": control_entity_3,
+        "fixed_at": to_iso_z(pivot),
+        "window_days": FIX_WINDOW_DAYS,
+        "event_weeks_after": event_weeks,
+        "before_count": before_n,
+        "after_count": after_n,
+        "before_rate": before_rate,
+        "after_rate": after_rate,
+        "diff_in_diff": did,
+        "status": status,
+        "improved": status == "improved",
+        "conclusive": status != "waiting",
+        "measured_at": to_iso_z(utc_now()),
+    }
+
+
+def store_measurement(fix_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Append one measurement. Earlier rows stay, so a weekly job keeps history."""
+    mid = "fxm_" + new_ulid()
+    with ops_con() as con:
+        _ensure_fix_columns(con)
+        con.execute(
+            """
+            INSERT INTO fix_measurements (
+                measurement_id, fix_id, measured_at, status,
+                before_rate, after_rate, before_count, after_count,
+                diff_in_diff, event_weeks_after, window_days
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                mid,
+                fix_id,
+                utc_now(),
+                result.get("status") or "waiting",
+                result.get("before_rate"),
+                result.get("after_rate"),
+                result.get("before_count"),
+                result.get("after_count"),
+                result.get("diff_in_diff"),
+                result.get("event_weeks_after"),
+                result.get("window_days"),
+            ],
+        )
+    stored = dict(result)
+    stored["measurement_id"] = mid
+    stored["fix_id"] = fix_id
+    return stored
+
+
+def measure_recorded_fixes(pack_id: str | None = None) -> dict[str, Any]:
+    """Re-measure every recorded fix and store each result."""
+    with ops_con() as con:
+        _ensure_fix_columns(con)
+        try:
+            rows = con.execute(
+                """
+                SELECT fix_id, pack_id, category, entity_2, entity_3, fixed_at,
+                       control_entity_2, control_entity_3
+                FROM recorded_fixes
+                ORDER BY fixed_at
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+    results: list[dict[str, Any]] = []
+    for fix_id, pack, category, e2, e3, fixed_at, ctrl2, ctrl3 in rows:
+        if pack_id and str(pack) != pack_id:
+            continue
+        if fixed_at is None:
+            continue
+        result = evaluate_fix(
+            pack_id=str(pack),
+            fixed_at=fixed_at,
+            category=str(category or "") or None,
+            entity_2=str(e2 or "") or None,
+            entity_3=str(e3 or "") or None,
+            control_entity_2=str(ctrl2 or "") or None,
+            control_entity_3=str(ctrl3 or "") or None,
+        )
+        results.append(store_measurement(str(fix_id), result))
+    return {"ok": True, "measured": len(results), "results": results}
+
+
+def latest_measurement(fix_id: str) -> dict[str, Any] | None:
+    with ops_con(read_only=True) as con:
+        try:
+            row = con.execute(
+                """
+                SELECT measurement_id, status, before_rate, after_rate,
+                       before_count, after_count, diff_in_diff,
+                       event_weeks_after, window_days, measured_at
+                FROM fix_measurements
+                WHERE fix_id = ?
+                ORDER BY measured_at DESC
+                LIMIT 1
+                """,
+                [fix_id],
+            ).fetchone()
+        except Exception:
+            return None
+    if not row:
+        return None
+    measured_at = row[9]
+    return {
+        "measurement_id": row[0],
+        "fix_id": fix_id,
+        "status": row[1],
+        "before_rate": row[2],
+        "after_rate": row[3],
+        "before_count": row[4],
+        "after_count": row[5],
+        "diff_in_diff": row[6],
+        "event_weeks_after": row[7],
+        "window_days": row[8],
+        "measured_at": to_iso_z(measured_at) if isinstance(measured_at, datetime) else measured_at,
+        "improved": row[1] == "improved",
+        "conclusive": row[1] != "waiting",
+    }
+
+
+def entity_keys_before_fix(
+    pack_id: str,
+    *,
+    category: str | None,
+    entity_2: str | None,
+    fixed_at: datetime,
+    limit: int = 20,
+) -> list[str]:
+    """Keys seen on the slice before the fix. Recurrence of one of these is a reopen."""
+    pivot = to_naive_utc(fixed_at)
+    try:
+        with domain_con(pack_id, read_only=True) as con:
+            rows = con.execute(
+                """
+                SELECT DISTINCT entity_key FROM records
+                WHERE entity_key IS NOT NULL AND entity_key <> ''
+                  AND (? IS NULL OR category = ?)
+                  AND (? IS NULL OR entity_2 = ?)
+                  AND received_at < ?
+                  AND (provenance IS NULL OR provenance NOT IN ('inferred', 'fixture'))
+                LIMIT ?
+                """,
+                [category, category, entity_2, entity_2, pivot, int(limit)],
+            ).fetchall()
+    except Exception:
+        return []
+    return [str(r[0]) for r in rows if r and r[0]]
+
+
+__all__ = [
+    "record_fix",
+    "measure_effectiveness",
+    "evaluate_fix",
+    "store_measurement",
+    "measure_recorded_fixes",
+    "latest_measurement",
+    "entity_keys_before_fix",
+    "is_reopen",
+    "reopen_window_days",
+    "MIN_EVENT_WEEKS",
+    "FIX_WINDOW_DAYS",
+]

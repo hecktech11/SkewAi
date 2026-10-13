@@ -1,0 +1,20 @@
+# Mapping: field-return / inspection CSV → canonical records.
+# A partner file of returned parts and inspection notes. Until that file
+# exists, the demo CSV loads as fixture and the anomaly scan ignores it.
+# Executed by scripts/ingest_source.py --source field.
+
+source: field returns CSV
+records:
+  record_id: RETURN_ID
+  received_at: RETURN_DATE
+  occurred_at: INSPECTION_DATE
+  entity_1: IDENTITY
+  entity_2: MAKETXT
+  entity_3: MODELTXT
+  category: COMPONENT
+  subcategory: PART
+  text: TECH_NOTE
+  severity_label: SYMPTOM
+  region: ""
+  source: "FIELD"
+  entity_key: "{IDENTITY}|{MAKETXT}|{MODELTXT}"

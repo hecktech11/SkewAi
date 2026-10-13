@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 from src.data.timeutil import utc_now
-from src.data.warehouse import apply_domain_schema, domain_con
+from src.data.warehouse import _rollback_quietly, apply_domain_schema, domain_con
 from src.ml_runtime.embedding_space import (
     OUTPUT_DIMENSION,
     EmbeddedVector,
@@ -99,7 +99,7 @@ def ensure_record_embeddings(con) -> None:
             "ON record_embeddings(embedding_version, status)"
         )
     except Exception:
-        pass
+        _rollback_quietly(con)
     for ddl in (
         "ALTER TABLE record_embeddings ADD COLUMN model_key VARCHAR",
         "ALTER TABLE record_embeddings ADD COLUMN tokenizer_sha256 VARCHAR",
@@ -112,7 +112,7 @@ def ensure_record_embeddings(con) -> None:
         try:
             con.execute(ddl)
         except Exception:
-            pass
+            _rollback_quietly(con)
 
 
 def ensure_shadow_table(con) -> None:
