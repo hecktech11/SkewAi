@@ -25,6 +25,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -211,7 +212,11 @@ def record_key(row: dict[str, str]) -> str:
     )
 
 
-def _select_winners(line_source: LineSource) -> tuple[dict[str, str], dict[str, Any]]:
+def _select_winners(
+    line_source: LineSource,
+    *,
+    keep: Callable[[dict[str, str]], bool] | None = None,
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Pass 1: pick one line per composite key.
 
     Returns ``(key -> winning CMPLID, tally)``. The winner is the row with
@@ -234,6 +239,7 @@ def _select_winners(line_source: LineSource) -> tuple[dict[str, str], dict[str, 
         "read": 0,
         "skipped_blank_line": 0,
         "skipped_unparseable": 0,
+        "skipped_out_of_bounds": 0,
         "collapsed": 0,
     }
     for line in line_source():
@@ -244,6 +250,9 @@ def _select_winners(line_source: LineSource) -> tuple[dict[str, str], dict[str, 
         row = flat_line_to_mapping_row(line)
         if row is None:
             tally["skipped_unparseable"] += 1
+            continue
+        if keep is not None and not keep(row):
+            tally["skipped_out_of_bounds"] += 1
             continue
         key = row["RECORD_KEY"]
         text = row["CDESC"]
@@ -269,6 +278,7 @@ def write_mapping_csv_from_flat(
     dest: Path,
     *,
     limit: int,
+    keep: Callable[[dict[str, str]], bool] | None = None,
 ) -> dict[str, int]:
     """Convert FLAT_CMPL lines to the mapping CSV; return a conversion report.
 
@@ -289,13 +299,14 @@ def write_mapping_csv_from_flat(
     live corpus).
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    winner, tally = _select_winners(line_source)
+    winner, tally = _select_winners(line_source, keep=keep)
 
     report = {
         "read": tally["read"],
         "written": 0,
         "skipped_blank_line": tally["skipped_blank_line"],
         "skipped_unparseable": tally["skipped_unparseable"],
+        "skipped_out_of_bounds": tally["skipped_out_of_bounds"],
         "collapsed": tally["collapsed"],
         "conflicting_narrative": tally["conflicting_narrative"],
         "unknown_component": 0,
@@ -312,6 +323,8 @@ def write_mapping_csv_from_flat(
                 continue
             row = flat_line_to_mapping_row(line)
             if row is None:
+                continue
+            if keep is not None and not keep(row):
                 continue
             key = row["RECORD_KEY"]
             if winner.get(key) != row["CMPLID"] or key in written_keys:
@@ -410,8 +423,41 @@ def preflight_local_csv(path: Path, *, limit: int, pack_id: str = PACK_ID) -> di
     return {"checked": checked, "written": checked}
 
 
+def bounds_keep(
+    *,
+    makes: list[str] | None,
+    year_min: int | None,
+    year_max: int | None,
+) -> Callable[[dict[str, str]], bool] | None:
+    """Row filter for a bounded make/year load. None keeps every parsed row."""
+    make_set = {m.strip().upper() for m in makes if m.strip()} if makes else set()
+    if not make_set and year_min is None and year_max is None:
+        return None
+
+    def keep(row: dict[str, str]) -> bool:
+        if make_set and (row.get("MAKETXT") or "").strip().upper() not in make_set:
+            return False
+        if year_min is None and year_max is None:
+            return True
+        try:
+            year = int((row.get("MODEL_YR") or "").strip())
+        except ValueError:
+            return False
+        if year_min is not None and year < year_min:
+            return False
+        if year_max is not None and year > year_max:
+            return False
+        return True
+
+    return keep
+
+
 def resolve_complaints_csv(
-    *, csv_arg: str | None, limit: int, work_dir: Path
+    *,
+    csv_arg: str | None,
+    limit: int,
+    work_dir: Path,
+    keep: Callable[[dict[str, str]], bool] | None = None,
 ) -> tuple[Path, str, dict[str, int]]:
     """Return (csv_path, provenance, report).
 
@@ -419,9 +465,9 @@ def resolve_complaints_csv(
     """
     local = csv_arg or os.environ.get("NHTSA_COMPLAINTS_CSV", "").strip()
     if local:
-        p = Path(local).expanduser()
-        if not p.is_absolute():
-            p = (REPO_ROOT / p).resolve()
+        # The jail runs before the first open. preflight_local_csv reads the
+        # file, so checking only inside ingest_mapped_csv would be too late.
+        p = safe_csv_path(local)
         if not p.exists():
             raise FileNotFoundError(f"NHTSA CSV not found: {p}")
         return p, "local", preflight_local_csv(p, limit=limit)
@@ -430,11 +476,31 @@ def resolve_complaints_csv(
     csv_path = work_dir / "nhtsa_complaints_mapped.csv"
     _download_flat_zip(NHTSA_FLAT_URL, zip_path)
     report = write_mapping_csv_from_flat(
-        lambda: _iter_flat_from_zip(zip_path), csv_path, limit=limit
+        lambda: _iter_flat_from_zip(zip_path), csv_path, limit=limit, keep=keep
     )
     if report["written"] == 0:
         raise RuntimeError(f"FLAT_CMPL produced 0 mapped rows (report={report})")
     return csv_path, "nhtsa_flat_download", report
+
+
+@contextmanager
+def authorize_converted_work(work_dir: Path):
+    """Let this process read the CSV the flat-file converter just wrote.
+
+    ``safe_csv_path`` allows the repo and ``FRONTLINE_INGEST_ROOT`` only.
+    The converter's temp directory is outside the repo. The previous root
+    is restored when the ingest call returns.
+    """
+    key = "FRONTLINE_INGEST_ROOT"
+    prior = os.environ.get(key)
+    os.environ[key] = str(work_dir)
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prior
 
 
 def run(
@@ -443,6 +509,9 @@ def run(
     csv_path: str | None = None,
     limit: int = DEFAULT_LIMIT,
     purge_first: bool = False,
+    makes: list[str] | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
 ) -> dict:
     # Fail before the download rather than after it: a stale alias table
     # would send real components to UNKNOWN OR OTHER for the whole load.
@@ -450,7 +519,10 @@ def run(
     work = Path(tempfile.mkdtemp(prefix="skewai-nhtsa-"))
     try:
         src, provenance, convert = resolve_complaints_csv(
-            csv_arg=csv_path, limit=limit, work_dir=work
+            csv_arg=csv_path,
+            limit=limit,
+            work_dir=work,
+            keep=bounds_keep(makes=makes, year_min=year_min, year_max=year_max),
         )
         purged = None
         if purge_first:
@@ -460,12 +532,19 @@ def run(
             from src.domains.purge import purge_source
 
             purged = purge_source(pack_id, "NHTSA")
-        result = ingest_mapped_csv(
-            pack_id,
-            src,
-            limit=limit,
-            allow_untrusted_historical_backfill=True,
-        )
+        def _load():
+            return ingest_mapped_csv(
+                pack_id,
+                src,
+                limit=limit,
+                allow_untrusted_historical_backfill=True,
+            )
+
+        if provenance == "nhtsa_flat_download":
+            with authorize_converted_work(work):
+                result = _load()
+        else:
+            result = _load()
         result["provenance"] = provenance
         result["convert"] = convert
         result["purged"] = purged
@@ -499,6 +578,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pack", default=PACK_ID)
     p.add_argument("--csv", default=None, help="Local headered CSV (skips download)")
     p.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    p.add_argument("--makes", default="", help="Comma-separated MAKETXT values")
+    p.add_argument("--year-min", type=int, default=None)
+    p.add_argument("--year-max", type=int, default=None)
     p.add_argument(
         "--purge-first",
         action="store_true",
@@ -511,6 +593,9 @@ def main(argv: list[str] | None = None) -> int:
         csv_path=args.csv,
         limit=args.limit,
         purge_first=args.purge_first,
+        makes=[m for m in args.makes.split(",") if m.strip()] or None,
+        year_min=args.year_min,
+        year_max=args.year_max,
     )
     print(result)
     return 0 if result.get("ok") else 1

@@ -37,7 +37,25 @@ def main(argv: list[str] | None = None) -> int:
             "so the anomaly scan does not read them as real failures."
         ),
     )
+    parser.add_argument(
+        "--run-anomalies",
+        action="store_true",
+        help="recompute weekly anomalies after the rows are written",
+    )
+    parser.add_argument(
+        "--allow-pilot",
+        action="store_true",
+        help="write a pilot pack under the default data/domains directory",
+    )
     args = parser.parse_args(argv)
+    if not args.allow_pilot:
+        try:
+            from src.domains.csv_load import assert_not_pilot_warehouse
+
+            assert_not_pilot_warehouse(args.pack)
+        except ValueError as e:
+            print(f"ingest_source failed: {e}")
+            return 1
     try:
         report = ingest_source(
             args.pack, args.source, args.csv,
@@ -53,6 +71,15 @@ def main(argv: list[str] | None = None) -> int:
         f"as {report['provenance']} "
         f"into {report['pack_id']} via {report['mapping_path']}"
     )
+    if args.run_anomalies:
+        try:
+            from src.ml_runtime.anomalies import recompute_weekly_anomalies
+
+            scored = recompute_weekly_anomalies(args.pack)
+        except Exception as e:
+            print(f"anomaly recompute failed: {e}")
+            return 1
+        print(f"anomalies scored {len(scored)}")
     return 0
 
 

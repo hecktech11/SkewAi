@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiHeaders } from "../src/apiAuth.js";
 import WeekSpark from "../src/ui/WeekSpark.jsx";
 import { useFocusTrap, useLocalStorage } from "../src/ui/hooks.js";
-import { hashQueryObject, openCases, patchHashQuery } from "../src/ui/opsActions.js";
+import { hashQueryObject, openCases, openIssue, patchHashQuery } from "../src/ui/opsActions.js";
 import { packLabel } from "../src/ui/labels.js";
 import InsightsBoard from "./InsightsBoard.jsx";
 import QualityEconomics from "./QualityEconomics.jsx";
@@ -15,6 +15,9 @@ export default function EarlyWarningBoard() {
   const focusCluster = hashQ.cluster;
   const tab = ["clusters", "investigations", "fixes"].includes(hashQ.view) ? hashQ.view : "clusters";
   const [clusters, setClusters] = useState([]);
+  const [spikes, setSpikes] = useState([]);
+  const [spikeWeek, setSpikeWeek] = useState(null);
+  const [censoredWeeks, setCensoredWeeks] = useState([]);
   const [funnel, setFunnel] = useState(null);
   const [investigations, setInvestigations] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -58,6 +61,9 @@ export default function EarlyWarningBoard() {
       const d = await r.json();
       setClusters(d.live_risk || []);
       setFunnel(d.funnel || null);
+      setSpikes(d.spikes || []);
+      setSpikeWeek(d.spike_week || null);
+      setCensoredWeeks(d.censored_weeks || []);
       loadMetrics();
     } catch (e) {
       setError(String(e));
@@ -322,6 +328,49 @@ export default function EarlyWarningBoard() {
             </div>
           )}
 
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3 style={{ margin: "0 0 8px" }}>
+              This week{spikeWeek ? ` (${spikeWeek})` : ""}
+            </h3>
+            {censoredWeeks.length > 0 && (
+              <p className="faint" style={{ margin: "0 0 8px" }}>
+                Held back: {censoredWeeks.join(", ")}
+              </p>
+            )}
+            {spikes.length === 0 ? (
+              <p className="faint" style={{ margin: 0 }}>No computed spike this week.</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>slice</th>
+                      <th>count</th>
+                      <th>baseline</th>
+                      <th>z-score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {spikes.map((s) => {
+                      const slice = [s.entity_2, s.entity_3, s.category].filter(Boolean).join(" ");
+                      const key = `${s.iso_week}|${slice}`;
+                      const baseline = Number(s.baseline_mean);
+                      const z = Number(s.z_score);
+                      return (
+                        <tr key={key}>
+                          <td>{slice || "—"}</td>
+                          <td className="mono">{s.record_count ?? 0}</td>
+                          <td className="mono">{Number.isFinite(baseline) ? baseline.toFixed(2) : "—"}</td>
+                          <td className="mono">{Number.isFinite(z) ? z.toFixed(2) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {sortedClusters.length > 0 && (
             <div className="risk-card-grid">
               {sortedClusters.slice(0, 4).map((c) => {
@@ -473,11 +522,11 @@ export default function EarlyWarningBoard() {
                     key={inv.investigation_id}
                     style={{ cursor: "pointer" }}
                     tabIndex={0}
-                    onClick={() => openCases({ q: inv.investigation_id })}
+                    onClick={() => openIssue(inv.investigation_id)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openCases({ q: inv.investigation_id });
+                        openIssue(inv.investigation_id);
                       }
                     }}
                   >

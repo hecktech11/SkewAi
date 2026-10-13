@@ -1,0 +1,12 @@
+{
+  "complaints": "complaints.csv",
+  "recalls": "recalls.csv",
+  "known_positive": [
+    "19V060000|2015|HONDA|ACCORD|FUEL SYSTEM",
+    "15V710000|2016|FORD|E-450|ELECTRICAL SYSTEM"
+  ],
+  "require_miss": true,
+  "require_unconfirmed": true,
+  "model_grain": false,
+  "source": "Rows copied from NHTSA FLAT_RCL_POST_2010 and COMPLAINTS_RECEIVED_2015-2019 / 2020-2024. Complaint clock is DATEA. Recall clock is RCDATE. Model years 2015-2024, makes Honda and Ford."
+}

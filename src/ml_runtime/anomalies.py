@@ -67,32 +67,77 @@ def iso_week_label(dt: datetime | None) -> str | None:
     return f"{y}-W{w:02d}"
 
 
+def _parse_dt(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.replace(tzinfo=None) if raw.tzinfo else raw
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def _event_time(record: dict[str, Any]) -> datetime | None:
     """Actual event clock: occurred_at first, ingestion (received_at) fallback."""
     for key in ("occurred_at", "received_at"):
-        raw = record.get(key)
-        if raw is None:
-            continue
-        if isinstance(raw, datetime):
-            return raw.replace(tzinfo=None) if raw.tzinfo else raw
-        try:
-            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            continue
+        when = _parse_dt(record.get(key))
+        if when is not None:
+            return when
     return None
 
 
-def count_weekly_slices(records: Iterable[dict[str, Any]]) -> dict[tuple[str, str, str], int]:
-    """(iso_week, category, entity_2) → count, on the EVENT clock."""
-    out: dict[tuple[str, str, str], int] = defaultdict(int)
+def _clock_time(record: dict[str, Any], clock: str) -> datetime | None:
+    """``event`` keeps the live clock. ``received`` counts only received_at."""
+    if clock == "received":
+        return _parse_dt(record.get("received_at"))
+    return _event_time(record)
+
+
+def count_weekly_slices(
+    records: Iterable[dict[str, Any]],
+    *,
+    clock: str = "event",
+    as_of: Any | None = None,
+    model_grain: bool = False,
+    source: str | None = None,
+) -> dict[tuple, int]:
+    """Weekly counts.
+
+    Default keys are ``(iso_week, category, entity_2)`` on the event clock,
+    which existing callers unpack as a 3-tuple. ``model_grain=True`` adds
+    entity_3 so a model-scoped recall can match its own series. ``source``
+    keeps warranty or telematics off the complaint series. ``clock='received'``
+    and ``as_of`` are the recall proof: a row counts only when NHTSA had
+    already received it.
+    """
+    if clock not in ("event", "received"):
+        raise ValueError("clock must be 'event' or 'received'")
+    as_of_dt = _parse_dt(as_of)
+    out: dict[tuple, int] = defaultdict(int)
     for r in records:
-        # occurred_at is the event clock; received_at only a fallback.
-        week = iso_week_label(_event_time(r))
+        if source is not None and str(r.get("source") or "") != source:
+            continue
+        when = _clock_time(r, clock)
+        if when is None:
+            continue
+        if as_of_dt is not None and when > as_of_dt:
+            continue
+        week = iso_week_label(when)
         if not week:
             continue
         cat = str(r.get("category") or "")
         ent = str(r.get("entity_2") or "")
-        out[(week, cat, ent)] += 1
+        try:
+            weight = int(r.get("event_count") or 1)
+        except (TypeError, ValueError):
+            weight = 1
+        if weight < 1:
+            weight = 1
+        if model_grain:
+            out[(week, cat, ent, str(r.get("entity_3") or ""))] += weight
+        else:
+            out[(week, cat, ent)] += weight
     return dict(out)
 
 
@@ -104,29 +149,42 @@ def _week_monday(label: str) -> datetime | None:
         return None
 
 
-def zero_fill_weeks(
-    counts: dict[tuple[str, str, str], int],
-) -> dict[tuple[str, str, str], int]:
-    """Expand every (category, entity_2) series to its continuous week range.
+def _unpack_count_key(key: tuple) -> tuple[str, str, str, str]:
+    """3-tuples stay make-level (model ''). 4-tuples carry entity_3."""
+    if len(key) >= 4:
+        week, cat, ent, model = key[0], key[1], key[2], key[3]
+    else:
+        week, cat, ent = key[0], key[1], key[2]
+        model = ""
+    return str(week), str(cat), str(ent), str(model or "")
 
-    Missing weeks in between count 0 — a silent week is evidence of quiet,
-    not a gap in the data.
+
+def zero_fill_weeks(counts: dict[tuple, int]) -> dict[tuple, int]:
+    """Expand every series to its continuous week range.
+
+    Missing weeks in between count 0. A silent week is evidence of quiet,
+    not a gap in the data. 3-tuple keys stay 3-tuples; 4-tuple keys stay
+    4-tuples so model grain is not collapsed back to the make.
     """
-    by_group: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for (week, cat, ent) in counts:
-        by_group[(cat, ent)].add(week)
+    grain4 = any(len(k) >= 4 for k in counts)
+    by_group: dict[tuple, set[str]] = defaultdict(set)
+    for key in counts:
+        week, cat, ent, model = _unpack_count_key(key)
+        group = (cat, ent, model) if grain4 else (cat, ent)
+        by_group[group].add(week)
     filled = dict(counts)
-    for (cat, ent), weeks in by_group.items():
-        starts = sorted(
-            (m for w in weeks if (m := _week_monday(w)) is not None)
-        )
+    for group, weeks in by_group.items():
+        starts = sorted(m for w in weeks if (m := _week_monday(w)) is not None)
         if len(starts) < 2:
             continue
         cur, end = starts[0], starts[-1]
         while cur <= end:
             y, w, _ = cur.isocalendar()
             label = f"{y}-W{w:02d}"
-            filled.setdefault((label, cat, ent), 0)
+            if grain4:
+                filled.setdefault((label, group[0], group[1], group[2]), 0)
+            else:
+                filled.setdefault((label, group[0], group[1]), 0)
             cur += timedelta(weeks=1)
     return filled
 
@@ -277,29 +335,42 @@ def score_weekly_slices(
             from src.data.timeutil import utc_now as _now
 
             week = in_flight.get("iso_week") or iso_week_label(_now())
-            key = (str(week), str(in_flight.get("category") or ""),
-                   str(in_flight.get("entity_2") or ""))
+            cat = str(in_flight.get("category") or "")
+            ent = str(in_flight.get("entity_2") or "")
+            grain4 = any(len(k) >= 4 for k in counts)
+            if grain4:
+                key = (str(week), cat, ent, str(in_flight.get("entity_3") or ""))
+            else:
+                key = (str(week), cat, ent)
             counts = dict(counts)
             counts[key] = counts.get(key, 0) + 1
         except Exception:
             pass
     filled = zero_fill_weeks(counts)
-    by_group: dict[tuple[str, str], list[tuple[str, int]]] = defaultdict(list)
-    for (week, cat, ent), n in filled.items():
-        by_group[(cat, ent)].append((week, n))
+    grain4 = any(len(k) >= 4 for k in filled)
+    by_group: dict[tuple, list[tuple[str, int]]] = defaultdict(list)
+    for key, n in filled.items():
+        week, cat, ent, model = _unpack_count_key(key)
+        group = (cat, ent, model) if grain4 else (cat, ent)
+        by_group[group].append((week, n))
 
     # First pass: per-slice statistics (leave-one-out baseline).
     prelim: list[dict[str, Any]] = []
     exp = exposure or {}
-    cusum_map: dict[tuple[str, str], dict[str, Any]] = {}
+    cusum_map: dict[tuple, dict[str, Any]] = {}
 
-    for (cat, ent), weeks in sorted(by_group.items()):
+    for group, weeks in sorted(by_group.items()):
+        if grain4:
+            cat, ent, model = group
+        else:
+            cat, ent = group
+            model = ""
         sorted_weeks = sorted(weeks)
         # Precompute CUSUM on chronological series for this slice
         s_vals = [float(n) for _, n in sorted_weeks]
         s_mu = sum(s_vals) / len(s_vals) if s_vals else 0.0
         s_var = sum((v - s_mu) ** 2 for v in s_vals) / max(1, len(s_vals) - 1)
-        cusum_map[(cat, ent)] = detect_cusum_change_point(
+        cusum_map[(cat, ent, model)] = detect_cusum_change_point(
             s_vals, baseline_mean=s_mu, baseline_std=math.sqrt(s_var)
         )
 
@@ -354,6 +425,7 @@ def score_weekly_slices(
                     "iso_week": week,
                     "category": cat,
                     "entity_2": ent,
+                    "entity_3": model,
                     "record_count": n,
                     "baseline_mean": mu,
                     "baseline_std": std,
@@ -398,7 +470,7 @@ def score_weekly_slices(
         r["is_anomaly"] = bool(gates)
 
         # CUSUM sustained shift vs transient spike classification (audit 4.3)
-        cat_ent = (r["category"], r["entity_2"])
+        cat_ent = (r["category"], r["entity_2"], r.get("entity_3") or "")
         c_res = cusum_map.get(cat_ent, {})
         c_trig = bool(c_res.get("triggered"))
         c_idx = c_res.get("change_point_index")
@@ -426,6 +498,11 @@ def recompute_weekly_anomalies(
     category: str | None = None,
     entity_2: str | None = None,
     censor_recent_days: int = 0,
+    source: str | None = None,
+    model_grain: bool = False,
+    clock: str = "event",
+    as_of: Any | None = None,
+    persist: bool = True,
 ) -> list[dict[str, Any]]:
     """Read ``records``, replace ``weekly_anomalies`` for *pack_id*, return rows.
 
@@ -434,22 +511,40 @@ def recompute_weekly_anomalies(
     ``set_exposure``) switch scoring to rates where covered; uncovered slices
     stay raw-count with ``normalized=False``.
 
+    ``source`` scores one feed (warranty, telematics) on its own series.
+    ``model_grain`` stores the model on ``entity_3`` so a model-scoped recall
+    can match. The default remains make-level 3-tuples.
+
+    ``clock='received'`` and ``as_of`` count only rows whose ``received_at``
+    is at or before the cutoff. The live scan keeps the event clock.
+
     ``censor_recent_days`` (board #6 — right-censoring): buckets ending
     within N days of now are systematically under-reported (NHTSA/CFPB lag).
     Censored buckets are still counted but never flagged (``censored=True``),
-    so the most recent bar cannot page on incomplete data.
+    and that bit is stored so the board can show which weeks were held back.
     """
     with domain_con(pack_id, read_only=False) as con:
         apply_domain_schema(con)
-        sql = "SELECT received_at, occurred_at, category, entity_2 FROM records"
+        sql = (
+            "SELECT received_at, occurred_at, category, entity_2, entity_3, source,"
+            " COALESCE(event_count, 1) AS event_count"
+            " FROM records"
+        )
         params: list[Any] = []
-        wheres: list[str] = ["(provenance IS NULL OR provenance <> 'inferred')"]
+        # Fixture rows are demo data. Inferred rows are unfinished calls.
+        # Neither is an observed failure.
+        wheres: list[str] = [
+            "(provenance IS NULL OR provenance NOT IN ('inferred', 'fixture'))"
+        ]
         if category:
             wheres.append("category = ?")
             params.append(category)
         if entity_2:
             wheres.append("entity_2 = ?")
             params.append(entity_2)
+        if source:
+            wheres.append("source = ?")
+            params.append(source)
         sql += " WHERE " + " AND ".join(wheres)
         raw = con.execute(sql, params).fetchall()
         cols = [d[0] for d in con.description]
@@ -467,7 +562,15 @@ def recompute_weekly_anomalies(
         except Exception:
             exposure_map = None
         scored = score_weekly_slices(
-            count_weekly_slices(records), pack_id=pack_id, exposure=exposure_map
+            count_weekly_slices(
+                records,
+                clock=clock,
+                as_of=as_of,
+                model_grain=model_grain,
+                source=source,
+            ),
+            pack_id=pack_id,
+            exposure=exposure_map,
         )
         if censor_recent_days and censor_recent_days > 0:
             from datetime import timedelta as _td
@@ -496,44 +599,138 @@ def recompute_weekly_anomalies(
         else:
             for _row in scored:
                 _row.setdefault("censored", False)
-        if category or entity_2:
-            dsql = "DELETE FROM weekly_anomalies WHERE pack_id = ?"
-            dparams: list[Any] = [pack_id]
-            if category:
-                dsql += " AND category = ?"
-                dparams.append(category)
-            if entity_2:
-                dsql += " AND entity_2 = ?"
-                dparams.append(entity_2)
-            con.execute(dsql, dparams)
-        else:
-            con.execute("DELETE FROM weekly_anomalies WHERE pack_id = ?", [pack_id])
-        for row in scored:
-            con.execute(
-                """
-                INSERT INTO weekly_anomalies (
-                    pack_id, iso_week, category, entity_2, record_count,
-                    baseline_mean, baseline_std, z_score, is_anomaly,
-                    p_value, p_bh, baseline_weeks, method
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    row["pack_id"],
-                    row["iso_week"],
-                    row["category"],
-                    row["entity_2"],
-                    row["record_count"],
-                    row["baseline_mean"],
-                    row["baseline_std"],
-                    row["z_score"],
-                    row["is_anomaly"],
-                    row.get("p_value"),
-                    row.get("p_bh"),
-                    row.get("baseline_weeks"),
-                    row.get("method"),
-                ],
-            )
+        if persist:
+            if category or entity_2 or source:
+                dsql = "DELETE FROM weekly_anomalies WHERE pack_id = ?"
+                dparams: list[Any] = [pack_id]
+                if category:
+                    dsql += " AND category = ?"
+                    dparams.append(category)
+                if entity_2:
+                    dsql += " AND entity_2 = ?"
+                    dparams.append(entity_2)
+                con.execute(dsql, dparams)
+            else:
+                con.execute("DELETE FROM weekly_anomalies WHERE pack_id = ?", [pack_id])
+            _insert_weekly_anomalies(con, scored)
     return scored
+
+
+def _insert_weekly_anomalies(con, rows: list[dict[str, Any]]) -> None:
+    """Persist scored slices, including model grain and the censored bit."""
+    for row in rows:
+        con.execute(
+            """
+            INSERT INTO weekly_anomalies (
+                pack_id, iso_week, category, entity_2, entity_3, record_count,
+                baseline_mean, baseline_std, z_score, is_anomaly,
+                p_value, p_bh, baseline_weeks, method, censored
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                row["pack_id"],
+                row["iso_week"],
+                row["category"],
+                row["entity_2"],
+                row.get("entity_3") or "",
+                row["record_count"],
+                row["baseline_mean"],
+                row["baseline_std"],
+                row["z_score"],
+                row["is_anomaly"],
+                row.get("p_value"),
+                row.get("p_bh"),
+                row.get("baseline_weeks"),
+                row.get("method"),
+                bool(row.get("censored")),
+            ],
+        )
+
+
+def persist_scored_anomalies(pack_id: str, rows: list[dict[str, Any]]) -> None:
+    """Replace this pack's weekly_anomalies with an already-scored series.
+
+    The recall report scores each as-of date in memory. Persisting that
+    series is what makes ``run_backtest(as_of=...)`` read the same weeks,
+    instead of a table that still contains later data.
+    """
+    with domain_con(pack_id, read_only=False) as con:
+        apply_domain_schema(con)
+        con.execute("DELETE FROM weekly_anomalies WHERE pack_id = ?", [pack_id])
+        _insert_weekly_anomalies(con, rows)
+
+
+def current_spikes(pack_id: str) -> dict[str, Any]:
+    """This week's computed spikes, plus weeks the lag censor held back.
+
+    "This week" is the latest iso_week that was not censored. Spikes are the
+    anomaly rows in that week. A missing grain column (pre-migration file
+    opened read-only) degrades to the columns that exist.
+    """
+    empty = {"spike_week": None, "spikes": [], "censored_weeks": []}
+    try:
+        with domain_con(pack_id, read_only=True) as con:
+            info = con.execute(
+                "SELECT name FROM pragma_table_info('weekly_anomalies')"
+            ).fetchall()
+            cols = {str(r[0]) for r in info}
+            if "iso_week" not in cols:
+                return empty
+            has_censored = "censored" in cols
+            has_model = "entity_3" in cols
+            censored_expr = "COALESCE(censored, FALSE)" if has_censored else "FALSE"
+            model_expr = "COALESCE(entity_3, '')" if has_model else "''"
+            week = con.execute(
+                f"""
+                SELECT MAX(iso_week) FROM weekly_anomalies
+                WHERE pack_id = ? AND {censored_expr} = FALSE
+                """,
+                [pack_id],
+            ).fetchone()
+            iso = week[0] if week else None
+            spikes: list[dict[str, Any]] = []
+            if iso:
+                raw = con.execute(
+                    f"""
+                    SELECT iso_week, category, entity_2, {model_expr},
+                           record_count, baseline_mean, z_score
+                    FROM weekly_anomalies
+                    WHERE pack_id = ? AND iso_week = ? AND is_anomaly = TRUE
+                      AND {censored_expr} = FALSE
+                    ORDER BY z_score DESC
+                    """,
+                    [pack_id, iso],
+                ).fetchall()
+                for iso_week, cat, ent, model, count, baseline, z in raw:
+                    spikes.append(
+                        {
+                            "iso_week": iso_week,
+                            "category": cat,
+                            "entity_2": ent,
+                            "entity_3": model or "",
+                            "record_count": count,
+                            "baseline_mean": baseline,
+                            "z_score": z,
+                        }
+                    )
+            censored_weeks: list[str] = []
+            if has_censored:
+                held = con.execute(
+                    """
+                    SELECT DISTINCT iso_week FROM weekly_anomalies
+                    WHERE pack_id = ? AND COALESCE(censored, FALSE) = TRUE
+                    ORDER BY iso_week
+                    """,
+                    [pack_id],
+                ).fetchall()
+                censored_weeks = [str(r[0]) for r in held if r[0]]
+            return {
+                "spike_week": iso,
+                "spikes": spikes,
+                "censored_weeks": censored_weeks,
+            }
+    except Exception:
+        return empty
 
 
 __all__ = [
@@ -545,6 +742,8 @@ __all__ = [
     "zero_fill_weeks",
     "score_weekly_slices",
     "recompute_weekly_anomalies",
+    "current_spikes",
+    "persist_scored_anomalies",
     "set_exposure",
     "load_exposure",
     "detect_cusum_change_point",

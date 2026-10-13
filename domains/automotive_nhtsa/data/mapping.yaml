@@ -31,14 +31,20 @@ records:
   source: "NHTSA"
   entity_key: "{MODEL_YR}|{MAKETXT}|{MODELTXT}"
 
+# FLAT_RCL (published RCL.txt field list, May 2025 update). One campaign
+# covers many models, so advisory_id is
+# CAMPNO|YEARTXT|MAKETXT|MODELTXT|COMPONENT, built by scripts.ingest_recalls.
+# issued_at is RCDATE, the Part 573 report-received date. ODATE is owner
+# notification and DATEA is the file-add date; neither is the receipt clock.
+# COMPONENT is COMPNAME normalized with the same function as complaints.
 advisories:
-  advisory_id: CAMPNO
-  issued_at: MFR_DATE
-  scope_entity_1: MODEL_YR
+  advisory_id: ADVISORY_KEY
+  issued_at: RCDATE
+  scope_entity_1: YEARTXT
   scope_entity_2: MAKETXT
   scope_entity_3: MODELTXT
-  scope_category: COMPNAME
-  summary: SUBJECT
-  remedy: SUMMARY
+  scope_category: COMPONENT
+  summary: DESC_DEFECT
+  remedy: CORRECTIVE_ACTION
   url: RCL_URL
   source: "NHTSA"

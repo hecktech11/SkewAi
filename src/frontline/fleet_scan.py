@@ -9,8 +9,9 @@ yet — the Axion demo moment:
     2. optionally rebuild clusters (heavy; default off, nightly cadence);
     3. refresh the backtest lead-time table;
     4. for every anomalous (category, entity_2) slice, resolve the top
-       cluster and open-or-link an investigation with evidence attached;
-    5. fire early-warning alerts for newly opened investigations.
+       cluster, or open the slice itself when no cluster matches;
+    5. fire early-warning alerts for newly opened investigations,
+       including the recall lead time when one was measured.
 
 Nothing is fabricated: investigations open only on computed anomalies with
 real record counts, and the report lists exactly what was evaluated.
@@ -77,6 +78,79 @@ def _top_cluster_for_slice(
     return best if best_score > 0 else None
 
 
+def _anomaly_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("iso_week") or ""),
+        str(row.get("category") or ""),
+        str(row.get("entity_2") or ""),
+        str(row.get("entity_3") or ""),
+    )
+
+
+def select_flagged_slices(
+    combined: list[dict[str, Any]],
+    by_source: dict[str, list[dict[str, Any]]] | None,
+) -> list[dict[str, Any]]:
+    """Slices to open, ranked by how many sources flag them.
+
+    ``by_source is None`` only when the source list could not be read.
+    An empty map opens nothing: a spike that exists only after mixing
+    feeds is not a flag from any one source. One source is enough.
+    """
+    if by_source is None:
+        rows: list[dict[str, Any]] = []
+        for row in combined:
+            if not row.get("is_anomaly"):
+                continue
+            copied = dict(row)
+            copied["sources_flagged"] = []
+            rows.append(copied)
+        return rows
+    flagged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for src, rows in by_source.items():
+        for row in rows:
+            if not row.get("is_anomaly"):
+                continue
+            key = _anomaly_key(row)
+            slot = flagged.get(key)
+            if slot is None:
+                slot = dict(row)
+                slot["sources_flagged"] = []
+                flagged[key] = slot
+            names: list[str] = slot["sources_flagged"]
+            if src not in names:
+                names.append(src)
+            try:
+                better = abs(float(row.get("z_score") or 0)) > abs(float(slot.get("z_score") or 0))
+            except (TypeError, ValueError):
+                better = False
+            if better:
+                kept = list(names)
+                slot.clear()
+                slot.update(row)
+                slot["sources_flagged"] = kept
+    out = list(flagged.values())
+    out.sort(
+        key=lambda r: (
+            -len(r.get("sources_flagged") or []),
+            -abs(float(r.get("z_score") or 0)),
+        )
+    )
+    return out
+
+
+def _observed_sources(pack_id: str) -> list[str]:
+    with domain_con(pack_id, read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT DISTINCT source FROM records
+            WHERE source IS NOT NULL AND TRIM(CAST(source AS VARCHAR)) <> ''
+              AND (provenance IS NULL OR provenance NOT IN ('inferred', 'fixture'))
+            """
+        ).fetchall()
+    return sorted({str(r[0]) for r in rows if r and r[0]})
+
+
 def run_fleet_scan(
     pack_id: str,
     *,
@@ -85,7 +159,11 @@ def run_fleet_scan(
 ) -> dict[str, Any]:
     """Run one full-pack fleet scan. Returns the scan report."""
     from src.backtest.engine import run_backtest
-    from src.frontline.live_intercept import open_or_link_investigation
+    from src.frontline.investigation_brief import lead_weeks_for_slice
+    from src.frontline.live_intercept import (
+        find_open_investigation,
+        open_or_link_investigation,
+    )
     from src.ml_runtime.anomalies import recompute_weekly_anomalies
 
     report: dict[str, Any] = {
@@ -121,43 +199,86 @@ def run_fleet_scan(
         run_backtest(pack_id)
     except Exception as e:
         report["errors"].append(f"backtest:{type(e).__name__}:{e}")
-    anomalous = [r for r in scored if r.get("is_anomaly")]
+    by_source: dict[str, list[dict[str, Any]]] | None = None
+    try:
+        by_source = {}
+        for src in _observed_sources(pack_id):
+            try:
+                by_source[src] = recompute_weekly_anomalies(
+                    pack_id,
+                    censor_recent_days=_lag,
+                    source=src,
+                    persist=False,
+                )
+            except Exception as e:
+                report["errors"].append(f"source:{src}:{type(e).__name__}:{e}")
+    except Exception as e:
+        report["errors"].append(f"sources:{type(e).__name__}:{e}")
+        by_source = None
+    anomalous = select_flagged_slices(scored, by_source)
     report["anomaly_slices"] = len(anomalous)
-    seen_clusters: set[int] = set()
+    seen: set[tuple] = set()
     for row in anomalous:
         cat, ent = row.get("category"), row.get("entity_2")
+        model = row.get("entity_3") or ""
         try:
             top = _top_cluster_for_slice(pack_id, cat, ent)
         except Exception as e:
             report["errors"].append(f"resolve:{type(e).__name__}:{e}")
+            top = None
+        cid = 0
+        if top:
+            try:
+                cid = int(top["cluster_id"])
+            except (TypeError, ValueError):
+                cid = 0
+        if cid < 0:
+            cid = 0
+        # Cluster 0 is not an identity. Two unmatched slices must not fold
+        # into one investigation just because neither resolved a cluster.
+        if cid > 0:
+            dedup = ("cluster", cid)
+        else:
+            dedup = ("slice", str(cat or "").upper(), str(ent or "").upper(), str(model).upper())
+        if dedup in seen:
             continue
-        if not top:
-            continue
-        try:
-            cid = int(top["cluster_id"])
-        except (TypeError, ValueError):
-            continue
-        if cid in seen_clusters:
-            continue
-        seen_clusters.add(cid)
+        seen.add(dedup)
         is_new = False
         try:
-            before = _open_investigation_for(pack_id, cid)
+            before = find_open_investigation(pack_id, cid, cat, ent, model or None)
             inv_id = open_or_link_investigation(
                 pack_id=pack_id,
                 cluster_id=cid,
                 title=f"Fleet scan {cat or ''} {ent or ''}".strip(),
+                category=cat,
+                entity_2=ent,
+                entity_3=model or None,
             )
             is_new = before is None
         except Exception as e:
             report["errors"].append(f"investigation:{type(e).__name__}:{e}")
             continue
+        lead_weeks = None
+        try:
+            lead_weeks = lead_weeks_for_slice(
+                pack_id,
+                cat,
+                ent,
+                model or None,
+                cluster_id=cid,
+                series=scored,
+            )
+        except Exception as e:
+            report["errors"].append(f"lead:{type(e).__name__}:{e}")
         entry = {
             "investigation_id": inv_id,
             "cluster_id": cid,
             "category": cat,
             "entity_2": ent,
+            "entity_3": model,
             "z_score": row.get("z_score"),
+            "lead_time_weeks": lead_weeks,
+            "sources_flagged": list(row.get("sources_flagged") or []),
         }
         if is_new:
             report["investigations_opened"].append(entry)
@@ -167,12 +288,12 @@ def run_fleet_scan(
 
                     import anyio as _anyio
 
-                    async def _fire() -> None:
+                    async def _fire(cid=cid, count=int(row.get("record_count") or 0), lead=lead_weeks) -> None:
                         try:
                             await alert_early_warning(
                                 cid,
-                                int(row.get("record_count") or 0),
-                                None,
+                                count,
+                                lead,
                                 pack_id=pack_id,
                             )
                         except Exception:
@@ -228,22 +349,4 @@ def run_fleet_scan(
     return report
 
 
-def _open_investigation_for(pack_id: str, cluster_id: int) -> str | None:
-    from src.data.warehouse import ops_con
-
-    with ops_con(read_only=True) as con:
-        try:
-            row = con.execute(
-                """
-                SELECT investigation_id FROM investigations
-                WHERE pack_id = ? AND cluster_id = ? AND status = 'open'
-                LIMIT 1
-                """,
-                [pack_id, cluster_id],
-            ).fetchone()
-        except Exception:
-            return None
-    return str(row[0]) if row else None
-
-
-__all__ = ["run_fleet_scan"]
+__all__ = ["run_fleet_scan", "select_flagged_slices"]
