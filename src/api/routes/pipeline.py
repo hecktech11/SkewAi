@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Up
 from fastapi.responses import FileResponse
 
 from src.api.auth import require_api_key
-from src.api.rbac import get_actor, get_role
+from src.api.rbac import get_actor, get_role, require_perm_dep
 from src.config import REPO_ROOT
 
 router = APIRouter(
@@ -22,7 +22,7 @@ router = APIRouter(
 # csv_path must live under data/uploads/ or data/builder_packs/ (or the
 # isolated test DOMAIN_DB_PATH equivalent). Absolute paths outside the jail,
 # symlink escapes, and missing files are rejected with 400/404 — never read.
-def _resolve_builder_csv(csv_path: str) -> "Path":
+def _resolve_builder_csv(csv_path: str, *, max_bytes: int = 10 * 1024 * 1024) -> "Path":
     from pathlib import Path
 
     raw = (csv_path or "").strip()
@@ -66,8 +66,10 @@ def _resolve_builder_csv(csv_path: str) -> "Path":
         raise HTTPException(404, "csv file not found")
     # 10 MB cap on insight reads (uploads are capped tighter at write time)
     try:
-        if p.stat().st_size > 10 * 1024 * 1024:
-            raise HTTPException(400, "csv too large (max 10 MB)")
+        if p.stat().st_size > max_bytes:
+            if max_bytes == 10 * 1024 * 1024:
+                raise HTTPException(400, "csv too large (max 10 MB)")
+            raise HTTPException(400, f"csv too large (max {max_bytes} bytes)")
     except HTTPException:
         raise
     except OSError:
@@ -76,6 +78,13 @@ def _resolve_builder_csv(csv_path: str) -> "Path":
 
 
 MAX_BUILDER_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _builder_upload_cap() -> int:
+    """Profile upload cap. ``FRONTLINE_CSV_MAX_BYTES`` raises the 5 MB default."""
+    from src.domains.csv_load import builder_csv_max_bytes
+
+    return builder_csv_max_bytes()
 
 
 @router.get("/trust/kpis")
@@ -199,8 +208,11 @@ async def pack_builder_profile(file: UploadFile = File(...)) -> dict[str, Any]:
             if not piece:
                 break
             total += len(piece)
-            if total > MAX_BUILDER_UPLOAD_BYTES:
-                raise HTTPException(400, "csv too large (max 5 MB)")
+            cap = _builder_upload_cap()
+            if total > cap:
+                if cap == MAX_BUILDER_UPLOAD_BYTES:
+                    raise HTTPException(400, "csv too large (max 5 MB)")
+                raise HTTPException(400, f"csv too large (max {cap} bytes)")
             chunks.append(piece)
         raw = b"".join(chunks)
     finally:
@@ -254,6 +266,88 @@ async def pack_builder_insight(
         display_name=str(body.get("display_name") or "Preview pack"),
         out_root=REPO_ROOT / "data" / "builder_packs",
     )
+
+
+@router.post(
+    "/pack-builder/ingest",
+    dependencies=[Depends(require_perm_dep("ops:write", open_mode_ok=True))],
+)
+async def pack_builder_ingest(
+    body: dict[str, Any],
+    role: str = Depends(get_role),
+    actor: str = Depends(get_actor),
+) -> dict[str, Any]:
+    """Write every accepted CSV row into a pack. Large files become a job."""
+    from src.api.auth import is_open_mode
+    from src.domains.csv_load import (
+        as_bool,
+        assert_not_pilot_warehouse,
+        builder_csv_max_bytes,
+        csv_inline_max_bytes,
+        load_csv_rows,
+        materialize_mapping,
+    )
+    from src.jobs.queue import enqueue
+    from src.security.identifiers import InvalidIdentifier
+
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON object required")
+    pack_id = str(body.get("pack_id") or "").strip()
+    if not pack_id:
+        raise HTTPException(400, "pack_id required")
+    csv_path = _resolve_builder_csv(
+        str(body.get("csv_path") or ""),
+        max_bytes=builder_csv_max_bytes(),
+    )
+    try:
+        assert_not_pilot_warehouse(pack_id)
+        mpath = materialize_mapping(
+            csv_path,
+            mapping=body.get("mapping"),
+            mapping_path=body.get("mapping_path"),
+            normalize_components=as_bool(body.get("normalize_components")),
+        )
+        run_anomalies = as_bool(body.get("run_anomalies"))
+        source = str(body.get("source") or "csv")
+        if as_bool(body.get("async")) or csv_path.stat().st_size > csv_inline_max_bytes():
+            payload: dict[str, Any] = {
+                "pack_id": pack_id,
+                "source": source,
+                "csv_path": str(csv_path),
+                "mapping_path": str(mpath),
+                "run_anomalies": run_anomalies,
+            }
+            if body.get("provenance") not in (None, ""):
+                payload["provenance"] = body.get("provenance")
+            kwargs: dict[str, Any] = {}
+            if not is_open_mode():
+                kwargs["role"] = role
+                kwargs["principal"] = actor
+            job = enqueue("ingest_source", payload, **kwargs)
+            return {
+                "written": None,
+                "skipped": None,
+                "job_id": job["job_id"],
+                "anomalies_scored": None,
+            }
+        report = load_csv_rows(
+            pack_id,
+            csv_path,
+            mapping_path=mpath,
+            source=source,
+            provenance=body.get("provenance"),
+            run_anomalies=run_anomalies,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    except (InvalidIdentifier, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "written": report["written"],
+        "skipped": report["skipped"],
+        "job_id": None,
+        "anomalies_scored": report["anomalies_scored"],
+    }
 
 
 @router.post("/marketplace/install/{pack_id}")

@@ -1,0 +1,22 @@
+# Mapping: telematics fault events → one canonical row per day, cohort,
+# and fault code. Millions of events stay out of `records`; event_count
+# is the number of events in the bucket. Demo rows load as fixture.
+# Executed by scripts/ingest_source.py --source telematics.
+
+source: telematics events CSV
+aggregate: day
+records:
+  record_id: EVENT_ID
+  received_at: EVENT_DATE
+  occurred_at: EVENT_DATE
+  entity_1: COHORT
+  entity_2: MAKETXT
+  entity_3: MODELTXT
+  category: COMPONENT
+  subcategory: FAULT_CODE
+  text: FAULT_CODE
+  severity_label: ""
+  region: ""
+  source: "TELEMATICS"
+  event_count: "1"
+  entity_key: "{COHORT}|{MAKETXT}|{MODELTXT}"

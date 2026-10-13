@@ -109,9 +109,10 @@ export function openWarning({ clusterId, packId, tab } = {}) {
   });
 }
 
-export function openIssue(clusterId) {
-  if (clusterId === null || clusterId === undefined || clusterId === "") return;
-  goHash(`issue/${encodeURIComponent(String(clusterId))}`);
+export function openIssue(issueId) {
+  // investigation id (inv_…) or a numeric cluster id. Both open the desk.
+  if (issueId === null || issueId === undefined || issueId === "") return;
+  goHash(`issue/${encodeURIComponent(String(issueId))}`);
 }
 
 export function consumeSession(key) {

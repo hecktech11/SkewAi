@@ -173,7 +173,7 @@ function Shell() {
   const extra = (route === "signin" || route === "signup")
     ? EXTRA_PAGES.find((p) => p.id === route)
     : null;
-  // Single-issue route: #issue/<cluster_id> (not in the nav).
+  // Single-issue route: #issue/<investigation_id> or #issue/<cluster_id> (not in the nav).
   const issueClusterId = route === "issue" || route.startsWith("issue/")
     ? decodeURIComponent(route === "issue" ? "" : route.slice("issue/".length))
     : null;

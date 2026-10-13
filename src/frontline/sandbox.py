@@ -37,7 +37,7 @@ SAMPLE_ROWS = [
         "make": "TOYOTA",
         "model": "CAMRY",
         "year": "2020",
-        "component": "ELECTRICAL",
+        "component": "ELECTRICAL SYSTEM",
         "complaint": "window rattle and warning light on dash",
     },
 ]

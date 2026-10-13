@@ -15,7 +15,7 @@ import yaml
 
 from src.config import REPO_ROOT
 from src.data.timeutil import utc_now
-from src.data.warehouse import apply_domain_schema, domain_con
+from src.data.warehouse import domain_con
 from src.ml_runtime.embeddings import embed_text
 
 CANONICAL_RECORD_FIELDS = (
@@ -172,6 +172,22 @@ def map_row(row: dict[str, Any], records_map: dict[str, Any]) -> dict[str, Any] 
 
     out["occurred_at"] = _parse_ts(out.get("occurred_at"))
     out["entity_key"] = _norm_entity_key(out.get("entity_key"))
+    spec = records_map.get("event_count")
+    raw_count = _cell(raw_row, spec, headers, field="event_count") if spec is not None else ""
+    try:
+        parsed_count = int(float(raw_count)) if str(raw_count).strip() else 1
+    except (TypeError, ValueError):
+        parsed_count = 1
+    out["event_count"] = parsed_count if parsed_count >= 1 else 1
+    # Optional. A blank category stays blank: normalize_component would
+    # otherwise fill it with UNKNOWN OR OTHER, which then matches nothing
+    # and looks like a real component.
+    if str(records_map.get("normalize_category") or "").strip().lower() == "nhtsa":
+        raw_cat = str(out.get("category") or "").strip()
+        if raw_cat:
+            from src.domains.nhtsa_components import normalize_component
+
+            out["category"] = normalize_component(raw_cat)
     return out
 
 
@@ -196,40 +212,116 @@ def iter_mapped_rows(
                 return
 
 
+#: Rows per warehouse round-trip. DuckDB's Python client is in autocommit,
+#: so a per-row INSERT costs one commit per row — measured at 3.5 ms rising
+#: to 17.5 ms over 8k rows (superlinear), which is 4+ hours for a 500k load.
+#: Staging a batch as an Arrow table and inserting it with one statement
+#: measures 116 µs/row and stays flat across batches.
+_UPSERT_BATCH_ROWS = 10_000
+
+
+def _arrow_schema():
+    """Staging schema for one batch.
+
+    Every column is typed explicitly. A batch where one column is entirely
+    NULL — occurred_at on a source with no incident date, entity_key on a
+    source with no entities — would otherwise infer as Arrow ``null`` and
+    fail to cast into its DuckDB column.
+    """
+    import pyarrow as pa
+
+    return pa.schema(
+        [
+            ("record_id", pa.string()),
+            ("occurred_at", pa.timestamp("us")),
+            ("received_at", pa.timestamp("us")),
+            ("entity_1", pa.string()),
+            ("entity_2", pa.string()),
+            ("entity_3", pa.string()),
+            ("category", pa.string()),
+            ("subcategory", pa.string()),
+            ("text", pa.string()),
+            ("severity_label", pa.string()),
+            ("region", pa.string()),
+            ("source", pa.string()),
+            ("embedding", pa.list_(pa.float32())),
+            ("entity_key", pa.string()),
+            ("provenance", pa.string()),
+            ("event_count", pa.int64()),
+        ]
+    )
+
+
+def _staged_row(rec: dict[str, Any]) -> dict[str, Any]:
+    """One canonical record as a column-ordered dict for Arrow staging."""
+    return {
+        "record_id": rec["record_id"],
+        "occurred_at": rec.get("occurred_at"),
+        "received_at": rec["received_at"],
+        "entity_1": rec.get("entity_1") or None,
+        "entity_2": rec.get("entity_2") or None,
+        "entity_3": rec.get("entity_3") or None,
+        "category": rec.get("category") or None,
+        "subcategory": rec.get("subcategory") or None,
+        "text": rec["text"],
+        "severity_label": rec.get("severity_label") or None,
+        "region": rec.get("region") or None,
+        "source": rec.get("source") or None,
+        "embedding": embed_text(rec["text"]),
+        "entity_key": rec.get("entity_key") or None,
+        "provenance": rec.get("provenance") or "observed",
+        "event_count": int(rec.get("event_count") or 1),
+    }
+
+
+def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+    """Insert one staged batch with a single statement."""
+    if not batch:
+        return
+    import pyarrow as pa
+
+    table = pa.Table.from_pylist(batch, schema=_arrow_schema())
+    cols = ", ".join(table.schema.names)
+    con.register("_upsert_batch", table)
+    try:
+        con.execute(f"INSERT OR REPLACE INTO records ({cols}) SELECT {cols} FROM _upsert_batch")
+    finally:
+        con.unregister("_upsert_batch")
+
+
 def upsert_records(pack_id: str, records: Iterable[dict[str, Any]]) -> int:
-    """Insert-or-replace canonical rows into the pack domain warehouse."""
+    """Insert-or-replace canonical rows into the pack domain warehouse.
+
+    Returns the number of records consumed, which is not the same as rows
+    changed: a re-ingest of the same CSV replaces every row and still
+    reports the full count.
+
+    Duplicate record_ids inside one batch are resolved keep-last, in Python,
+    before staging. This matters and is easy to get wrong: a per-row loop
+    and ``executemany`` both let the LAST write win, but a single-statement
+    ``INSERT OR REPLACE ... SELECT`` keeps the FIRST and drops the rest
+    silently, with no error and no short row count to notice.
+    """
     count = 0
+    batch: list[dict[str, Any]] = []
+    index: dict[str, int] = {}  # record_id -> position in `batch`
     with domain_con(pack_id, read_only=False) as con:
-        apply_domain_schema(con)
+        # domain_con already applied the schema on a writable connection.
         for rec in records:
-            emb = embed_text(rec["text"])
-            con.execute(
-                """
-                INSERT OR REPLACE INTO records (
-                    record_id, occurred_at, received_at, entity_1, entity_2, entity_3,
-                    category, subcategory, text, severity_label, region, source, embedding,
-                    entity_key, provenance
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    rec["record_id"],
-                    rec.get("occurred_at"),
-                    rec["received_at"],
-                    rec.get("entity_1") or None,
-                    rec.get("entity_2") or None,
-                    rec.get("entity_3") or None,
-                    rec.get("category") or None,
-                    rec.get("subcategory") or None,
-                    rec["text"],
-                    rec.get("severity_label") or None,
-                    rec.get("region") or None,
-                    rec.get("source") or None,
-                    emb,
-                    rec.get("entity_key") or None,
-                    rec.get("provenance") or "observed",
-                ],
-            )
             count += 1
+            staged = _staged_row(rec)
+            rid = staged["record_id"]
+            prior = index.get(rid)
+            if prior is not None:
+                batch[prior] = staged  # keep-last, matching the old per-row loop
+            else:
+                index[rid] = len(batch)
+                batch.append(staged)
+            if len(batch) >= _UPSERT_BATCH_ROWS:
+                _flush_batch(con, batch)
+                batch = []
+                index = {}
+        _flush_batch(con, batch)
     return count
 
 
@@ -249,7 +341,7 @@ def ingest_mapped_csv(
     (NHTSA historical FLAT). ``enforce_trust=False`` alone is rejected so a
     copier cannot silently bypass the contract.
     """
-    from src.data.trust import DEFAULT_FRESHNESS_SLA_DAYS, evaluate_ingest
+    from src.data.trust import DEFAULT_FRESHNESS_SLA_DAYS, iter_trusted
     from src.security.identifiers import safe_csv_path, safe_pack_id
 
     pack_id = str(safe_pack_id(pack_id))
@@ -260,23 +352,25 @@ def ingest_mapped_csv(
         )
     mpath = Path(mapping_path) if mapping_path else default_mapping_path(pack_id)
     mapping = load_mapping(mpath)
-    rows = list(iter_mapped_rows(csv_path, mapping, limit=limit))
-    trust = evaluate_ingest(
+    # One pass: map → trust → upsert, streamed. Nothing here holds the CSV,
+    # so the peak cost of a load is the two 10k-row batch buffers rather
+    # than the row count.
+    stats, stream = iter_trusted(
         pack_id,
-        rows,
+        iter_mapped_rows(csv_path, mapping, limit=limit),
         persist=True,
         sla_days=DEFAULT_FRESHNESS_SLA_DAYS if sla_days is None else sla_days,
+        keep_untrusted=allow_untrusted_historical_backfill,
     )
-    to_write = rows if allow_untrusted_historical_backfill else trust["trusted_rows"]
-    written = upsert_records(pack_id, to_write)
+    written = upsert_records(pack_id, stream)
     return {
         "pack_id": pack_id,
         "csv_path": str(csv_path),
         "mapping_path": str(mpath),
-        "mapped": len(rows),
+        "mapped": stats["evaluated"],
         "upserted": written,
-        "trusted": trust.get("trusted"),
-        "rejected": trust.get("rejected"),
+        "trusted": stats["trusted"],
+        "rejected": stats["rejected"],
         "source": mapping.get("source"),
         "enforce_trust": not allow_untrusted_historical_backfill,
         "allow_untrusted_historical_backfill": allow_untrusted_historical_backfill,

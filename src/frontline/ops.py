@@ -212,14 +212,40 @@ def _resolve_issue_slice(pack_id: str, cluster_id: Any) -> tuple[Any, Any, Any]:
     return row[0], row[1], row[2]
 
 
+def _coerce_fixed_at(raw: Any) -> datetime:
+    """Close date. Absent means today. Never the last case timestamp."""
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return _now().replace(tzinfo=None)
+    if isinstance(raw, datetime):
+        return raw.replace(tzinfo=None) if raw.tzinfo else raw
+    text = str(raw).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("fixed_at must be a date or timestamp") from exc
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _clean_slice_value(raw: Any) -> str | None:
+    text = str(raw or "").strip()
+    return text[:80] or None
+
+
 def update_investigation(
     investigation_id: str,
     *,
     status: str,
     author: str = "operator",
+    fixed_at: Any = None,
+    note: str | None = None,
+    control_entity_2: str | None = None,
+    control_entity_3: str | None = None,
 ) -> dict[str, Any]:
     if status not in INV_STATUSES:
         raise ValueError(f"invalid status {status!r}; allowed: {sorted(INV_STATUSES)}")
+    # Reject a bad close date before the status write, so a 400 does not
+    # leave the investigation closed with no fix row.
+    close_at = _coerce_fixed_at(fixed_at) if status == "closed" else None
     with ops_con(read_only=True) as con:
         cur = con.execute(
             "SELECT investigation_id, status, pack_id, title FROM investigations WHERE investigation_id = ?",
@@ -253,41 +279,52 @@ def update_investigation(
         r = cur.fetchone()
         cols = [d[0] for d in cur.description]
         out = dict(zip(cols, r))
-    # Keep raw datetimes: the response ISO-formats below, but fix
-    # measurement needs real datetimes (iso strings crash to_naive_utc,
-    # which silently dropped every recorded fix).
-    _fixed_raw = out.get("last_case_at") or out.get("opened_at")
     for k, v in list(out.items()):
         if isinstance(v, datetime):
             out[k] = v.isoformat()
-    # Close the fix-effectiveness loop: closing an investigation records a fix
-    # and attaches before/after recurrence so "prove fixes worked" is automatic.
-    if status == "closed":
+    # Closing records the fix on the date the request gave (today when
+    # omitted) and measures it. Eight event-weeks of later data are
+    # required before the result leaves "waiting".
+    if status == "closed" and close_at is not None:
         try:
-            from src.enterprise.fix_effectiveness import measure_effectiveness, record_fix
+            from src.enterprise.fix_effectiveness import (
+                evaluate_fix,
+                record_fix,
+                store_measurement,
+            )
 
             _pack = str(out.get("pack_id") or "automotive_nhtsa")
             _cat, _e2, _e3 = _resolve_issue_slice(_pack, out.get("cluster_id"))
+            if out.get("slice_category"):
+                _cat = out.get("slice_category")
+            if out.get("slice_entity_2"):
+                _e2 = out.get("slice_entity_2")
+            if out.get("slice_entity_3"):
+                _e3 = out.get("slice_entity_3")
+            note_text = str(note or "").strip() or (
+                f"investigation {investigation_id} closed by {author}"
+            )
             fix = record_fix(
                 pack_id=_pack,
-                fixed_at=_fixed_raw,
+                fixed_at=close_at,
                 category=_cat,
                 entity_2=_e2,
                 entity_3=_e3,
                 investigation_id=investigation_id,
-                note=f"investigation {investigation_id} closed by {author}",
+                note=note_text[:500],
+                control_entity_2=_clean_slice_value(control_entity_2),
+                control_entity_3=_clean_slice_value(control_entity_3),
             )
-            try:
-                meas = measure_effectiveness(
-                    pack_id=_pack,
-                    fixed_at=_fixed_raw,
-                    category=_cat,
-                    entity_2=_e2,
-                    entity_3=_e3,
-                    window_days=30,
-                )
-            except Exception:
-                meas = {}
+            meas = evaluate_fix(
+                pack_id=_pack,
+                fixed_at=close_at,
+                category=_cat,
+                entity_2=_e2,
+                entity_3=_e3,
+                control_entity_2=fix.get("control_entity_2"),
+                control_entity_3=fix.get("control_entity_3"),
+            )
+            meas = store_measurement(fix["fix_id"], meas)
             out["fix_effectiveness"] = {"fix": fix, "measured": meas}
         except Exception:
             pass
@@ -460,11 +497,11 @@ def ops_metrics(*, window_days: int = 7, include_simulated: bool = False) -> dic
 
 
 def _fix_loop_stats(*, window_days: int = 7) -> dict[str, Any]:
-    """Before/after fix effectiveness + reopen rate (item 37).
+    """Before/after rates plus reopen rate.
 
-    Distinguishes before-fix volume, after-fix volume, resolved (improved),
-    and reopened (fix recorded but investigation open/monitoring again).
-    Bounded: measures at most the 10 most recent fixes.
+    A reopen is the same ``entity_key`` coming back within 90 days of the
+    fix. It is not an investigation that is still open after a fix row
+    was written. Bounded: the 10 most recent fixes.
     """
     try:
         with ops_con(read_only=True) as con:
@@ -472,62 +509,84 @@ def _fix_loop_stats(*, window_days: int = 7) -> dict[str, Any]:
                 fixes = con.execute(
                     """
                     SELECT fix_id, pack_id, investigation_id, category,
-                           entity_2, entity_3, fixed_at
+                           entity_2, entity_3, fixed_at, control_entity_2,
+                           control_entity_3
                     FROM recorded_fixes
                     ORDER BY fixed_at DESC LIMIT 10
                     """
                 ).fetchall()
             except Exception:
-                fixes = []
-            open_with_fix = 0
-            try:
-                open_with_fix = con.execute(
-                    """
-                    SELECT COUNT(*) FROM investigations i
-                    WHERE i.status IN ('open', 'monitoring')
-                      AND EXISTS (
-                          SELECT 1 FROM recorded_fixes f
-                          WHERE f.investigation_id = i.investigation_id
-                      )
-                    """
-                ).fetchone()[0]
-            except Exception:
-                open_with_fix = 0
+                try:
+                    fixes = con.execute(
+                        """
+                        SELECT fix_id, pack_id, investigation_id, category,
+                               entity_2, entity_3, fixed_at, NULL, NULL
+                        FROM recorded_fixes
+                        ORDER BY fixed_at DESC LIMIT 10
+                        """
+                    ).fetchall()
+                except Exception:
+                    fixes = []
     except Exception:
         return {"fixes_recorded": 0, "reopened": 0, "reopen_rate": 0.0,
                 "resolved": 0, "series": []}
     series = []
     resolved = 0
+    reopened = 0
     try:
-        from src.enterprise.fix_effectiveness import measure_effectiveness
+        from src.enterprise.fix_effectiveness import (
+            entity_keys_before_fix,
+            evaluate_fix,
+            is_reopen,
+        )
 
-        for fix_id, pack_id, _inv, category, e2, e3, fixed_at in fixes:
+        for fix_id, pack_id, _inv, category, e2, e3, fixed_at, ctrl2, ctrl3 in fixes:
+            if fixed_at is None:
+                continue
+            pack = str(pack_id or "automotive_nhtsa")
+            cat = str(category or "") or None
             try:
-                meas = measure_effectiveness(
-                    pack_id=str(pack_id or "automotive_nhtsa"),
+                meas = evaluate_fix(
+                    pack_id=pack,
                     fixed_at=fixed_at,
-                    category=str(category or ""),
+                    category=cat,
                     entity_2=str(e2 or "") or None,
                     entity_3=str(e3 or "") or None,
-                    window_days=30,
+                    control_entity_2=str(ctrl2 or "") or None,
+                    control_entity_3=str(ctrl3 or "") or None,
                 )
             except Exception:
                 continue
-            improved = bool(meas.get("improved"))
+            improved = meas.get("status") == "improved"
             resolved += 1 if improved else 0
             series.append({
                 "fix_id": fix_id,
                 "category": category,
+                "fixed_at": meas.get("fixed_at"),
                 "before_count": meas.get("before_count"),
                 "after_count": meas.get("after_count"),
                 "before_rate": meas.get("before_rate"),
                 "after_rate": meas.get("after_rate"),
+                "diff_in_diff": meas.get("diff_in_diff"),
+                "status": meas.get("status"),
                 "improved": improved,
             })
+            try:
+                keys = entity_keys_before_fix(
+                    pack, category=cat, entity_2=str(e2 or "") or None, fixed_at=fixed_at,
+                )
+                if any(
+                    is_reopen(pack, entity_key=key, category=cat or "", fixed_at=fixed_at).get(
+                        "reopened"
+                    )
+                    for key in keys
+                ):
+                    reopened += 1
+            except Exception:
+                pass
     except Exception:
         pass
     total = len(fixes)
-    reopened = int(open_with_fix or 0)
     return {
         "fixes_recorded": total,
         "resolved": resolved,

@@ -20,6 +20,9 @@ def _ensure_workspace_schema(con) -> None:
     for stmt in (
         "ALTER TABLE investigations ADD COLUMN assignee VARCHAR",
         "ALTER TABLE investigations ADD COLUMN sla_due_at TIMESTAMP",
+        "ALTER TABLE investigations ADD COLUMN slice_category VARCHAR",
+        "ALTER TABLE investigations ADD COLUMN slice_entity_2 VARCHAR",
+        "ALTER TABLE investigations ADD COLUMN slice_entity_3 VARCHAR",
     ):
         try:
             con.execute(stmt)
