@@ -39,6 +39,7 @@ import {
   CALL_STATE,
   BARGE_IN_GRACE_MS,
   looksLikeAgentEcho,
+  shouldRetainBargeInUtterance,
   POST_TTS_COOLDOWN_MS,
 } from './dashboard/src/voiceHelpers.js';
 
@@ -118,6 +119,31 @@ out.acceptDuringCooldown = shouldAcceptSpeechResult({
 });
 out.echoHurt = looksLikeAgentEcho('is anyone hurt', 'Is anyone hurt in this incident?');
 out.echoNo = looksLikeAgentEcho('2019 Honda CR-V', 'Is anyone hurt in this incident?');
+out.echoSafeAnswer = looksLikeAgentEcho('Yes, I am in a safe location', 'Are you in a safe location?');
+out.echoHurtAnswer = looksLikeAgentEcho('No one is hurt', 'Is anyone hurt?');
+out.echoHonda = looksLikeAgentEcho('No, not Honda', 'Just to confirm, I heard Honda.');
+const bargeNow = Date.now();
+out.bargeNo = shouldAcceptSpeechResult({
+  speaking: false,
+  wsOpen: true,
+  listenReadyAt: bargeNow + 5000,
+  now: bargeNow,
+  text: 'No!',
+  interrupting: true,
+});
+out.bargeEmergency = shouldAcceptSpeechResult({
+  speaking: false,
+  wsOpen: true,
+  listenReadyAt: bargeNow + 5000,
+  now: bargeNow,
+  text: 'the car is on fire',
+  interrupting: true,
+});
+out.bargeKept = shouldRetainBargeInUtterance('No!', {
+  interrupting: true,
+  now: bargeNow,
+  listenReadyAt: bargeNow + 5000,
+});
 out.cooldownMs = POST_TTS_COOLDOWN_MS;
 
 const slots = buildSlotEntries(
@@ -190,6 +216,12 @@ def test_shipped_helpers_via_node():
     assert out["acceptDuringCooldown"] is False
     assert out["echoHurt"] is True
     assert out["echoNo"] is False
+    assert out["echoSafeAnswer"] is False
+    assert out["echoHurtAnswer"] is False
+    assert out["echoHonda"] is False
+    assert out["bargeNo"] is True
+    assert out["bargeEmergency"] is True
+    assert out["bargeKept"] == "No!"
     assert out["cooldownMs"] >= 400
 
     labels = {s["label"] for s in out["slots"]}

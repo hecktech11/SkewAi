@@ -177,7 +177,7 @@ The MCP server is read-only: packs, spikes, investigations, one investigation br
     "skew": {
       "command": "python3",
       "args": ["-m", "src.mcp_server"],
-      "cwd": "/absolute/path/to/v2_ai_rca_tool",
+      "cwd": "/absolute/path/to/SkewAi",
       "env": {"FRONTLINE_OPEN_MODE": "1"}
     }
   }

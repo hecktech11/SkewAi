@@ -77,10 +77,26 @@ CREATE TABLE IF NOT EXISTS cluster_build_assignments (
 """
 
 
+CLUSTER_BUILD_SCORECARDS_DDL = """
+CREATE TABLE IF NOT EXISTS cluster_build_scorecards (
+    pack_id            VARCHAR NOT NULL,
+    embedding_version  VARCHAR NOT NULL,
+    model_key          VARCHAR NOT NULL,
+    dataset_id         VARCHAR NOT NULL,
+    thresholds_json    VARCHAR NOT NULL,
+    scorecard_json     VARCHAR NOT NULL,
+    approved           BOOLEAN NOT NULL,
+    created_at         TIMESTAMP,
+    PRIMARY KEY (pack_id, embedding_version, model_key, dataset_id, thresholds_json)
+)
+"""
+
+
 def ensure_cluster_build_tables(con) -> None:
     con.execute(CLUSTER_BUILDS_DDL)
     con.execute(CLUSTER_BUILD_CLUSTERS_DDL)
     con.execute(CLUSTER_BUILD_ASSIGNMENTS_DDL)
+    con.execute(CLUSTER_BUILD_SCORECARDS_DDL)
     try:
         con.execute(
             "ALTER TABLE cluster_lineage ADD COLUMN correspondence_kind VARCHAR"
@@ -497,8 +513,141 @@ def rebuild_cluster_build(
     return report
 
 
+def _semantic_embedding_version(version: str | None) -> bool:
+    text = str(version or "").lower()
+    return "semantic" in text or "minilm" in text
+
+
+def _scorecard_has_retrieval_metrics(scorecard: dict[str, Any]) -> bool:
+    blob = json.dumps(scorecard).lower()
+    return "recall" in blob and "ndcg" in blob
+
+
+def approve_retrieval_scorecard(
+    pack_id: str,
+    *,
+    embedding_version: str,
+    dataset_id: str,
+    thresholds: dict[str, Any] | None = None,
+    scorecard: dict[str, Any] | None = None,
+    model_key: str = "",
+) -> dict[str, Any]:
+    """Store the scorecard a semantic build must match before it can go active."""
+    from src.data.timeutil import utc_now
+
+    card = dict(scorecard or {})
+    if card.get("approved") is not True:
+        raise ValueError("retrieval scorecard is not approved")
+    if not _scorecard_has_retrieval_metrics(card):
+        raise ValueError("retrieval scorecard must include recall and ndcg")
+    version = str(embedding_version or "").strip()
+    dataset = str(dataset_id or "").strip()
+    if not version or not dataset:
+        raise ValueError("embedding_version and dataset_id are required")
+    thresh = json.dumps(dict(thresholds or {}), sort_keys=True)
+    now = utc_now().replace(tzinfo=None)
+    key = str(model_key or "")
+    with domain_con(pack_id, read_only=False) as con:
+        ensure_cluster_build_tables(con)
+        con.execute(
+            """
+            INSERT INTO cluster_build_scorecards (
+                pack_id, embedding_version, model_key, dataset_id,
+                thresholds_json, scorecard_json, approved, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, TRUE, ?)
+            ON CONFLICT (pack_id, embedding_version, model_key, dataset_id, thresholds_json)
+            DO UPDATE SET
+                scorecard_json = excluded.scorecard_json,
+                approved = excluded.approved,
+                created_at = excluded.created_at
+            """,
+            [pack_id, version, key, dataset, thresh, json.dumps(card, sort_keys=True), now],
+        )
+    return {
+        "approved": True,
+        "pack_id": pack_id,
+        "embedding_version": version,
+        "model_key": key,
+        "dataset_id": dataset,
+        "thresholds": json.loads(thresh),
+    }
+
+
+def _approved_scorecard_rows(con, pack_id: str, version: str) -> list[tuple]:
+    try:
+        return con.execute(
+            """
+            SELECT model_key, dataset_id, thresholds_json, scorecard_json, approved
+            FROM cluster_build_scorecards
+            WHERE pack_id = ? AND embedding_version = ? AND approved = TRUE
+            """,
+            [pack_id, version],
+        ).fetchall()
+    except Exception:
+        return []
+
+
+def _scorecard_rows_match(
+    rows: list[tuple],
+    *,
+    dataset_id: str | None = None,
+    thresholds: dict[str, Any] | None = None,
+    model_key: str | None = None,
+) -> bool:
+    want_thresh = None if thresholds is None else json.dumps(dict(thresholds), sort_keys=True)
+    for row_key, row_dataset, row_thresh, row_card, approved in rows:
+        if not approved:
+            continue
+        if model_key is not None and str(row_key or "") != str(model_key):
+            continue
+        if dataset_id is not None and str(row_dataset or "") != str(dataset_id):
+            continue
+        if want_thresh is not None and str(row_thresh or "") != want_thresh:
+            continue
+        try:
+            card = json.loads(row_card or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(card, dict) and card.get("approved") is True and _scorecard_has_retrieval_metrics(card):
+            return True
+    return False
+
+
+def retrieval_scorecard_approved(
+    pack_id: str,
+    embedding_version: str,
+    *,
+    dataset_id: str | None = None,
+    thresholds: dict[str, Any] | None = None,
+    model_key: str | None = None,
+) -> bool:
+    """True when an approved scorecard matches this model, pack, dataset, and thresholds.
+
+    Hash builds are not semantic promotions, so they do not need a scorecard.
+    """
+    version = str(embedding_version or "")
+    if not _semantic_embedding_version(version):
+        return True
+    with domain_con(pack_id, read_only=False) as con:
+        try:
+            ensure_cluster_build_tables(con)
+        except Exception:
+            return False
+        rows = _approved_scorecard_rows(con, pack_id, version)
+    return _scorecard_rows_match(
+        rows,
+        dataset_id=dataset_id,
+        thresholds=thresholds,
+        model_key=model_key,
+    )
+
+
 def activate_cluster_build(pack_id: str, build_id: str) -> dict[str, Any]:
-    """Mark a built version active without deleting prior builds."""
+    """Mark a built version active without deleting prior builds.
+
+    A semantic or MiniLM version stays inactive until an approved retrieval
+    scorecard exists for that exact embedding version and pack.
+    """
     from src.data.timeutil import utc_now
 
     with domain_con(pack_id, read_only=False) as con:
@@ -511,6 +660,13 @@ def activate_cluster_build(pack_id: str, build_id: str) -> dict[str, Any]:
             raise ValueError(f"cluster build {build_id} not found")
         if row[0] not in {"built", "active", "superseded", "rolled_back"}:
             raise ValueError(f"cannot activate cluster build in status {row[0]!r}")
+        if _semantic_embedding_version(str(row[1] or "")) and not _scorecard_rows_match(
+            _approved_scorecard_rows(con, pack_id, str(row[1] or ""))
+        ):
+            raise ValueError(
+                "semantic cluster build requires an approved retrieval scorecard "
+                "for this model, pack, dataset, and thresholds"
+            )
         now = utc_now().replace(tzinfo=None)
         con.execute(
             """
@@ -585,6 +741,8 @@ __all__ = [
     "list_cluster_builds",
     "rebuild_cluster_build",
     "activate_cluster_build",
+    "approve_retrieval_scorecard",
+    "retrieval_scorecard_approved",
     "rollback_cluster_build",
     "clusters_for_build",
 ]

@@ -599,12 +599,6 @@ def _extract_request_key(request: Request | None, x_api_key: Any, authorization:
             key = parts[1].strip()
         else:
             key = authorization.strip()
-    if not key and request:
-        try:
-            val = request.query_params.get("api_key")
-            key = val.strip() if isinstance(val, str) else ""
-        except Exception:
-            pass
     return key
 
 

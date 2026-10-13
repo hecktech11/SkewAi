@@ -102,11 +102,65 @@ export function mapInteractionEnded(msg) {
  * Should SpeechRecognition process a result right now?
  * Ignore customer STT while agent TTS is playing (unless barge-in already stopped TTS).
  */
-export function shouldAcceptSpeechResult({ speaking, wsOpen, listenReadyAt = 0, now = 0 }) {
+const ANSWER_MARKERS = new Set([
+  "yes", "yeah", "yep", "yup", "yea", "no", "nope", "nah", "not", "nobody", "none",
+]);
+
+const EMERGENCY_UTTERANCE = /\b(fire|smoke|crash|hurt|hurts|bleeding|injured|injury|help|emergency|ambulance|trapped|cut)\b/;
+
+function _hasCallerAnswerMarker(heardNorm, agentNorm) {
+  const agentWords = new Set(String(agentNorm || "").split(" ").filter(Boolean));
+  return String(heardNorm || "")
+    .split(" ")
+    .some((word) => ANSWER_MARKERS.has(word) && !agentWords.has(word));
+}
+
+/**
+ * Keep the words that interrupted playback.
+ * A short "No!" or an emergency phrase survives the post-TTS cooldown.
+ * Ordinary bleed during that cooldown is still dropped.
+ */
+export function shouldRetainBargeInUtterance(text, opts = {}) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  const norm = _normUtterance(raw);
+  const shortNo = /^(no|nope|nah|stop|wait)$/.test(norm);
+  const emergency = EMERGENCY_UTTERANCE.test(norm);
+  const interrupting = Boolean(opts.interrupting);
+  // The utterance that stopped playback is the caller's, including "No!".
+  if (interrupting) return raw;
+  const ts = opts.now || Date.now();
+  const ready = opts.listenReadyAt || 0;
+  const inCooldown = Boolean(ready) && ts < ready;
+  if (inCooldown && (shortNo || emergency)) return raw;
+  return "";
+}
+
+export function shouldAcceptSpeechResult({
+  speaking,
+  wsOpen,
+  listenReadyAt = 0,
+  now = 0,
+  text = "",
+  interrupting = false,
+}) {
   if (!wsOpen) return false;
-  if (speaking) return false;
+  if (speaking && !interrupting) return false;
   const ts = now || Date.now();
-  if (listenReadyAt && ts < listenReadyAt) return false;
+  const inCooldown = Boolean(listenReadyAt) && ts < listenReadyAt;
+  if (inCooldown && !interrupting) {
+    if (text && shouldRetainBargeInUtterance(text, { now: ts, listenReadyAt })) return true;
+    return false;
+  }
+  if (interrupting && String(text || "").trim()) {
+    const kept = shouldRetainBargeInUtterance(text, {
+      interrupting: true,
+      now: ts,
+      listenReadyAt,
+    });
+    return Boolean(kept);
+  }
+  if (inCooldown) return false;
   return true;
 }
 
@@ -135,8 +189,13 @@ export function looksLikeAgentEcho(heard, agentText) {
   const a = _normUtterance(heard);
   const b = _normUtterance(agentText);
   if (!a || !b || a.length < 4) return false;
+  if (a === b) return true;
+  // Verbatim playback of the agent line, or a long slice of it.
   if (b.includes(a) && a.length >= 6) return true;
   if (a.includes(b) && b.length >= 10) return true;
+  // A real answer that adds yes/no/not the agent did not say is not echo,
+  // even when it repeats the question's own words.
+  if (_hasCallerAnswerMarker(a, b)) return false;
   const ta = a.split(" ").filter((w) => w.length > 3);
   const tb = new Set(b.split(" ").filter((w) => w.length > 3));
   if (!ta.length || !tb.size) return false;
@@ -343,4 +402,119 @@ export function transcriptFromResume(turns) {
       interim: false,
     }));
   return rows.length ? rows : null;
+}
+
+/** Quiet listen this long with no speech before the agent asks again. */
+export const IDLE_LISTEN_REPROMPT_MS = 8000;
+
+/**
+ * End-of-turn follows speech activity, not only a final-result timer.
+ * An interim that is still inside the debounce must not flush.
+ * A listen with no speech can ask the caller to continue.
+ */
+export function decideSpeechFinal({
+  lastSpeechAt = 0,
+  lastInterimAt = 0,
+  committedAt = 0,
+  now = 0,
+  debounceMs = 1400,
+  idleRepromptMs = IDLE_LISTEN_REPROMPT_MS,
+  listeningSince = 0,
+} = {}) {
+  const interimAt = Number(lastInterimAt) || 0;
+  const committed = Number(committedAt) || 0;
+  const latest = Math.max(interimAt, committed, Number(lastSpeechAt) || 0);
+  const interimOpen = interimAt > 0 && interimAt >= committed && (now - interimAt) < debounceMs;
+  if (interimOpen) {
+    return { flush: false, reprompt: false, reason: "interim" };
+  }
+  if (latest > 0 && (now - latest) >= debounceMs) {
+    return { flush: true, reprompt: false, reason: "committed" };
+  }
+  const idle = latest === 0 && Number(listeningSince) > 0 && (now - Number(listeningSince)) >= idleRepromptMs;
+  if (idle) {
+    return { flush: false, reprompt: true, reason: "idle" };
+  }
+  return { flush: false, reprompt: false, reason: "waiting" };
+}
+
+/**
+ * Browser turn queue. A send stays pending until the server ack.
+ * A retry keeps the same turn id. A duplicate after ack returns that outcome.
+ */
+export function createTurnQueue() {
+  const turns = new Map();
+  return {
+    submit(turnId, text) {
+      const id = String(turnId || "").trim();
+      if (!id) {
+        return { status: "rejected", accepted: false, reason: "missing_turn_id" };
+      }
+      const existing = turns.get(id);
+      if (existing && existing.accepted) {
+        return {
+          status: "duplicate",
+          accepted: true,
+          turnId: id,
+          text: existing.text,
+          outcome: existing.outcome,
+        };
+      }
+      if (existing && !existing.accepted) {
+        return {
+          status: "pending",
+          accepted: false,
+          turnId: id,
+          text: existing.text,
+        };
+      }
+      const row = {
+        turnId: id,
+        text: String(text || ""),
+        status: "pending",
+        accepted: false,
+        outcome: null,
+      };
+      turns.set(id, row);
+      return { status: "pending", accepted: false, turnId: id, text: row.text };
+    },
+    acknowledge(turnId, outcome) {
+      const id = String(turnId || "").trim();
+      const existing = turns.get(id);
+      if (!existing) {
+        return { status: "rejected", accepted: false, reason: "unknown_turn" };
+      }
+      const status = String((outcome && outcome.status) || "accepted");
+      existing.accepted = true;
+      existing.outcome = outcome || { status };
+      existing.status = status;
+      turns.set(id, existing);
+      return {
+        status,
+        accepted: true,
+        turnId: id,
+        outcome: existing.outcome,
+        duplicate: status === "duplicate",
+      };
+    },
+  };
+}
+
+/** Live only after the socket is open, authenticated, and attached. */
+export function socketIsLive({ open = false, authenticated = false, attached = false } = {}) {
+  return Boolean(open && authenticated && attached);
+}
+
+const PLAYBACK_STATES = new Set(["queued", "started", "completed", "failed", "interrupted"]);
+
+/** Playback state machine. Unknown events leave the previous state in place. */
+export function advancePlayback(current, event) {
+  const prev = current && typeof current === "object" ? current : { status: "", text: "", utteranceId: "" };
+  const status = String((event && (event.status || event.event)) || "");
+  if (!PLAYBACK_STATES.has(status)) return { ...prev };
+  const text = event && event.text != null ? String(event.text) : String(prev.text || "");
+  const utteranceId = String(
+    (event && (event.utteranceId || event.utterance_id)) || prev.utteranceId || ""
+  );
+  return { status, text, utteranceId };
 }

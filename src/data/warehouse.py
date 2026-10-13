@@ -53,17 +53,12 @@ def ops_con(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:
     short-lived write-capable connection. ``read_only`` is accepted for API
     compatibility but does not open a separate RO configuration.
 
-    When FRONTLINE_OPS_DSN is configured for PostgreSQL (audit 6.1), delegates
-    directly to the multi-writer Postgres pool to eliminate lock contention.
+    A nonempty operations DSN (FRONTLINE_OPS_DSN, DATABASE_URL, or
+    POSTGRES_DSN) is rejected here, before DuckDB is opened.
     """
-    from src.data.postgres_backend import is_production_backend, ops_connection
+    from src.data.postgres_backend import reject_unsupported_ops_dsn
 
-    if is_production_backend():
-        raise RuntimeError(
-            "FRONTLINE_OPS_DSN is configured, but PostgreSQL mode is unsupported in this release: "
-            "the dialect layer and schema migrations require DuckDB. "
-            "Unset FRONTLINE_OPS_DSN."
-        )
+    reject_unsupported_ops_dsn()
 
     global _ops_initialized
     path = settings.frontline_db_path
@@ -182,6 +177,9 @@ def domain_con(pack_id: str, read_only: bool = True) -> Iterator[duckdb.DuckDBPy
 def init_ops_db() -> None:
     """Force-create the ops warehouse with schema applied."""
     global _ops_initialized
+    from src.data.postgres_backend import reject_unsupported_ops_dsn
+
+    reject_unsupported_ops_dsn()
     path = settings.frontline_db_path
     _ensure_parent(path)
     with _ops_lock:

@@ -14,6 +14,12 @@ def persist_turn(interaction_id: str, turn: dict[str, Any]) -> None:
     turn_id = turn.get("turn_id")
     if not turn_id or not interaction_id:
         return
+    from src.frontline.dsr import is_interaction_erased
+
+    if is_interaction_erased(interaction_id):
+        raise RuntimeError(
+            f"interaction {interaction_id} has been erased; transcript writes blocked"
+        )
     raw_ts = turn.get("ts")
     ts = to_naive_utc(raw_ts) if raw_ts is not None else utc_now()
     speaker = turn.get("speaker") or "customer"

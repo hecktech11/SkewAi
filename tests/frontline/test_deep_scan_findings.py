@@ -528,12 +528,17 @@ def test_rows_17_and_21_query_dsr_key_resolves_to_dsr_officer(reset_ops_db, monk
     monkeypatch.setenv("FRONTLINE_DSR_API_KEY", "dsr_secret_key")
 
     with TestClient(app) as client:
-        # Supplying DSR key via query param on audit export route must NOT pass audit:read
+        # A DSR key only in the query string does not authenticate.
         r = client.get(
             "/api/frontline/audits/export?api_key=dsr_secret_key"
         )
-        # dsr_officer has dsr permissions, but lacks audit:read -> 403
-        assert r.status_code == 403
+        assert r.status_code == 401
+        # The same key in the header is the dsr_officer and lacks audit:read.
+        header = client.get(
+            "/api/frontline/audits/export",
+            headers={"X-API-Key": "dsr_secret_key"},
+        )
+        assert header.status_code == 403
 
 
 # ── Row 18: Remote PostgreSQL connections require verified TLS ──

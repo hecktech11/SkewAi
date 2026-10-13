@@ -44,6 +44,17 @@ def _ensure(con) -> None:
         )
     except Exception:
         pass
+    for ddl in (
+        "ALTER TABLE diagnostic_answers ADD COLUMN provenance VARCHAR",
+        "ALTER TABLE diagnostic_answers ADD COLUMN polarity VARCHAR",
+        "ALTER TABLE diagnostic_answers ADD COLUMN uncertainty VARCHAR",
+        "ALTER TABLE diagnostic_answers ADD COLUMN symptom VARCHAR",
+        "ALTER TABLE diagnostic_answers ADD COLUMN source_turn VARCHAR",
+    ):
+        try:
+            con.execute(ddl)
+        except Exception:
+            pass
 
 
 def register_question(
@@ -73,11 +84,33 @@ def register_question(
     }
 
 
+def _open_hypotheses(hypotheses: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    out = []
+    for row in hypotheses or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("open", True) is False:
+            continue
+        if row.get("category"):
+            out.append(row)
+    return out
+
+
+def _splits_open_hypotheses(category: str | None, hypotheses: list[dict[str, Any]] | None) -> bool:
+    """True when this question's category belongs to exactly one still-open hypothesis."""
+    open_rows = _open_hypotheses(hypotheses)
+    if len(open_rows) < 2 or not category:
+        return False
+    owners = [row for row in open_rows if str(row.get("category")) == str(category)]
+    return 0 < len(owners) < len(open_rows)
+
+
 def next_question(
     pack_id: str,
     slots: dict[str, Any] | None = None,
     *,
     interaction_id: str | None = None,
+    hypotheses: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """First matching unanswered question (item 35: no duplicate questioning).
 
@@ -88,32 +121,55 @@ def next_question(
     slots = slots or {}
     cat = (slots.get("category") or "").strip()
     ent = (slots.get("entity_2") or "").strip()
-    answered: set[str] = set()
-    rows = []
-    with ops_con(read_only=True) as con:
+
+    def _load(con):
+        answered_ids: set[str] = set()
+        if interaction_id:
+            answered_ids = {
+                str(r[0])
+                for r in con.execute(
+                    "SELECT question_id FROM diagnostic_answers WHERE interaction_id = ?",
+                    [interaction_id],
+                ).fetchall()
+            }
+        found = con.execute(
+            """
+            SELECT question_id, prompt, category, entity_2
+            FROM diagnostic_questions WHERE pack_id = ?
+            ORDER BY created_at
+            """,
+            [pack_id],
+        ).fetchall()
+        return answered_ids, found
+
+    # A read-only connection cannot CREATE or ALTER, even when the table
+    # already exists. Read first. Create the tables only if that read fails.
+    try:
+        with ops_con(read_only=True) as con:
+            answered, rows = _load(con)
+    except Exception:
         try:
-            _ensure(con)
-            if interaction_id:
-                answered = {
-                    str(r[0])
-                    for r in con.execute(
-                        "SELECT question_id FROM diagnostic_answers WHERE interaction_id = ?",
-                        [interaction_id],
-                    ).fetchall()
-                }
-            rows = con.execute(
-                """
-                SELECT question_id, prompt, category, entity_2
-                FROM diagnostic_questions WHERE pack_id = ?
-                ORDER BY created_at
-                """,
-                [pack_id],
-            ).fetchall()
+            with ops_con() as con:
+                _ensure(con)
+                answered, rows = _load(con)
         except Exception:
             return None
+    pending = []
     for qid, prompt, qcat, qent in rows:
         if str(qid) in answered:
             continue
+        pending.append((qid, prompt, qcat, qent))
+    # A question that separates two open hypotheses wins over first-match order.
+    for qid, prompt, qcat, qent in pending:
+        if _splits_open_hypotheses(qcat, hypotheses):
+            return {
+                "question_id": qid,
+                "prompt": prompt,
+                "category": qcat,
+                "entity_2": qent,
+                "splits_hypotheses": True,
+            }
+    for qid, prompt, qcat, qent in pending:
         if qcat and cat and str(qcat) != cat:
             continue
         if qent and ent and str(qent) != ent:
@@ -123,8 +179,77 @@ def next_question(
             "prompt": prompt,
             "category": qcat,
             "entity_2": qent,
+            "splits_hypotheses": False,
         }
     return None
+
+
+_HAZARD_WORDS = (
+    "smoke", "fire", "grind", "grinding", "brake", "brakes", "leak",
+    "stall", "stalled", "cut", "noise", "squeal", "injury", "hurt",
+)
+_UNCERTAIN_RE = re.compile(r"\b(maybe|think|not sure|unsure|might|possibly)\b", re.I)
+_LEAD_NO = re.compile(r"^(no|nope|nah)\b", re.I)
+_LEAD_YES = re.compile(r"^(yes|yeah|yep|yup|yea)\b", re.I)
+
+
+def classify_diagnostic_answer(prompt: str, answer: str) -> dict[str, str]:
+    """Polarity, uncertainty, and the symptom constraint an answer adds."""
+    text = (answer or "").strip()
+    low = text.lower()
+    uncertain = "uncertain" if _UNCERTAIN_RE.search(low) else "stated"
+    if _LEAD_NO.search(low):
+        polarity = "no"
+    elif _LEAD_YES.search(low):
+        polarity = "yes"
+    elif text:
+        polarity = "descriptive"
+    else:
+        polarity = "unknown"
+    blob = f"{prompt or ''} {text}".lower()
+    source = blob if polarity == "yes" else low
+    if polarity == "no":
+        symptom = ""
+    else:
+        symptom = " ".join(word for word in _HAZARD_WORDS if re.search(rf"\b{re.escape(word)}\b", source))
+    return {
+        "polarity": polarity,
+        "uncertainty": uncertain,
+        "symptom": symptom,
+        "provenance": "customer_turn",
+    }
+
+
+def effective_symptom_text(description: str, answers: list[dict[str, Any]] | None = None) -> str:
+    """Description plus affirmed diagnostic symptoms. A 'no' does not add the hazard."""
+    parts = [(description or "").strip()]
+    for row in answers or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("polarity") or "").lower() == "no":
+            continue
+        symptom = str(row.get("symptom") or "").strip()
+        if symptom:
+            parts.append(symptom)
+        elif str(row.get("polarity") or "").lower() == "yes":
+            extra = str(row.get("answer") or "").strip()
+            if extra:
+                parts.append(extra)
+    return " ".join(part for part in parts if part).strip()
+
+
+def symptom_text_for_ctx(ctx: Any) -> str:
+    """Symptom text the live severity and retrieval paths should score."""
+    slots = getattr(ctx, "slots", None) or {}
+    base = str(slots.get("description") or "")
+    iid = getattr(ctx, "interaction_id", None)
+    answers: list[dict[str, Any]] = []
+    if iid:
+        try:
+            answers = answers_for_interaction(str(iid))
+        except Exception:
+            answers = []
+    return effective_symptom_text(base, answers)
 
 
 def record_elicitation_answer(
@@ -134,6 +259,11 @@ def record_elicitation_answer(
     *,
     prompt: str = "",
     confirmed: bool = True,
+    provenance: str = "",
+    polarity: str = "",
+    uncertainty: str = "",
+    symptom: str = "",
+    source_turn: str = "",
 ) -> dict[str, Any]:
     """Persist a diagnostic answer with provenance (item 35).
 
@@ -141,7 +271,16 @@ def record_elicitation_answer(
     stored text rather than duplicating the question. Returns the record —
     investigators attach it to the brief, case agents to hypotheses.
     """
+    judged = classify_diagnostic_answer(prompt, answer)
+    provenance = provenance or judged["provenance"]
+    polarity = polarity or judged["polarity"]
+    uncertainty = uncertainty or judged["uncertainty"]
+    if symptom == "" and "symptom" not in (answer or ""):
+        symptom = judged["symptom"]
+    elif not symptom:
+        symptom = judged["symptom"]
     aid = "da_" + new_ulid()
+    stored_answer = answer.strip()[:1000]
     with ops_con() as con:
         _ensure(con)
         existing = con.execute(
@@ -152,48 +291,68 @@ def record_elicitation_answer(
             con.execute(
                 """
                 UPDATE diagnostic_answers
-                SET answer = ?, prompt = ?, confirmed = ?, created_at = ?
+                SET answer = ?, prompt = ?, confirmed = ?, created_at = ?,
+                    provenance = ?, polarity = ?, uncertainty = ?, symptom = ?,
+                    source_turn = ?
                 WHERE interaction_id = ? AND question_id = ?
                 """,
-                [answer.strip()[:1000], prompt[:500], confirmed, utc_now(),
+                [stored_answer, prompt[:500], confirmed, utc_now(),
+                 provenance[:80], polarity[:20], uncertainty[:20], symptom[:200],
+                 (source_turn or stored_answer)[:300],
                  interaction_id, question_id],
             )
             return {
                 "answer_id": existing[0], "interaction_id": interaction_id,
                 "question_id": question_id, "prompt": prompt,
-                "answer": answer.strip()[:1000], "updated": True,
+                "answer": stored_answer, "updated": True,
+                "provenance": provenance, "polarity": polarity,
+                "uncertainty": uncertainty, "symptom": symptom,
             }
         con.execute(
             """
             INSERT INTO diagnostic_answers
-            (answer_id, interaction_id, question_id, prompt, answer, confirmed, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (answer_id, interaction_id, question_id, prompt, answer, confirmed, created_at,
+             provenance, polarity, uncertainty, symptom, source_turn)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [aid, interaction_id, question_id, prompt[:500],
-             answer.strip()[:1000], confirmed, utc_now()],
+             stored_answer, confirmed, utc_now(),
+             provenance[:80], polarity[:20], uncertainty[:20], symptom[:200],
+             (source_turn or stored_answer)[:300]],
         )
     return {
         "answer_id": aid, "interaction_id": interaction_id,
         "question_id": question_id, "prompt": prompt,
-        "answer": answer.strip()[:1000], "updated": False,
+        "answer": stored_answer, "updated": False,
+        "provenance": provenance, "polarity": polarity,
+        "uncertainty": uncertainty, "symptom": symptom,
     }
 
 
 def answers_for_interaction(interaction_id: str) -> list[dict[str, Any]]:
     """All diagnostic answers for a contact, oldest first (brief attachment)."""
-    with ops_con(read_only=True) as con:
+
+    def _load(con) -> list[dict[str, Any]]:
+        cur = con.execute(
+            """
+            SELECT answer_id, question_id, prompt, answer, confirmed, created_at,
+                   provenance, polarity, uncertainty, symptom, source_turn
+            FROM diagnostic_answers WHERE interaction_id = ?
+            ORDER BY created_at
+            """,
+            [interaction_id],
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    try:
+        with ops_con(read_only=True) as con:
+            return _load(con)
+    except Exception:
         try:
-            _ensure(con)
-            cur = con.execute(
-                """
-                SELECT answer_id, question_id, prompt, answer, confirmed, created_at
-                FROM diagnostic_answers WHERE interaction_id = ?
-                ORDER BY created_at
-                """,
-                [interaction_id],
-            )
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, r)) for r in cur.fetchall()]
+            with ops_con() as con:
+                _ensure(con)
+                return _load(con)
         except Exception:
             return []
 
@@ -239,4 +398,7 @@ __all__ = [
     "record_elicitation_answer",
     "answers_for_interaction",
     "looks_like_confirmation",
+    "classify_diagnostic_answer",
+    "effective_symptom_text",
+    "symptom_text_for_ctx",
 ]

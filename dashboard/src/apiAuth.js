@@ -321,16 +321,6 @@ export async function loginWithPassword({ email, password, remember = false }) {
       notifyAuthChange();
       return { success: true, data };
     }
-    if (r.status === 404 || r.status === 405 || r.status === 501) {
-      _write(SUBJECT_STORAGE, email);
-      notifyAuthChange();
-      return {
-        success: true,
-        mock: true,
-        message: "Signed in (local preview).",
-        user: { email },
-      };
-    }
     const errText = await r.text();
     let detail = "Invalid credentials";
     try {
@@ -344,19 +334,6 @@ export async function loginWithPassword({ email, password, remember = false }) {
     }
     throw new Error(detail);
   } catch (err) {
-    if (
-      String(err.message).includes("Failed to fetch") ||
-      String(err.message).includes("NetworkError")
-    ) {
-      _write(SUBJECT_STORAGE, email);
-      notifyAuthChange();
-      return {
-        success: true,
-        mock: true,
-        message: "Signed in (offline preview).",
-        user: { email },
-      };
-    }
     throw err;
   }
 }

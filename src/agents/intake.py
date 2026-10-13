@@ -393,6 +393,19 @@ def _extract_description(text: str) -> str | None:
     return stripped
 
 
+_SYMPTOM_TOKENS = frozenset({
+    "smoke", "fire", "grind", "grinding", "brake", "brakes", "leak", "leaking",
+    "stall", "stalled", "cut", "noise", "squeal", "squealing",
+})
+
+
+def _new_symptom_words(old: str, new: str) -> bool:
+    """True when `new` names a symptom token the stored description does not."""
+    def tokens(text: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    return bool((tokens(new) & _SYMPTOM_TOKENS) - tokens(old))
+
+
 # ── Kill-switch ─────────────────────────────────────────────────────────────
 
 _SAFETY_ASKED_KEY = "__safety_questions_asked__"
@@ -500,6 +513,158 @@ def _has_term(text: str, terms: frozenset[str]) -> bool:
     return False
 
 
+_LEAD_NO_RE = re.compile(r"^(?:no|nope|nah|negative)\b")
+_LEAD_YES_RE = re.compile(r"^(?:yes|yeah|yep|yup|yea|affirmative)\b")
+_CLAUSE_SPLIT_RE = re.compile(r"[,;.!?\n]+|\b(?:but|however|although)\b")
+_UNSAFE_RE = re.compile(
+    r"\b(?:unsafe|in danger|not safe|isn'?t safe|not in a safe|n't in a safe)\b"
+)
+_WHO_RE = re.compile(
+    r"\b(?:my|our)\s+(son|daughter|child|kid|kids|baby|wife|husband|"
+    r"mom|dad|mother|father|passenger|friend)\b"
+)
+_ASSESS_TERMS = (
+    "fire", "smoke", "crash", "cut", "hurt", "hurts", "injured", "injury",
+    "injuries", "bleeding", "limping", "sore", "trapped", "wound",
+)
+
+
+def _split_safety_clauses(text: str) -> list[str]:
+    return [part.strip() for part in _CLAUSE_SPLIT_RE.split(text or "") if part and part.strip()]
+
+
+def _occurrence_blocked(text: str, start: int, *, hedges: bool) -> bool:
+    """True when this one hit is negated (and, if asked, hedged) in its clause."""
+    prefix = (text or "")[_clause_prefix_start(text or "", start):start]
+    tokens = re.findall(r"[a-z0-9']+", prefix)
+    blockers = _NEGATORS | _HEDGES if hedges else _NEGATORS
+    window = tokens[-_HEDGE_WINDOW_TOKENS:]
+    if any(token in blockers for token in window):
+        return True
+    window_text = " ".join(window)
+    return any(
+        phrase in window_text
+        for phrase in (
+            "no one", "no fire", "not on fire", "didn't", "did not",
+            "no injuries", "no injury", "no accident",
+        )
+    )
+
+
+def hazard_term_affirmed(text: str, term: str) -> bool:
+    """True when ``term`` occurs and at least one hit is not negated.
+
+    Shared by intake answers and triage severity. A negated hit such as
+    "no fire" does not count. A later affirmative clause still counts.
+    """
+    lower = (text or "").lower()
+    term_l = (term or "").strip().lower()
+    if not term_l:
+        return False
+    for match in re.finditer(rf"\b{re.escape(term_l)}\b", lower):
+        if not _occurrence_blocked(lower, match.start(), hedges=False):
+            return True
+    return False
+
+
+def _clause_has_affirmed_injury(clause: str) -> bool:
+    for term in _INJURY_STATE_TERMS:
+        if hazard_term_affirmed(clause, term):
+            return True
+    return False
+
+
+def _answer_contradicts(text: str, question: str | None) -> bool:
+    """Leading yes/no disagrees with a later hazard or an unsafe location.
+
+    A single consistent clause ("no everyones fine") is not a contradiction.
+    "No, my son has a cut" and "Yes, but I'm not in a safe location" are.
+    """
+    clauses = _split_safety_clauses(text)
+    if not clauses:
+        return False
+    head = clauses[0]
+    if _LEAD_NO_RE.match(head):
+        lead = "no"
+        rest_head = _LEAD_NO_RE.sub("", head, count=1)
+    elif _LEAD_YES_RE.match(head):
+        lead = "yes"
+        rest_head = _LEAD_YES_RE.sub("", head, count=1)
+    else:
+        return False
+    later = " ".join([rest_head.strip(), *clauses[1:]]).strip()
+    if not later:
+        return False
+    if _clause_has_affirmed_injury(later):
+        injury_polarity = escalate_on_for_prompt(question or "") or "yes"
+        if lead != injury_polarity:
+            return True
+    if lead == "yes" and _UNSAFE_RE.search(later):
+        return True
+    return False
+
+
+def _who_affected(text: str) -> str | None:
+    match = _WHO_RE.search(text or "")
+    if match:
+        return match.group(1)
+    if re.search(r"\b(?:she|he|they|someone|somebody)\b", text or ""):
+        return "other"
+    if re.search(r"\b(?:i'm|im|i am|we|we're)\b", text or ""):
+        return "caller"
+    return None
+
+
+def assess_safety(text: str, question: str | None = None) -> dict[str, Any]:
+    """One safety reading for intake and triage.
+
+    ``polarity`` is what ``classify_answer`` returns. A contradictory answer
+    has polarity None so it is not marked safe. ``spans`` cite the transcript.
+    """
+    raw = text or ""
+    lower = raw.lower()
+    contradictory = bool(lower.strip()) and _answer_contradicts(lower.strip(), question)
+    spans: list[dict[str, Any]] = []
+    for term in _ASSESS_TERMS:
+        for match in re.finditer(rf"\b{re.escape(term)}\b", lower):
+            negated = _occurrence_blocked(lower, match.start(), hedges=False)
+            uncertain = (not negated) and _occurrence_blocked(lower, match.start(), hedges=True)
+            spans.append({
+                "term": term,
+                "start": match.start(),
+                "end": match.end(),
+                "text": raw[match.start():match.end()],
+                "negated": negated,
+                "uncertain": uncertain,
+            })
+    affirmed = [span for span in spans if not span["negated"]]
+    primary = affirmed[0] if affirmed else (spans[0] if spans else None)
+    if contradictory and _clause_has_affirmed_injury(lower):
+        clarification = (
+            "I heard a no, and also that someone is hurt. "
+            + (question or "Is anyone hurt?")
+        )
+    elif contradictory and _UNSAFE_RE.search(lower):
+        clarification = (
+            "I heard yes, and also that you are not in a safe location. "
+            + (question or "Are you in a safe location right now?")
+        )
+    elif contradictory:
+        clarification = "I heard two different answers. " + (question or "Could you say that plainly?")
+    else:
+        clarification = None
+    return {
+        "hazard": None if primary is None else primary["term"],
+        "negated": bool(primary and primary["negated"]),
+        "uncertain": bool(primary and primary["uncertain"]),
+        "who": _who_affected(lower),
+        "spans": spans,
+        "polarity": None if contradictory else classify_answer(question or "", raw) if lower.strip() else None,
+        "contradictory": contradictory,
+        "clarification": clarification,
+    }
+
+
 def classify_answer(question: str, text: str) -> str | None:
     """Polarity of a reply CONDITIONED on the safety question asked.
 
@@ -508,16 +673,20 @@ def classify_answer(question: str, text: str) -> str | None:
     reports without yes/no tokens (*"my son has a cut"*) resolved to ``None``
     (re-asked on a live call). Rules, in order:
 
-    1. explicit leading yes/no token → literal, question-independent;
-    2. negated-injury phrasing → ``no``;
-    3. injury-state assertion → the polarity that escalates *this* question
+    1. a leading yes/no that a later clause contradicts → None (clarify,
+       do not mark safe);
+    2. explicit leading yes/no token → literal, when the rest agrees;
+    3. negated-injury phrasing → ``no``;
+    4. injury-state assertion → the polarity that escalates *this* question
        (injury reported against any safety question stays on the safe side);
-    4. speaker-wellbeing assertion → the opposite of the escalate polarity
+    5. speaker-wellbeing assertion → the opposite of the escalate polarity
        (``im fine`` = ``no`` to "hurt?", ``yes`` to "safe location?");
-    5. anything else → legacy ``classify_yes_no`` (unchanged behavior).
+    6. anything else → legacy ``classify_yes_no`` (unchanged behavior).
     """
     t = (text or "").strip().lower()
     if not t:
+        return None
+    if _answer_contradicts(t, question):
         return None
     if re.match(r"^(no|nope|nah|negative)\b", t):
         return "no"
@@ -527,7 +696,7 @@ def classify_answer(question: str, text: str) -> str | None:
         return "no"
     if re.search(r"\b(not|n't|isnt|isn't)\s+(hurt|injured|bleeding|safe)\b", t):
         return "no"
-    if re.search(r"\b(unsafe|in danger|not safe)\b", t):
+    if _UNSAFE_RE.search(t):
         return "no"
     if re.search(r"\bno\s+(injur\w*|hurt|harmed|bleeding|blood)\b", t):
         return "no"
@@ -555,14 +724,44 @@ def _store_asked_indices(ctx: InteractionContext, asked: set[int]) -> None:
     ctx.slots[_SAFETY_ASKED_KEY] = ",".join(str(i) for i in sorted(asked))
 
 
+_CLAUSE_CONTRAST = re.compile(r"\b(?:but|however|although)\b")
+
+
+def _clause_prefix_start(text: str, pos: int) -> int:
+    """Start of the clause that contains ``pos``.
+
+    Breaks on punctuation and on but/however/although, so an earlier
+    "no fire" does not negate a later affirmative report.
+    """
+    head = text[: max(0, pos)]
+    start = 0
+    for punct in (",", ";", ".", "!", "?", "\n"):
+        found = head.rfind(punct)
+        if found + 1 > start:
+            start = found + 1
+    for match in _CLAUSE_CONTRAST.finditer(head):
+        if match.end() > start:
+            start = match.end()
+    return start
+
+
 def _lexicon_term_negated(cleaned: str, term: str) -> bool:
-    """True when *term* appears only inside a negated injury phrase."""
+    """True when every occurrence of an injury term is negated in its clause."""
     if term.lower() not in _NEGATABLE_LEXICON:
         return False
+    lower = (cleaned or "").lower()
     esc = re.escape(term.lower())
-    if re.search(rf"\b(no|not|nobody|no one|no-one|none|never|n't)\b.{{0,32}}\b{esc}\b", cleaned):
-        return True
-    return False
+    matches = list(re.finditer(rf"\b{esc}\b", lower))
+    if not matches:
+        return False
+    neg = re.compile(
+        r"\b(?:no|not|nobody|no one|no-one|none|never|n't)\b.{0,32}$"
+    )
+    for match in matches:
+        prefix = lower[_clause_prefix_start(lower, match.start()):match.start()]
+        if neg.search(prefix) is None:
+            return False
+    return True
 
 
 def _term_hedged_or_negated(text: str, term: str, *, hedges: bool = True) -> bool:
@@ -572,35 +771,50 @@ def _term_hedged_or_negated(text: str, term: str, *, hedges: bool = True) -> boo
     a smell", "I'm worried it might catch fire", "without any smoke", "I didn't crash",
     "nobody went to the hospital". Category extraction passes hedges=False so
     "worried my brakes failed" still yields SERVICE BRAKES.
+
+    If any occurrence in text is affirmative within its clause, returns False (escalates).
     """
     blockers = _NEGATORS | _HEDGES if hedges else _NEGATORS
     t_lower = (text or "").lower()
     esc = re.escape(term.lower())
-    m = re.search(rf"\b{esc}\b", t_lower)
-    if m:
-        prefix = t_lower[:m.start()]
-        toks = re.findall(r"[a-z0-9'-]+", prefix)
-        if toks:
-            window = toks[-_HEDGE_WINDOW_TOKENS:]
-            if any(w in blockers for w in window):
-                return True
-            win_str = " ".join(window)
-            if any(ph in win_str for ph in ("no one", "no fire", "not on fire", "didn't", "did not", "no injuries", "no accident")):
-                return True
-        return False
+    matches = list(re.finditer(rf"\b{esc}\b", t_lower))
+    if matches:
+        for m in matches:
+            clause_prefix = t_lower[_clause_prefix_start(t_lower, m.start()):m.start()]
+            toks = re.findall(r"[a-z0-9'-]+", clause_prefix)
+            is_match_hedged = False
+            if toks:
+                window = toks[-_HEDGE_WINDOW_TOKENS:]
+                if any(w in blockers for w in window):
+                    is_match_hedged = True
+                else:
+                    win_str = " ".join(window)
+                    if any(ph in win_str for ph in ("no one", "no fire", "not on fire", "didn't", "did not", "no injuries", "no accident")):
+                        is_match_hedged = True
+            if not is_match_hedged:
+                return False
+        return True
 
-    toks = re.findall(r"[a-z0-9']+", t_lower)
-    targets = set(term.lower().split())
-    for i, tok in enumerate(toks):
-        if tok not in targets:
-            continue
-        window = toks[max(0, i - _HEDGE_WINDOW_TOKENS):i]
-        if any(w in blockers for w in window):
-            return True
-        win_str = " ".join(window)
-        if any(ph in win_str for ph in ("no one", "no fire", "not on fire", "didn't", "did not")):
-            return True
-    return False
+    # Whole-term regex missed. Judge every token hit in its own clause.
+    targets = [part for part in term.lower().split() if part]
+    seen = False
+    for part in targets:
+        for match in re.finditer(rf"\b{re.escape(part)}\b", t_lower):
+            seen = True
+            prefix = t_lower[_clause_prefix_start(t_lower, match.start()):match.start()]
+            toks = re.findall(r"[a-z0-9'-]+", prefix)
+            blocked = False
+            if toks:
+                window = toks[-_HEDGE_WINDOW_TOKENS:]
+                if any(token in blockers for token in window):
+                    blocked = True
+                else:
+                    win_str = " ".join(window)
+                    if any(phrase in win_str for phrase in ("no one", "no fire", "not on fire", "didn't", "did not")):
+                        blocked = True
+            if not blocked:
+                return False
+    return seen
 
 
 def _check_kill_switch(text: str, ctx: InteractionContext) -> str | None:
@@ -764,10 +978,11 @@ class IntakeAgent(Agent):
                     except Exception:
                         pass
                     return {"extracted": {}, "question": (
-                        "Connecting you to a human specialist now — thanks for holding."
+                        "I'll request a specialist. You are not connected yet."
                     ), "fast_path": True, "kill_switch": None,
                         "slots_filled_now": False,
                         "escalate_low_confidence": True,
+                        "handoff_requested": True,
                         "low_confidence_slot": "dtmf_menu",
                         "dtmf": _dtmf}
                 else:
@@ -791,10 +1006,11 @@ class IntakeAgent(Agent):
                     output_summary="escalate_to_human",
                 ))
                 return {"extracted": {}, "question": (
-                    "Connecting you to a human specialist now — thanks for holding."
+                    "I'll request a specialist. You are not connected yet."
                 ), "fast_path": True, "kill_switch": None,
                     "slots_filled_now": False,
                     "escalate_low_confidence": True,
+                    "handoff_requested": True,
                     "low_confidence_slot": "dtmf_menu",
                     "dtmf": _dtmf}
             if _dtmf == "1":
@@ -863,6 +1079,10 @@ class IntakeAgent(Agent):
 
         # ── Slot extraction from the customer turn ────────────────────────
         if customer_turn:
+            # A correction can arrive after a slot is filled. Apply it before
+            # the skip-filled pass so the new value is the one we keep.
+            if re.search(r"\b(actually|instead)\b", customer_turn, re.I):
+                self.reextract_overwrite(customer_turn)
             # First pass: structured slots (year/gazetteer/regex). The
             # free-text description runs second so a one-word entity answer
             # ("CR-V", "Honda", "2019") cannot also become the symptom.
@@ -881,7 +1101,7 @@ class IntakeAgent(Agent):
                 value = self._extract_slot(slot, customer_turn)
                 if value:
                     extracted[slot.name] = value
-                    ctx.slots[slot.name] = value
+                    self._stamp_slot(slot.name, value, source_turn=customer_turn)
             # Second pass: description needs real symptom content — not a
             # safety reply, not filler, and not a bare entity echo.
             if not safety_answered and not ctx.slots.get("description"):
@@ -901,7 +1121,12 @@ class IntakeAgent(Agent):
                     toks = [t for t in re.sub(r"[^a-z0-9\s]", " ", desc.lower()).split() if t]
                     if not others_pending or (len(desc.strip()) >= 8 and len(toks) >= 2):
                         extracted["description"] = desc
-                        ctx.slots["description"] = desc
+                        self._stamp_slot("description", desc, source_turn=customer_turn)
+            elif not safety_answered and ctx.slots.get("description"):
+                desc = _extract_description(customer_turn)
+                if desc and _new_symptom_words(str(ctx.slots.get("description") or ""), desc):
+                    extracted["description"] = desc
+                    self._stamp_slot("description", desc, source_turn=customer_turn)
 
             if extracted:
                 claims = []
@@ -1150,6 +1375,11 @@ class IntakeAgent(Agent):
 
                     primary, source, meta = extract_category_with_mode(text, self.ctx, rules_cat)
                     self.ctx.slots["__category_source__"] = source
+                    # Live abstention (below the gate) must not be undone by
+                    # a gazetteer synonym that the model refused to accept.
+                    if source == "none" and not primary:
+                        self.ctx.slots["__category_abstained__"] = "1"
+                        return None
                 except Exception:
                     primary = extract_pack_category(text, self.ctx)
                     self.ctx.slots["__category_source__"] = "rules" if primary else "none"
@@ -1196,7 +1426,19 @@ class IntakeAgent(Agent):
         prompt = questions[idx]
         # Defect #2 fix: polarity is conditioned on the question asked —
         # legacy classify_yes_no never saw it ("im fine" → false P1).
-        polarity = classify_answer(prompt, text)
+        # The same assess_safety reading triage uses. A contradiction stays
+        # pending and asks for clarification instead of being marked safe.
+        assessment = assess_safety(text, question=prompt)
+        if assessment.get("contradictory"):
+            return {
+                "extracted": {},
+                "question": assessment.get("clarification") or prompt,
+                "fast_path": True,
+                "kill_switch": None,
+                "slots_filled_now": False,
+                "safety_clarification": True,
+            }
+        polarity = assessment.get("polarity")
         escalate_on = escalate_on_for_prompt(prompt)
         if polarity is None:
             # Keep pending; _next_safety_question will re-ask this index.
@@ -1288,6 +1530,65 @@ class IntakeAgent(Agent):
             return slot
         return None
 
+    def _stamp_slot(
+        self,
+        name: str,
+        value: str,
+        *,
+        source_turn: str = "",
+        confidence: float | None = None,
+        confirmation: str = "unconfirmed",
+    ) -> None:
+        """Remember value, source turn, confidence, confirmation, and revision."""
+        ctx = self.ctx
+        meta = dict(ctx.slots.get("__slot_meta__") or {})
+        prev = dict(meta.get(name) or {})
+        old = ctx.slots.get(name)
+        try:
+            revision = int(prev.get("revision") or 0)
+        except (TypeError, ValueError):
+            revision = 0
+        changed = old is not None and str(old) != str(value)
+        if changed:
+            revision += 1
+            self._invalidate_downstream()
+        elif revision < 1:
+            revision = 1
+        if confidence is None:
+            try:
+                confidence = float(getattr(ctx, "last_asr_confidence", None) or 1.0)
+            except (TypeError, ValueError):
+                confidence = 1.0
+        ctx.slots[name] = value
+        meta[name] = {
+            "value": value,
+            "source_turn": (source_turn or "")[:300],
+            "confidence": confidence,
+            "confirmation": confirmation,
+            "revision": revision,
+        }
+        ctx.slots["__slot_meta__"] = meta
+
+    def _invalidate_downstream(self) -> None:
+        """Advisory, retrieval, and severity depended on the previous slot value."""
+        ctx = self.ctx
+        ctx.severity = None
+        ctx.investigation_brief = None
+        ctx.slots["__downstream_stale__"] = "1"
+        for key in ("__advisory__", "__retrieval__", "__severity_cache__"):
+            ctx.slots.pop(key, None)
+
+    def mark_slots_confirmed(self) -> None:
+        meta = dict(self.ctx.slots.get("__slot_meta__") or {})
+        for name, row in list(meta.items()):
+            if not isinstance(row, dict):
+                continue
+            updated = dict(row)
+            updated["confirmation"] = "confirmed"
+            meta[name] = updated
+        if meta:
+            self.ctx.slots["__slot_meta__"] = meta
+
     def reextract_overwrite(self, text: str) -> dict[str, str]:
         """Correction policy (board #4): re-extract ALLOWING overwrites.
 
@@ -1306,8 +1607,24 @@ class IntakeAgent(Agent):
             except Exception:
                 continue
             if value and value != (self.ctx.slots.get(slot.name) or ""):
-                self.ctx.slots[slot.name] = value
+                self._stamp_slot(slot.name, value, source_turn=text or "", confirmation="unconfirmed")
                 changed[slot.name] = value
+        # A new symptom replaces the description. A bare year correction does not.
+        try:
+            desc_slot = next(
+                (s for s in self.ctx.pack.required_slots() if getattr(s, "validation", "") == "free-text"),
+                None,
+            )
+            if desc_slot is not None:
+                new_desc = self._extract_slot(desc_slot, text or "")
+                old_desc = str(self.ctx.slots.get("description") or "")
+                if new_desc and _new_symptom_words(old_desc, new_desc) and new_desc != old_desc:
+                    self._stamp_slot(
+                        "description", new_desc, source_turn=text or "", confirmation="unconfirmed",
+                    )
+                    changed["description"] = new_desc
+        except Exception:
+            pass
         if changed:
             record_action(self._action(
                 action_type="slot_extracted",

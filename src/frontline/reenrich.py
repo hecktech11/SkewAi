@@ -78,7 +78,17 @@ def backfill_brief(interaction_id: str, *, case_id: str | None = None) -> dict[s
         else:
             result = _run_in_new_loop()
     except Exception as e:
-        return {"ok": False, "error": f"investigator failed: {e}"}
+        return {"ok": False, "error": f"investigator failed: {e}", "preserved": True}
+    if not isinstance(result, dict):
+        return {"ok": False, "outcome": "failed", "preserved": True, "interaction_id": iid}
+    outcome = str(result.get("outcome") or "")
+    if result.get("skipped") or (outcome and outcome != "completed"):
+        return {
+            "ok": False,
+            "outcome": outcome or "failed",
+            "preserved": True,
+            "interaction_id": iid,
+        }
     brief = ctx.investigation_brief or {}
     cluster_id = brief.get("cluster_id")
     similar_n = int(brief.get("similar_record_count") or 0)
@@ -112,11 +122,15 @@ def backfill_brief(interaction_id: str, *, case_id: str | None = None) -> dict[s
                 con.execute(
                     """
                     UPDATE cases
-                    SET cluster_match_id = ?, similar_record_count = ?,
+                    SET cluster_match_id = COALESCE(?, cluster_match_id),
+                        similar_record_count = CASE
+                            WHEN ? > 0 THEN ?
+                            ELSE similar_record_count
+                        END,
                         investigation_id = COALESCE(?, investigation_id)
                     WHERE case_id = ?
                     """,
-                    [cluster_id, similar_n, investigation_id, target_case],
+                    [cluster_id, similar_n, similar_n, investigation_id, target_case],
                 )
             patched = True
         except Exception as e:

@@ -25,6 +25,11 @@ import {
   RECOG_RESTART_MS,
   looksLikeAgentEcho,
   coalesceSpeechFinals,
+  IDLE_LISTEN_REPROMPT_MS,
+  decideSpeechFinal,
+  createTurnQueue,
+  socketIsLive,
+  advancePlayback,
 } from "../src/voiceHelpers.js";
 import { capabilityLabel } from "../src/ui/labels.js";
 
@@ -90,6 +95,7 @@ export default function CallWidget() {
   const speakWatchdogRef = useRef(null);
   const lastAgentTextRef = useRef("");
   const listenReadyAtRef = useRef(0);
+  const bargeRecoverRef = useRef(false);
   const speakQueueRef = useRef([]);
   const drainingSpeakRef = useRef(false);
   const sttBufferRef = useRef({ text: "", at: 0 });
@@ -109,6 +115,11 @@ export default function CallWidget() {
   const humanControlRef = useRef(false);
   const controlGenRef = useRef(0);
   const pendingTerminalRef = useRef(null);
+  const turnQueueRef = useRef(createTurnQueue());
+  const pendingTurnRef = useRef(null);
+  const playbackRef = useRef({ status: "", text: "", utteranceId: "" });
+  const socketLiveRef = useRef({ open: false, authenticated: false, attached: false });
+  const listeningSinceRef = useRef(0);
   const [voiceDenied, setVoiceDenied] = useState(false);
   const [humanControl, setHumanControl] = useState(false);
   useEffect(() => {
@@ -312,10 +323,67 @@ export default function CallWidget() {
     } catch {
       /* already started */
     }
+    if (!listeningSinceRef.current) listeningSinceRef.current = Date.now();
+    scheduleSpeechDecision();
   }
 
   function armListenCooldown() {
     listenReadyAtRef.current = Date.now() + POST_TTS_COOLDOWN_MS;
+  }
+
+  function scheduleSpeechDecision() {
+    if (sttFlushTimerRef.current) clearTimeout(sttFlushTimerRef.current);
+    const now = Date.now();
+    const latest = Math.max(
+      Number(sttBufferRef.current && sttBufferRef.current.at) || 0,
+      Number(lastInterimRef.current && lastInterimRef.current.at) || 0,
+    );
+    const wait = latest
+      ? Math.max(40, STT_FINAL_DEBOUNCE_MS - (now - latest))
+      : Math.min(STT_FINAL_DEBOUNCE_MS, IDLE_LISTEN_REPROMPT_MS);
+    sttFlushTimerRef.current = window.setTimeout(() => {
+      sttFlushTimerRef.current = null;
+      if (callEndedRef.current || intentionalCloseRef.current) return;
+      const decision = decideSpeechFinal({
+        lastSpeechAt: Math.max(
+          Number(sttBufferRef.current && sttBufferRef.current.at) || 0,
+          Number(lastInterimRef.current && lastInterimRef.current.at) || 0,
+        ),
+        lastInterimAt: Number(lastInterimRef.current && lastInterimRef.current.at) || 0,
+        committedAt: Number(sttBufferRef.current && sttBufferRef.current.at) || 0,
+        now: Date.now(),
+        debounceMs: STT_FINAL_DEBOUNCE_MS,
+        idleRepromptMs: IDLE_LISTEN_REPROMPT_MS,
+        listeningSince: listeningSinceRef.current || 0,
+      });
+      if (decision.flush) {
+        flushCustomerUtterance();
+        return;
+      }
+      if (decision.reprompt && stateRef.current === CALL_STATE.LISTENING) {
+        setInfo("I'm still listening — go ahead when you're ready");
+        listeningSinceRef.current = Date.now();
+        return;
+      }
+      if (decision.reason === "interim" || decision.reason === "waiting") {
+        scheduleSpeechDecision();
+      }
+    }, wait);
+  }
+
+  function notePlayback(status, text, utteranceId) {
+    const next = advancePlayback(playbackRef.current, {
+      status,
+      text,
+      utteranceId: utteranceId || "",
+    });
+    playbackRef.current = next;
+    sendWs({
+      type: "playback",
+      status: next.status,
+      text: next.text,
+      utterance_id: next.utteranceId,
+    });
   }
 
   function flushCustomerUtterance() {
@@ -347,10 +415,25 @@ export default function CallWidget() {
       setInfo("Ignored speaker echo — say your answer after the agent finishes");
       return;
     }
-    wsSeqRef.current += 1;
+    const pending = pendingTurnRef.current;
+    let turnId;
+    if (pending && pending.text === text && !pending.accepted && pending.turnId) {
+      turnId = pending.turnId;
+    } else {
+      wsSeqRef.current += 1;
+      turnId = newTurnId();
+    }
+    const queued = turnQueueRef.current.submit(turnId, text);
+    if (queued.status === "rejected") {
+      setError("That turn could not be queued");
+      return;
+    }
+    if (queued.status === "duplicate" && queued.accepted) {
+      return;
+    }
     const sent = sendWs({
       type: "user_turn", text, final: true,
-      turn_id: newTurnId(), turn_seq: wsSeqRef.current,
+      turn_id: turnId, turn_seq: wsSeqRef.current,
       // Web Speech exposes confidence for an entire phrase, not for a vehicle
       // slot. Do not send it: older API servers treated it as entity_1 and
       // looped on a confirmation of every partial phrase.
@@ -358,6 +441,7 @@ export default function CallWidget() {
       region: (region || "").trim() || undefined,
       drive_hint: driving || undefined,
     });
+    pendingTurnRef.current = { turnId, text, accepted: false };
     if (!sent) {
       setError("Connection was lost before your reply could be sent. Please reconnect and try again.");
       setState(CALL_STATE.LISTENING);
@@ -365,6 +449,8 @@ export default function CallWidget() {
       return;
     }
     pushTurn({ speaker: "customer", text });
+    listeningSinceRef.current = 0;
+    // Mic pauses here. Acceptance waits for the server turn_result.
     enterThinking();
   }
 
@@ -374,11 +460,7 @@ export default function CallWidget() {
     if (piece && prev === piece) return;
     const { buffer } = coalesceSpeechFinals(sttBufferRef.current, txt, Date.now(), STT_FINAL_DEBOUNCE_MS);
     sttBufferRef.current = buffer;
-    if (sttFlushTimerRef.current) clearTimeout(sttFlushTimerRef.current);
-    sttFlushTimerRef.current = window.setTimeout(() => {
-      sttFlushTimerRef.current = null;
-      flushCustomerUtterance();
-    }, STT_FINAL_DEBOUNCE_MS);
+    scheduleSpeechDecision();
   }
 
   /**
@@ -393,6 +475,7 @@ export default function CallWidget() {
     const speaker = opts.speaker || "agent";
     if (humanControlRef.current && speaker !== "supervisor") return;
     lastAgentTextRef.current = full;
+    notePlayback("queued", full, opts.utteranceId || null);
     speakQueueRef.current.push({
       full,
       phase: opts.phase || "normal",
@@ -431,6 +514,7 @@ export default function CallWidget() {
     bargeStreakRef.current = 0;
 
     if (!hasTTS) {
+      notePlayback("failed", full, meta.utteranceId || null);
       clearSpeakWatchdog();
       speakingRef.current = false;
       speakPhaseRef.current = "normal";
@@ -469,12 +553,19 @@ export default function CallWidget() {
         if (token !== utteranceSeqRef.current) return;
         ttsStartedAtRef.current = Date.now();
         bargeStreakRef.current = 0;
+        notePlayback("started", full, meta.utteranceId || null);
         if (phase !== "greeting") {
           startBargeWatch();
         }
       };
-      u.onend = finishSpeaking;
-      u.onerror = finishSpeaking;
+      u.onend = () => {
+        notePlayback("completed", full, meta.utteranceId || null);
+        finishSpeaking();
+      };
+      u.onerror = () => {
+        notePlayback("failed", full, meta.utteranceId || null);
+        finishSpeaking();
+      };
       try {
         window.speechSynthesis.speak(u);
       } catch {
@@ -488,6 +579,7 @@ export default function CallWidget() {
   }
 
   function cancelAiSpeech() {
+    notePlayback("interrupted", playbackRef.current.text, currentUtteranceRef.current);
     utteranceSeqRef.current += 1;
     currentUtteranceRef.current = null;
     speakQueueRef.current = speakQueueRef.current.filter((item) => item.speaker === "supervisor");
@@ -580,7 +672,10 @@ export default function CallWidget() {
         }
         speakQueueRef.current = [];
         drainingSpeakRef.current = false;
-        armListenCooldown();
+        notePlayback("interrupted", playbackRef.current.text, currentUtteranceRef.current);
+        // The words that stopped playback must not wait out the bleed cooldown.
+        bargeRecoverRef.current = true;
+        listenReadyAtRef.current = Date.now();
         setState(CALL_STATE.LISTENING);
         setInfo("Barge-in — listening again");
         startRecognitionSafe();
@@ -674,6 +769,47 @@ export default function CallWidget() {
         } catch { /* ignore */ }
         break;
       }
+      case "ready": {
+        socketLiveRef.current = {
+          open: true,
+          authenticated: msg.authenticated === true,
+          attached: msg.attached === true,
+        };
+        if (socketIsLive(socketLiveRef.current)) setWsStatus("live");
+        if (msg.unheard_prompt) {
+          const unheard = String(msg.unheard_prompt);
+          pushTurn({ speaker: "agent", text: unheard });
+          enqueueSpeak(unheard);
+        }
+        const pending = pendingTurnRef.current;
+        if (pending && pending.turnId && !pending.accepted) {
+          sendWs({
+            type: "user_turn",
+            text: pending.text,
+            final: true,
+            turn_id: pending.turnId,
+            turn_seq: wsSeqRef.current,
+            locale: packLocale(),
+            region: (region || "").trim() || undefined,
+          });
+        }
+        break;
+      }
+      case "turn_result": {
+        const ack = turnQueueRef.current.acknowledge(msg.turn_id, msg);
+        if (pendingTurnRef.current && pendingTurnRef.current.turnId === msg.turn_id) {
+          pendingTurnRef.current = { ...pendingTurnRef.current, accepted: ack.accepted === true };
+        }
+        if (msg.status === "rejected") {
+          clearThinkingTimeout();
+          setInfo(msg.reason || "That turn was not accepted — please say it again");
+          setState(CALL_STATE.LISTENING);
+          startRecognitionSafe();
+          break;
+        }
+        if (speakingRef.current || stateRef.current === CALL_STATE.AGENT_SPEAKING) break;
+        break;
+      }
       case "duplicate_dropped": {
         // Proven replay (same turn_id seen twice) — stay live and ask for a
         // fresh turn instead of wedging in THINKING until the 12s timeout.
@@ -736,6 +872,8 @@ export default function CallWidget() {
         }
         setError(null);
         setInfo("Reconnected — the contact is still live");
+        socketLiveRef.current = { open: true, authenticated: true, attached: true };
+        if (socketIsLive(socketLiveRef.current)) setWsStatus("live");
         break;
       }
       case "error": {
@@ -874,34 +1012,42 @@ export default function CallWidget() {
     recog.interimResults = true;
     try { recog.lang = packLocale() || "en-US"; } catch { recog.lang = "en-US"; }
     recog.onresult = (ev) => {
+      // While thinking the mic is paused — drop late STT so it cannot stack
+      // a second user_turn behind the one the server is already answering.
+      if (stateRef.current === CALL_STATE.THINKING) return;
+      if (mutedRef.current || voiceDeniedRef.current) return;
+
+      let interim = "";
+      const finals = [];
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        const txt = (res[0].transcript || "").trim();
+        if (!txt) continue;
+        if (res.isFinal) finals.push(txt);
+        else interim += (interim ? " " : "") + txt;
+      }
+      const sample = finals[0] || interim;
+      const interrupting = bargeRecoverRef.current;
       const accept = shouldAcceptSpeechResult({
         speaking: speakingRef.current,
         wsOpen: !!(wsRef.current && wsRef.current.readyState === WebSocket.OPEN),
         listenReadyAt: listenReadyAtRef.current,
         now: Date.now(),
+        text: sample,
+        interrupting,
       });
-      // While thinking the mic is paused — drop late STT so it cannot stack
-      // a second user_turn behind the one the server is already answering.
-      if (stateRef.current === CALL_STATE.THINKING) return;
-      if (mutedRef.current || voiceDeniedRef.current) return;
       if (!accept) return;
+      if (interrupting) bargeRecoverRef.current = false;
 
-      let interim = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const res = ev.results[i];
-        const txt = (res[0].transcript || "").trim();
-        if (!txt) continue;
-        if (res.isFinal) {
-          if (looksLikeAgentEcho(txt, lastAgentTextRef.current)) continue;
-          lastInterimRef.current = { text: "", at: 0 };
-          queueCustomerFinal(txt);
-        } else {
-          interim += (interim ? " " : "") + txt;
-        }
+      for (const txt of finals) {
+        if (looksLikeAgentEcho(txt, lastAgentTextRef.current)) continue;
+        lastInterimRef.current = { text: "", at: 0 };
+        queueCustomerFinal(txt);
       }
       if (interim && !looksLikeAgentEcho(interim, lastAgentTextRef.current)) {
         lastInterimRef.current = { text: interim, at: Date.now() };
         pushTurn({ speaker: "customer", text: interim, interim: true });
+        scheduleSpeechDecision();
       }
     };
     recog.onerror = (e) => {
@@ -1075,7 +1221,8 @@ export default function CallWidget() {
           return;
         }
         sendWsAuth(ws);
-        setWsStatus("live");
+        socketLiveRef.current = { open: true, authenticated: false, attached: false };
+        if (!socketIsLive(socketLiveRef.current)) setWsStatus("connecting");
         reconnectAttemptRef.current = 0;
         if (!isReconnect && startRes.greeting_text) {
           // Full pack greeting — transcript + TTS must match start response.
@@ -1226,12 +1373,15 @@ export default function CallWidget() {
     speakPhaseRef.current = "normal";
     setSpeakPhase("normal");
     wsSeqRef.current += 1;
+    const turnId = newTurnId();
+    turnQueueRef.current.submit(turnId, text);
     const sent = sendWs({
       type: "user_turn", text, final: true,
-      turn_id: newTurnId(), turn_seq: wsSeqRef.current,
+      turn_id: turnId, turn_seq: wsSeqRef.current,
       locale: packLocale(), region: (region || "").trim() || undefined,
       drive_hint: driving || undefined,
     });
+    pendingTurnRef.current = { turnId, text, accepted: false };
     if (!sent) {
       setError("Connection was lost before your reply could be sent. Please reconnect and try again.");
       return;

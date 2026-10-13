@@ -174,7 +174,41 @@ def association_score(
     lift_capped = _math.log1p(max(0.0, lift))
     # Recency intentionally EXCLUDED from relevance (new != related).
     # Callers sort ties by received_at explicitly; see rank_by_association.
-    return shared * 10.0 + min(lift_capped, 5.0)
+    # Symptom text is a small tie-break so an affirmed symptom can move a
+    # candidate. Shared keys still dominate (10 each versus at most 2).
+    symptom = _symptom_overlap(query, candidate)
+    return shared * 10.0 + min(lift_capped, 5.0) + symptom
+
+
+def _symptom_overlap(query: dict[str, Any], candidate: dict[str, Any]) -> float:
+    import re as _re
+
+    qtext = str(query.get("text") or "").lower()
+    ctext = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("text", "summary", "top_terms")
+    ).lower()
+    if not qtext or not ctext:
+        return 0.0
+    qtoks = {w for w in _re.findall(r"[a-z0-9]{4,}", qtext)}
+    ctoks = {w for w in _re.findall(r"[a-z0-9]{4,}", ctext)}
+    if not qtoks:
+        return 0.0
+    return 2.0 * (len(qtoks & ctoks) / len(qtoks))
+
+
+def merge_candidate_rows(*groups: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Union candidate lists by record id. First sighting keeps its row."""
+    seen: dict[str, dict[str, Any]] = {}
+    order: list[dict[str, Any]] = []
+    for group in groups:
+        for row in group or []:
+            rid = str(row.get("record_id") or "")
+            if not rid or rid in seen:
+                continue
+            seen[rid] = row
+            order.append(row)
+    return order
 
 
 def population_support(

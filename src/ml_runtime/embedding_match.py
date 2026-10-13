@@ -103,11 +103,17 @@ def semantic_cluster_score(
         return {"status": "skipped", "score": 0.0, "reason": "version_mismatch"}
     try:
         q = embedder.embed(query)
+        model_key = str(cluster_row.get("model_key") or q.model_key or "")
+        padding_strategy = str(
+            cluster_row.get("padding_strategy") or q.padding_strategy or ""
+        )
         cvec = as_embedded(
             centroid,
             version,
             native_dimension=embedder.native_dimension,
             output_dimension=embedder.output_dimension,
+            model_key=model_key,
+            padding_strategy=padding_strategy,
         )
         score = compare_embeddings(q, cvec)
     except Exception:

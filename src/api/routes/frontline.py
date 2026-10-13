@@ -1254,7 +1254,8 @@ async def get_audit(
         check_api_key(
             authorization=request.headers.get("authorization"),
             x_api_key=request.headers.get("x-api-key"),
-            api_key=request.query_params.get("api_key"),
+            api_key=None,
+            allow_query_key=False,
         )
         result = await audit_interaction(interaction_id, write_report=True)
         return {

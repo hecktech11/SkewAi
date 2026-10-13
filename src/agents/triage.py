@@ -53,15 +53,16 @@ def _eval_condition(cond: str, ctx: Any) -> bool:
         terms_part = terms_part.lstrip("_").strip()
         if not terms_part:
             return False
-        desc = (ctx.slots.get("description") or "").lower()
-        import re
+        from src.frontline.elicitation import symptom_text_for_ctx
+        desc = symptom_text_for_ctx(ctx).lower()
+        # Same hazard reading as intake: a negated hit ("no fire") does not
+        # match. An affirmative hit in a later clause still matches.
+        from src.agents.intake import hazard_term_affirmed
         for term in terms_part.split("|"):
             term = term.strip().strip("'\"")
             if not term:
                 continue
-            # Word-boundary match so 'fire' doesn't match 'misfires'.
-            # Use a regex with case-insensitive flag.
-            if re.search(rf"\b{re.escape(term.lower())}\b", desc):
+            if hazard_term_affirmed(desc, term):
                 return True
         return False
 
@@ -121,12 +122,13 @@ def _apply_model_severity(ctx: Any) -> tuple[str, str, str]:
     # Lazy import to avoid the heavy ml_runtime dependency at module load time.
     try:
         from src.ml_runtime.registry import predict_severity
+        from src.frontline.elicitation import symptom_text_for_ctx
         severity, reason = predict_severity(artifact_ref, {
             "entity_1": ctx.slots.get("entity_1"),
             "entity_2": ctx.slots.get("entity_2"),
             "entity_3": ctx.slots.get("entity_3"),
             "category": ctx.slots.get("category"),
-            "description": ctx.slots.get("description"),
+            "description": symptom_text_for_ctx(ctx),
             "safety_flags": ctx.safety_flags,
         })
         _mark_model_health(artifact_ref, True)

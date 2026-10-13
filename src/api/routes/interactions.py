@@ -673,7 +673,14 @@ async def start_interaction(
         "voice_consent_required": bool(getattr(orch.ctx, "voice_consent_required", False)),
         "consent_script": getattr(orch.ctx, "voice_consent_script", "") or str((_creq0 or {}).get("script") or ""),
         "server_stt_available": _server_stt,
+        "carrier_audio_ready": False,
     }
+    try:
+        from src.channels.twilio_media import carrier_audio_ready
+
+        out["carrier_audio_ready"] = carrier_audio_ready()
+    except Exception:
+        out["carrier_audio_ready"] = False
     if phase1_active:
         out["phase1_admitted"] = True
         out["routed_to"] = "live_voice_agent"
@@ -807,6 +814,27 @@ async def get_interaction(
         ) from e
     if not scrub_pii:
         require_perm(_role, "dsr:export")
+    if not has_perm(_role, "ledger:read") and isinstance(data, dict):
+        import copy
+        data = copy.deepcopy(data)
+        if "turns" in data and isinstance(data["turns"], list):
+            sanitized_turns = []
+            for turn in data["turns"]:
+                if isinstance(turn, dict):
+                    t_copy = dict(turn)
+                    if t_copy.get("speaker") in ("supervisor", "human"):
+                        if t_copy.get("text"):
+                            t_copy["text"] = "[restricted]"
+                    sanitized_turns.append(t_copy)
+                else:
+                    sanitized_turns.append(turn)
+            data["turns"] = sanitized_turns
+        if "actions" in data and isinstance(data["actions"], list):
+            data["actions"] = [
+                _strip_restricted_ledger(a) if isinstance(a, dict) else a
+                for a in data["actions"]
+            ]
+    if not scrub_pii:
         return data
     return redact_dict(data)
 
@@ -1142,19 +1170,36 @@ class _ConsoleClient:
         self.task: asyncio.Task[None] | None = None
 
 
+_RESTRICTED_ACTIONS = frozenset({
+    "human_turn", "supervisor_whisper", "coach", "coach_whisper", "coach_suggest",
+})
+_RESTRICTED_TYPES = frozenset({
+    "supervisor_whisper", "coach", "coach_whisper", "human_turn",
+})
+_RESTRICTED_SPEAKERS = frozenset({"supervisor", "human"})
+_RESTRICTED_KEEP = ("type", "interaction_id", "action_id", "action_type", "ts", "ok", "agent")
+
+
+def _is_restricted_supervisor_frame(msg: dict[str, Any]) -> bool:
+    """Coaching packets and supervisor speech are ledger-read only."""
+    if str(msg.get("action_type") or "") in _RESTRICTED_ACTIONS:
+        return True
+    if str(msg.get("type") or "") in _RESTRICTED_TYPES:
+        return True
+    if str(msg.get("speaker") or "") in _RESTRICTED_SPEAKERS:
+        return True
+    if any(key in msg for key in ("whisper_audio_ssml", "whisper_text", "suggestions")):
+        return True
+    return False
+
+
 def _strip_restricted_ledger(msg: dict[str, Any]) -> dict[str, Any]:
-    """Hide raw supervisor speech from roles that cannot read the ledger."""
-    out = dict(msg)
-    restricted = (
-        str(out.get("action_type") or "") == "human_turn"
-        or out.get("speaker") == "supervisor"
-    )
-    if not restricted:
-        return out
-    for key in ("summary", "output_summary", "input_summary", "text"):
-        if out.get(key):
-            out[key] = "[restricted]"
-    return out
+    """Drop supervisor coaching and restricted speech, including nested fields."""
+    if not _is_restricted_supervisor_frame(msg):
+        return dict(msg)
+    kept = {key: msg[key] for key in _RESTRICTED_KEEP if key in msg}
+    kept["restricted"] = True
+    return kept
 
 
 def _prepare_console_frame(msg: dict[str, Any], role: str) -> dict[str, Any]:
@@ -1414,7 +1459,7 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
     ``recoverable: false`` so the client stops retrying.
 
     Auth: prefer first-message ``{"type":"auth","api_key":"..."}`` or headers.
-    Query ``?api_key=`` is deprecated.
+    A query-string ``api_key`` is not a credential.
     """
     if not frontline_enabled():
         await websocket.close(code=1013)
@@ -1518,6 +1563,27 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
         except Exception:
             pass
 
+    playback = {}
+    try:
+        playback = dict((orch.ctx.slots or {}).get("__playback__") or {})
+    except Exception:
+        playback = {}
+    ready = {
+        "type": "ready",
+        "authenticated": True,
+        "attached": True,
+        "interaction_id": interaction_id,
+        "resumed": bool(resumed),
+    }
+    pb_status = str(playback.get("status") or "")
+    pb_text = str(playback.get("text") or "")
+    if pb_text and pb_status not in {"", "completed"}:
+        ready["unheard_prompt"] = pb_text
+    try:
+        await websocket.send_json(ready)
+    except Exception:
+        pass
+
     try:
         while True:
             from src.frontline.dsr import is_interaction_erased
@@ -1561,6 +1627,10 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                     "code": "bad_message",
                     "recoverable": True,
                 })
+                continue
+            if mtype == "playback":
+                async with entry.lock:
+                    orch.note_playback(msg)
                 continue
             if mtype == "user_turn":
                 # Durable replay dedup lives in ONE place: the orchestrator's
@@ -1613,6 +1683,17 @@ async def interaction_ws(websocket: WebSocket, interaction_id: str) -> None:
                             })
                             continue
                         raise
+                outcome = getattr(orch, "last_turn_outcome", None)
+                req_id = str(msg.get("turn_id") or msg.get("client_turn_id") or "")
+                if (
+                    isinstance(outcome, dict)
+                    and req_id
+                    and str(outcome.get("turn_id") or "") == req_id
+                ):
+                    try:
+                        await websocket.send_json({**outcome, "type": "turn_result"})
+                    except Exception:
+                        pass
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 try:
                     entry.turn_seq = int(entry.turn_seq or 0) + 1
@@ -1741,6 +1822,16 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
     """
     if not frontline_enabled():
         await websocket.close(code=1013)
+        return
+
+    from src.api.limiter import check_ws_connect_rate
+
+    ws_key = websocket.client.host if websocket.client else "unknown"
+    if not check_ws_connect_rate(f"twilio:{ws_key}"):
+        try:
+            await websocket.close(code=1013)
+        except Exception:
+            pass
         return
 
     try:
@@ -1910,7 +2001,7 @@ async def console_ws(websocket: WebSocket) -> None:
     Server → console: agent_activity (+ lifecycle) for all active interactions.
     Console → server (after takeover): {"type":"human_turn","interaction_id":"...","text":"..."}
 
-    Auth: first-message auth frame preferred; query api_key deprecated.
+    Auth: first-message auth frame or headers. A query-string api_key is not a credential.
     """
     if not frontline_enabled():
         await websocket.close(code=1013)

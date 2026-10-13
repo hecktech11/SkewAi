@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS record_embeddings (
     error_code         VARCHAR,
     error_message      VARCHAR,
     model_key          VARCHAR,
+    padding_strategy   VARCHAR,
     tokenizer_sha256   VARCHAR,
     truncation_length  INTEGER,
     sequence_length    INTEGER,
@@ -102,6 +103,7 @@ def ensure_record_embeddings(con) -> None:
         _rollback_quietly(con)
     for ddl in (
         "ALTER TABLE record_embeddings ADD COLUMN model_key VARCHAR",
+        "ALTER TABLE record_embeddings ADD COLUMN padding_strategy VARCHAR",
         "ALTER TABLE record_embeddings ADD COLUMN tokenizer_sha256 VARCHAR",
         "ALTER TABLE record_embeddings ADD COLUMN truncation_length INTEGER",
         "ALTER TABLE record_embeddings ADD COLUMN sequence_length INTEGER",
@@ -165,9 +167,10 @@ def upsert_embedding(
             INSERT INTO record_embeddings (
                 record_id, embedding_version, native_dimension, output_dimension,
                 artifact_sha256, embedding, status, error_code, error_message,
-                model_key, tokenizer_sha256, truncation_length, sequence_length,
-                inference_ms, library_version, sanitized, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                model_key, padding_strategy, tokenizer_sha256, truncation_length,
+                sequence_length, inference_ms, library_version, sanitized,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (record_id, embedding_version) DO UPDATE SET
                 native_dimension = excluded.native_dimension,
                 output_dimension = excluded.output_dimension,
@@ -177,6 +180,7 @@ def upsert_embedding(
                 error_code = excluded.error_code,
                 error_message = excluded.error_message,
                 model_key = excluded.model_key,
+                padding_strategy = excluded.padding_strategy,
                 tokenizer_sha256 = excluded.tokenizer_sha256,
                 truncation_length = excluded.truncation_length,
                 sequence_length = excluded.sequence_length,
@@ -196,6 +200,7 @@ def upsert_embedding(
                 error_code,
                 (error_message or "")[:300] or None,
                 model_key or vec.model_key or None,
+                vec.padding_strategy or None,
                 tokenizer_sha256 or None,
                 truncation_length,
                 sequence_length,
@@ -260,7 +265,8 @@ def get_embedding(
         try:
             row = con.execute(
                 """
-                SELECT embedding, native_dimension, output_dimension, status
+                SELECT embedding, native_dimension, output_dimension, status,
+                       model_key, padding_strategy
                 FROM record_embeddings
                 WHERE record_id = ? AND embedding_version = ?
                 """,
@@ -276,6 +282,8 @@ def get_embedding(
         embedding_version,
         native_dimension=int(row[1]),
         output_dimension=int(row[2]),
+        model_key=str(row[4] or ""),
+        padding_strategy=str(row[5] or ""),
     )
 
 
@@ -294,7 +302,8 @@ def get_embeddings_for_records(
             try:
                 rows = con.execute(
                     f"""
-                    SELECT record_id, embedding, native_dimension, output_dimension
+                    SELECT record_id, embedding, native_dimension, output_dimension,
+                           model_key, padding_strategy
                     FROM record_embeddings
                     WHERE embedding_version = ? AND status = 'complete'
                       AND record_id IN ({ph})
@@ -303,7 +312,7 @@ def get_embeddings_for_records(
                 ).fetchall()
             except Exception:
                 return {}
-            for rid, emb, native, output in rows:
+            for rid, emb, native, output, model_key, padding in rows:
                 if emb is None:
                     continue
                 found[str(rid)] = as_embedded(
@@ -311,6 +320,8 @@ def get_embeddings_for_records(
                     embedding_version,
                     native_dimension=int(native),
                     output_dimension=int(output),
+                    model_key=str(model_key or ""),
+                    padding_strategy=str(padding or ""),
                 )
     return found
 

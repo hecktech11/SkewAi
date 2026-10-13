@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from src.api.auth import require_api_key
+from src.api.auth import require_api_key, require_api_key_strict
 from src.api.rbac import get_actor, get_role, require_perm_dep
 from src.config import REPO_ROOT
 
@@ -270,7 +270,10 @@ async def pack_builder_insight(
 
 @router.post(
     "/pack-builder/ingest",
-    dependencies=[Depends(require_perm_dep("ops:write", open_mode_ok=True))],
+    dependencies=[
+        Depends(require_api_key_strict),
+        Depends(require_perm_dep("ops:write", open_mode_ok=False)),
+    ],
 )
 async def pack_builder_ingest(
     body: dict[str, Any],
