@@ -53,9 +53,12 @@ def reconcile_barge_in(
 ) -> str:
     """Production caller for SpokenPlaybackReconciler.handle_barge_in.
 
-    Returns the audible-prefix text (with [INTERRUPTED]) and appends the
-    compensating `spoken_turn_truncated` ledger row. Never raises.
+    Returns the audible-prefix text (with [INTERRUPTED]) only after the
+    compensating ``spoken_turn_truncated`` row is durable. A failed truncation
+    write raises TruncationPersistError instead of acknowledging success.
     """
+    from src.voice.interruption_reconciler import TruncationPersistError
+
     try:
         rec = build_reconciler(interaction_id)
         if action_id and word_markers:
@@ -69,13 +72,22 @@ def reconcile_barge_in(
             out = rec.handle_barge_in()
             if out:
                 return out
+    except TruncationPersistError:
+        raise
     except Exception:
         pass
-    # Fallback: prefix by elapsed time at ~300ms/word so the ledger never
-    # claims audio the caller could not have heard.
-    words = [w for w in re.split(r"\s+", (text or "").strip()) if w]
-    n = max(0, min(len(words), int(max(0, elapsed_ms) // 300)))
-    audible = " ".join(words[:n]) if n else ""
+    # Same duration model as estimate_word_alignment. A word counts only
+    # once its end timestamp is at or before the barge-in.
+    alignment = estimate_word_alignment(text or "")
+    audible_words: list[str] = []
+    for marker in alignment:
+        end = marker["end"]
+        end_ms = int(end * 1000) if isinstance(end, float) else int(end)
+        if end_ms <= max(0, elapsed_ms):
+            audible_words.append(str(marker["word"]))
+        else:
+            break
+    audible = " ".join(audible_words)
     return (audible + " [INTERRUPTED]").strip() if audible else "[INTERRUPTED]"
 
 
@@ -330,21 +342,38 @@ def telephony_bridge_for(websocket: Any, interaction_id: str, on_speech, on_barg
 # ── Latency budget (live HUD + benchmark proof) ──────────────────────────────
 
 def live_turn_budget_verdict(elapsed_ms: float) -> dict[str, Any]:
-    """Per-turn verdict against the 180ms first-audio / 1500ms TTS budgets."""
+    """Per-turn verdict against the 180ms first-audio / 1500ms TTS budgets.
+
+    A missing policy is not a pass. The caller sees an unknown, over-budget
+    verdict instead of a fabricated under-budget result.
+    """
     try:
         from src.voice.policy import latency_verdict, tts_latency_budget_ms
+
+        return latency_verdict(int(elapsed_ms), budget_ms=tts_latency_budget_ms())
     except Exception:
-        return {"elapsed_ms": elapsed_ms, "over_budget": False}
-    return latency_verdict(int(elapsed_ms), budget_ms=tts_latency_budget_ms())
+        return {
+            "elapsed_ms": elapsed_ms,
+            "over_budget": True,
+            "verdict": "unknown",
+            "error": "latency_policy_unavailable",
+        }
 
 
 async def run_single_trial_diagnostics() -> dict[str, Any]:
     """Production caller for benchmark_latency (diagnostics endpoint).
 
     Runs ONE trial per stage so ops can prove the pipeline shape live without
-    paying for 50 trials on the contact path.
+    paying for 50 trials on the contact path. The benchmark is synchronous
+    codec and ledger work, so it runs on a worker thread and must not block
+    the caller event loop.
     """
+    import asyncio
+
     from src.voice.benchmark_latency import TelephonyLatencyBenchmarker
 
-    bench = TelephonyLatencyBenchmarker(trials=1)
-    return await bench.run_full_benchmark()
+    def _run() -> dict[str, Any]:
+        bench = TelephonyLatencyBenchmarker(trials=1)
+        return asyncio.run(bench.run_full_benchmark())
+
+    return await asyncio.to_thread(_run)

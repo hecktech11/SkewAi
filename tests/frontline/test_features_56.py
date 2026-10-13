@@ -91,7 +91,7 @@ async def test_08_twilio_media_no_raise():
     from src.channels.twilio_media import TwilioMediaChannel
 
     ch = TwilioMediaChannel()  # must not raise
-    assert ch.capabilities().server_tts is True
+    assert ch.capabilities().server_tts is False
     await ch.send_turn("hello pilot")
     assert ch.outbound
     assert ch.outbound[0]["text"] == "hello pilot"
@@ -103,8 +103,11 @@ def test_09_server_stt_tts():
     s = ServerSpeechStack()
     assert s.transcribe_chunk("customer said brakes") == "customer said brakes"
     meta = s.synthesize_meta("hello")
-    assert meta["server_side"] is True
-    assert meta["audio_ref"].startswith("tts://")
+    assert meta["playable"] is False
+    assert meta["server_side"] is False
+    assert meta["audio_ref"] is None
+    assert s.capabilities()["server_tts"] is False
+    assert s.capabilities()["server_stt"] is False
 
 
 @pytest.mark.asyncio

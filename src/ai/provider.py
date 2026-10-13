@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -112,6 +113,7 @@ def llm_enabled() -> bool:
 
 
 def can_spend() -> tuple[bool, str]:
+    """Read-only cap check. Does not reserve a turn."""
     if not llm_enabled():
         return False, "llm_disabled_or_no_key"
     spend = get_spend()
@@ -120,6 +122,26 @@ def can_spend() -> tuple[bool, str]:
     if spend["cost_units"] >= float(settings.max_daily_claude_cost):
         return False, "daily_cost_cap"
     return True, "ok"
+
+
+_spend_lock = threading.Lock()
+
+
+def _reserve_spend(cost_units: float = 0.01) -> tuple[bool, str]:
+    """Reserve one turn before the provider call.
+
+    The read and the increment share one lock so concurrent ``narrate``
+    calls cannot all pass a cap of one and then each record a spend.
+    A reserved turn is kept if the provider call fails (fail closed).
+    """
+    if not llm_enabled():
+        return False, "llm_disabled_or_no_key"
+    with _spend_lock:
+        ok, reason = can_spend()
+        if not ok:
+            return False, reason
+        _record_spend(cost_units)
+        return True, "ok"
 
 
 def _http_chat(system: str, user: str, model: str) -> str:
@@ -267,7 +289,7 @@ def narrate(
     system = redact_pii(system)
     user = redact_pii(user)
     ph = _prompt_hash(system, user)
-    ok_spend, reason = can_spend()
+    ok_spend, reason = _reserve_spend(0.01)
     if not ok_spend:
         return NarrationResult(
             text=fallback,
@@ -281,7 +303,6 @@ def narrate(
         text = _http_chat(system, user, model or "")
         if not text:
             raise ValueError("empty_llm_response")
-        _record_spend(0.01)
         provider = llm_provider()
         default_model = (
             _anthropic_model(model or "")

@@ -644,10 +644,9 @@ async def start_interaction(
     )
     pack = orch.ctx.pack
     try:
-        _server_stt = bool(
-            (os.getenv("STT_API_URL") or "").strip()
-            or (os.getenv("FASTER_WHISPER_MODEL") or "").strip()
-        )
+        from src.channels.stt_tts import ServerSpeechStack
+
+        _server_stt = ServerSpeechStack().operational_audio_stt()
     except Exception:
         _server_stt = False
     try:
@@ -1822,14 +1821,25 @@ async def twilio_ws(websocket: WebSocket, interaction_id: str) -> None:
 
     async def _on_speech(pcm_16k: bytes) -> None:
         nonlocal _twilio_seq
+        from src.voice.telephony_bridge import streaming_services_ready, service_unavailable_payload
+
+        # The bridge rejects before this callback while service is down.
+        # If a frame still arrives, refuse it instead of transcribing nothing.
+        if not pcm_16k or not streaming_services_ready(
+            speech, interruption_connected=False,
+        ):
+            await websocket.send_json(service_unavailable_payload())
+            return
         try:
             driving = bool(check_drive_mode(pcm_chunk=pcm_16k)) if check_drive_mode else False
             text = None
             try:
-                # Media frames arrive as PCM here; STT stack handles text pilot frames.
-                text = speech.transcribe_chunk("") if speech else None
+                text = speech.transcribe_pcm(pcm_16k) if speech else None
             except Exception:
                 text = None
+            if not text:
+                await websocket.send_json(service_unavailable_payload())
+                return
             if text:
                 # Telephony replay guard: server-side monotonic key per frame.
                 # No client_turn_id is forwarded, so the orchestrator's web

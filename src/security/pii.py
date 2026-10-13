@@ -16,6 +16,9 @@ _ADDRESS = re.compile(
     r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|"
     r"Court|Ct|Circle|Cir|Parkway|Pkwy|Terrace|Plaza|Way)\b"
 )
+# ISO 3779 VIN: 17 chars, I/O/Q excluded. Applied after phone and card
+# so a digit run is not also treated as a vehicle identifier.
+_VIN = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
 
 
 def redact_pii(text: str) -> str:
@@ -27,6 +30,7 @@ def redact_pii(text: str) -> str:
     out = _SSN.sub("[SSN]", out)
     out = _CC.sub("[CARD]", out)
     out = _ADDRESS.sub("[ADDRESS]", out)
+    out = _VIN.sub("[VIN]", out)
     return out
 
 
@@ -38,8 +42,12 @@ def find_pii(text: str) -> list[str]:
         kinds.append("phone")
     if _SSN.search(text or ""):
         kinds.append("ssn")
+    if _CC.search(text or ""):
+        kinds.append("card")
     if _ADDRESS.search(text or ""):
         kinds.append("address")
+    if _VIN.search(text or ""):
+        kinds.append("vin")
     return kinds
 
 

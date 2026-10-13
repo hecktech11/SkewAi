@@ -23,15 +23,12 @@ class AgentActionJournal:
         spoken_text: str,
         interrupted_at_ms: int,
     ) -> str | None:
-        """Record an append-only compensating action row to preserve cryptographic hash chain integrity."""
-        record = {
-            "interaction_id": interaction_id,
-            "action_id": action_id,
-            "spoken_text": spoken_text,
-            "interrupted_at_ms": interrupted_at_ms,
-        }
-        self.truncations.append(record)
+        """Record an append-only compensating action row.
 
+        The in-memory truncation list is updated only after the durable
+        ``spoken_turn_truncated`` write succeeds. A failed write returns None
+        and leaves no successful truncation row behind.
+        """
         try:
             from src.ledger.writer import AgentAction, record_action
 
@@ -45,16 +42,25 @@ class AgentActionJournal:
                 ok=True,
             )
             new_action_id = record_action(truncation_action)
-            logger.info(
-                "action_truncation_appended",
-                extra={
-                    "interaction_id": interaction_id,
-                    "target_action_id": action_id,
-                    "truncation_action_id": new_action_id,
-                    "interrupted_at_ms": interrupted_at_ms,
-                },
-            )
-            return new_action_id
         except Exception as e:
             logger.debug("action_truncation_append_skipped", extra={"error": str(e)})
             return None
+        if not new_action_id:
+            return None
+        self.truncations.append({
+            "interaction_id": interaction_id,
+            "action_id": action_id,
+            "spoken_text": spoken_text,
+            "interrupted_at_ms": interrupted_at_ms,
+            "truncation_action_id": new_action_id,
+        })
+        logger.info(
+            "action_truncation_appended",
+            extra={
+                "interaction_id": interaction_id,
+                "target_action_id": action_id,
+                "truncation_action_id": new_action_id,
+                "interrupted_at_ms": interrupted_at_ms,
+            },
+        )
+        return new_action_id
