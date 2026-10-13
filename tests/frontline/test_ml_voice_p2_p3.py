@@ -214,9 +214,45 @@ def test_novel_false_is_not_a_positive_and_unlabeled_is_excluded():
 def test_resample_state_tracks_the_whole_buffer():
     from src.voice.telephony_bridge import (
         pcm16k_to_ulaw8k,
+        pcm16k_to_ulaw8k_carrying,
         ulaw8k_to_pcm16k,
         ulaw8k_to_pcm16k_carrying,
     )
+
+    # Samples 0..7 split as 3 + 5. Restarting the phase emits five bytes
+    # where the whole buffer emits four, and the next chunk stays inverted.
+    pcm_odd = struct.pack("<8h", 0, 1, 2, 3, 4, 5, 6, 7)
+    whole_ulaw = pcm16k_to_ulaw8k(pcm_odd)
+    first_ulaw, phase = pcm16k_to_ulaw8k_carrying(pcm_odd[:6], None)
+    second_ulaw, phase = pcm16k_to_ulaw8k_carrying(pcm_odd[6:], phase)
+    assert first_ulaw + second_ulaw == whole_ulaw
+    later = struct.pack("<4h", 8, 9, 10, 11)
+    continued, _phase = pcm16k_to_ulaw8k_carrying(later, phase)
+    assert first_ulaw + second_ulaw + continued == pcm16k_to_ulaw8k(pcm_odd + later)
+
+    import base64
+    import json
+
+    from src.voice.telephony_bridge import TelephonyMediaBridge
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_text(self, text: str) -> None:
+            self.sent.append(text)
+
+    async def _play() -> bytes:
+        sink = _Sink()
+        bridge = TelephonyMediaBridge(sink, "int_phase", lambda _frame: None)
+        bridge.stream_sid = "MZ_PHASE"
+        await bridge.emit_audio_chunk(pcm_odd[:6])
+        await bridge.emit_audio_chunk(pcm_odd[6:])
+        return b"".join(
+            base64.b64decode(json.loads(raw)["media"]["payload"]) for raw in sink.sent
+        )
+
+    assert asyncio.run(_play()) == whole_ulaw
 
     pcm = struct.pack(
         "<400h",
@@ -228,18 +264,7 @@ def test_resample_state_tracks_the_whole_buffer():
     whole = ulaw8k_to_pcm16k(ulaw)
     first, state = ulaw8k_to_pcm16k_carrying(ulaw[:mid], None)
     second, _state = ulaw8k_to_pcm16k_carrying(ulaw[mid:], state)
-    carried = first + second
-    reset = ulaw8k_to_pcm16k(ulaw[:mid]) + ulaw8k_to_pcm16k(ulaw[mid:])
-
-    def distance(left: bytes, right: bytes) -> int:
-        count = min(len(left), len(right)) // 2
-        if count == 0:
-            return abs(len(left) - len(right))
-        a = struct.unpack(f"<{count}h", left[: count * 2])
-        b = struct.unpack(f"<{count}h", right[: count * 2])
-        return sum(abs(x - y) for x, y in zip(a, b)) + abs(len(left) - len(right))
-
-    assert distance(carried, whole) <= distance(reset, whole)
+    assert first + second == whole
 
 
 def test_playback_counts_finished_words_and_one_duration_model(reset_ops_db):

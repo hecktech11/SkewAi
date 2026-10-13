@@ -132,28 +132,32 @@ def ulaw8k_to_pcm16k_carrying(payload_mulaw: bytes, state: Any = None) -> tuple[
 
 def pcm16k_to_ulaw8k(pcm_16k_chunk: bytes) -> bytes:
     """Convert 16kHz Linear PCM (16-bit little-endian) to 8kHz G.711 mu-law bytes."""
-    if not pcm_16k_chunk:
-        return b""
-    if _HAS_AUDIOOP:
-        pcm_8k, _ = audioop.ratecv(pcm_16k_chunk, 2, 1, 16000, 8000, None)
-        return audioop.lin2ulaw(pcm_8k, 2)
-
-    n_samples = len(pcm_16k_chunk) // 2
-    if n_samples == 0:
-        return b""
-    samples = struct.unpack(f"<{n_samples}h", pcm_16k_chunk[:n_samples * 2])
-    samples_8k = samples[0::2]
-    return bytes(_LIN_TO_ULAW_TABLE[s + 32768] for s in samples_8k)
+    encoded, _state = pcm16k_to_ulaw8k_carrying(pcm_16k_chunk, None)
+    return encoded
 
 
 def pcm16k_to_ulaw8k_carrying(pcm_16k_chunk: bytes, state: Any = None) -> tuple[bytes, Any]:
-    """Downsample one PCM chunk and return the resampler state for the next chunk."""
+    """Downsample one PCM chunk and return the resampler state for the next chunk.
+
+    The table fallback keeps every other sample. ``state`` is that phase, 0 or 1,
+    so a chunk with an odd sample count does not invert the next chunk.
+    """
     if not pcm_16k_chunk:
         return b"", state
     if _HAS_AUDIOOP:
         pcm_8k, new_state = audioop.ratecv(pcm_16k_chunk, 2, 1, 16000, 8000, state)
         return audioop.lin2ulaw(pcm_8k, 2), new_state
-    return pcm16k_to_ulaw8k(pcm_16k_chunk), None
+
+    phase = 0 if state is None else int(state) & 1
+    n_samples = len(pcm_16k_chunk) // 2
+    if n_samples == 0:
+        return b"", phase
+    samples = struct.unpack(f"<{n_samples}h", pcm_16k_chunk[: n_samples * 2])
+    kept = samples[phase::2]
+    new_phase = (phase + n_samples) & 1
+    if not kept:
+        return b"", new_phase
+    return bytes(_LIN_TO_ULAW_TABLE[sample + 32768] for sample in kept), new_phase
 
 
 class TelephonyMediaBridge:
