@@ -101,7 +101,7 @@ Caveats:
 - Complaints are self-reported.
 - The recall date is the Part 573 receipt date, and manufacturers often know earlier.
 - Precision uses the full series.
-- Only 5 makes were ingested (2,258,118 FLAT_CMPL lines read, 219,510 kept for these makes and model years). The existing trust check marked only 9,198 of them "trusted" (mostly freshness/staleness on historical data). They were loaded with the existing historical-backfill option (`enforce_trust=False`), so every scored complaint is real, but most are not "fresh" by the product's live-data rules.
+- Only 5 makes were ingested (2,258,118 FLAT_CMPL lines read, 219,510 kept for these makes and model years). The existing trust check marked only 9,198 of them "trusted". They were loaded with the existing historical-backfill option (`enforce_trust=False`), so every scored complaint is real, but most are not "fresh" by the product's live-data rules.
 
 Memory note: the existing `recall_lead_report` caches every as-of series and ran the box out of RAM at this scale. `scripts/ai_safety_backtest.py` therefore calls the same building blocks but keeps only one series in memory per worker. A test asserts that its output is identical to `recall_lead_report` on a fixture.
 
