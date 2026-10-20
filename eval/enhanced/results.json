@@ -1,0 +1,1385 @@
+{
+  "meta": {
+    "n": 60,
+    "model": "muse-spark-1.3",
+    "mode": "deterministic",
+    "generated_at": "2026-10-20 21:45 UTC"
+  },
+  "deterministic": {
+    "en": {
+      "n_slot_scored": 16,
+      "n_safety_calls": 4,
+      "slot_accuracy": {
+        "make": 1.0,
+        "model": 1.0,
+        "year": 1.0,
+        "component": 1.0
+      },
+      "all_slots_correct": 1.0,
+      "kill_switch_recall": 1.0,
+      "kill_switch_false_alarms": 0
+    },
+    "all": {
+      "n_slot_scored": 48,
+      "n_safety_calls": 12,
+      "slot_accuracy": {
+        "make": 0.667,
+        "model": 1.0,
+        "year": 1.0,
+        "component": 0.625
+      },
+      "all_slots_correct": 0.625,
+      "kill_switch_recall": 0.5,
+      "kill_switch_false_alarms": 0
+    },
+    "hi": {
+      "n_slot_scored": 16,
+      "n_safety_calls": 4,
+      "slot_accuracy": {
+        "make": 0.0,
+        "model": 1.0,
+        "year": 1.0,
+        "component": 0.0
+      },
+      "all_slots_correct": 0.0,
+      "kill_switch_recall": 0.0,
+      "kill_switch_false_alarms": 0
+    },
+    "hinglish": {
+      "n_slot_scored": 16,
+      "n_safety_calls": 4,
+      "slot_accuracy": {
+        "make": 1.0,
+        "model": 1.0,
+        "year": 1.0,
+        "component": 0.875
+      },
+      "all_slots_correct": 0.875,
+      "kill_switch_recall": 0.5,
+      "kill_switch_false_alarms": 0
+    }
+  },
+  "enhanced": "not run",
+  "per_call": [
+    {
+      "id": "en_00_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HONDA",
+          "entity_3": "CR-V",
+          "entity_1": "2019",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 219.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_00_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CR-V",
+          "entity_1": "2019",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 120.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_00_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HONDA",
+          "entity_3": "CR-V",
+          "entity_1": "2019",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 124.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_00_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HONDA",
+          "entity_3": "CIVIC",
+          "entity_1": "2016",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 121.8
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_00_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CIVIC",
+          "entity_1": "2016",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 123.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_00_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HONDA",
+          "entity_3": "CIVIC",
+          "entity_1": "2016",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 147.5
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_01_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 61.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_01_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CAMRY",
+          "entity_1": "2018",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 133.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_01_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "CAMRY",
+          "entity_1": "2018",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 136.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_01_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 69.1
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_01_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "COROLLA",
+          "entity_1": "2022",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 157.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_01_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "SERVICE BRAKES"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "COROLLA",
+          "entity_1": "2022",
+          "category": "SERVICE BRAKES"
+        },
+        "kill_switch": false,
+        "ms": 166.5
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_02_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": "STEERING"
+        },
+        "kill_switch": false,
+        "ms": 129.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_02_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 129.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_02_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": "STEERING"
+        },
+        "kill_switch": false,
+        "ms": 135.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_02_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": "STEERING"
+        },
+        "kill_switch": false,
+        "ms": 135.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_02_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 130.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_02_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "STEERING"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": "STEERING"
+        },
+        "kill_switch": false,
+        "ms": 124.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_03_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": "AIR BAGS"
+        },
+        "kill_switch": false,
+        "ms": 162.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_03_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 135.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_03_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": "AIR BAGS"
+        },
+        "kill_switch": false,
+        "ms": 135.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_03_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": "AIR BAGS"
+        },
+        "kill_switch": false,
+        "ms": 129.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_03_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 129.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_03_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "AIR BAGS"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": "AIR BAGS"
+        },
+        "kill_switch": false,
+        "ms": 132.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_04_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": "ENGINE"
+        },
+        "kill_switch": false,
+        "ms": 124.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_04_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 183.3
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_04_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": "ENGINE"
+        },
+        "kill_switch": false,
+        "ms": 132.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_04_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": "ENGINE"
+        },
+        "kill_switch": false,
+        "ms": 146.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_04_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 140.1
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_04_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "ENGINE"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": "ENGINE"
+        },
+        "kill_switch": false,
+        "ms": 152.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_05_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 71.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_05_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CIVIC",
+          "entity_1": "2016",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 132.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_05_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CIVIC",
+        "entity_1": "2016",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 72.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_05_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 68.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_05_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CR-V",
+          "entity_1": "2019",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 140.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_05_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HONDA",
+        "entity_3": "CR-V",
+        "entity_1": "2019",
+        "category": "FUEL SYSTEM"
+      },
+      "kill_switch_expected": true,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": null,
+          "entity_1": null,
+          "category": null
+        },
+        "kill_switch": true,
+        "ms": 74.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_06_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "COROLLA",
+          "entity_1": "2022",
+          "category": "ELECTRICAL SYSTEM"
+        },
+        "kill_switch": false,
+        "ms": 148.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_06_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "COROLLA",
+          "entity_1": "2022",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 138.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_06_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "COROLLA",
+        "entity_1": "2022",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "COROLLA",
+          "entity_1": "2022",
+          "category": "ELECTRICAL SYSTEM"
+        },
+        "kill_switch": false,
+        "ms": 141.2
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_06_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "CAMRY",
+          "entity_1": "2018",
+          "category": "ELECTRICAL SYSTEM"
+        },
+        "kill_switch": false,
+        "ms": 138.1
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_06_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "CAMRY",
+          "entity_1": "2018",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 142.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_06_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "TOYOTA",
+        "entity_3": "CAMRY",
+        "entity_1": "2018",
+        "category": "ELECTRICAL SYSTEM"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "TOYOTA",
+          "entity_3": "CAMRY",
+          "entity_1": "2018",
+          "category": "ELECTRICAL SYSTEM"
+        },
+        "kill_switch": false,
+        "ms": 150.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_07_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": "POWER TRAIN"
+        },
+        "kill_switch": false,
+        "ms": 148.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_07_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 137.4
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_07_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "EXPLORER",
+        "entity_1": "2019",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "EXPLORER",
+          "entity_1": "2019",
+          "category": "POWER TRAIN"
+        },
+        "kill_switch": false,
+        "ms": 164.3
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_07_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": "POWER TRAIN"
+        },
+        "kill_switch": false,
+        "ms": 146.5
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_07_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 148.5
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_07_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "FORD",
+        "entity_3": "ESCAPE",
+        "entity_1": "2020",
+        "category": "POWER TRAIN"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "FORD",
+          "entity_3": "ESCAPE",
+          "entity_1": "2020",
+          "category": "POWER TRAIN"
+        },
+        "kill_switch": false,
+        "ms": 132.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_08_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": "SUSPENSION"
+        },
+        "kill_switch": false,
+        "ms": 146.1
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_08_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 129.5
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_08_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "TUCSON",
+        "entity_1": "2020",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "TUCSON",
+          "entity_1": "2020",
+          "category": "SUSPENSION"
+        },
+        "kill_switch": false,
+        "ms": 151.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_08_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": "SUSPENSION"
+        },
+        "kill_switch": false,
+        "ms": 136.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_08_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 144.9
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_08_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "HYUNDAI",
+        "entity_3": "ELANTRA",
+        "entity_1": "2017",
+        "category": "SUSPENSION"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "HYUNDAI",
+          "entity_3": "ELANTRA",
+          "entity_1": "2017",
+          "category": "SUSPENSION"
+        },
+        "kill_switch": false,
+        "ms": 170.1
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_09_0",
+      "lang": "en",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": "TIRES"
+        },
+        "kill_switch": false,
+        "ms": 160.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_09_0",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 181.6
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_09_0",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SORRENTO",
+        "entity_1": "2018",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SORRENTO",
+          "entity_1": "2018",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 136.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "en_09_1",
+      "lang": "en",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": "TIRES"
+        },
+        "kill_switch": false,
+        "ms": 145.0
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hi_09_1",
+      "lang": "hi",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": null,
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 141.7
+      },
+      "enhanced": "not run"
+    },
+    {
+      "id": "hl_09_1",
+      "lang": "hinglish",
+      "expected": {
+        "entity_2": "KIA",
+        "entity_3": "SPORTAGE",
+        "entity_1": "2021",
+        "category": "TIRES"
+      },
+      "kill_switch_expected": false,
+      "deterministic": {
+        "slots": {
+          "entity_2": "KIA",
+          "entity_3": "SPORTAGE",
+          "entity_1": "2021",
+          "category": null
+        },
+        "kill_switch": false,
+        "ms": 147.7
+      },
+      "enhanced": "not run"
+    }
+  ]
+}

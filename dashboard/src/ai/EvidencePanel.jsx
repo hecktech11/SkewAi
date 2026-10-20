@@ -151,7 +151,8 @@ export default function EvidencePanel({ caseId, interactionId, investigationId, 
       )}
       {err && <div className="banner banner-warn small" role="alert" style={{ marginTop: 6 }}>{err}</div>}
       {rows.length === 0 && <div className="muted small" style={{ marginTop: 6 }}>No photos attached.</div>}
-      {rows.map((ev) => (
+      {readOnly && rows.length > 3 && <div className="muted small">Showing 3 of {rows.length}; open the cases for the rest.</div>}
+      {(readOnly ? rows.slice(0, 3) : rows).map((ev) => (
         <div key={ev.evidence_id} className="ai-evidence-item" style={{ marginTop: 10 }}>
           <Overlay ev={ev} />
           <div className="mono muted small">{ev.evidence_id} · {ev.mime} · {ev.width}×{ev.height}{ev.case_id ? ` · ${ev.case_id}` : ""}</div>
