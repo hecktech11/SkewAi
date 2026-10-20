@@ -233,8 +233,11 @@ ai-demo-seed:
 ai-eval:
 	$(PY) -m eval.enhanced.run_eval
 # Full recall backtest + preventable-window safety counts (needs DOMAIN_DB_PATH side dir + ZIP=FLAT_CMPL.zip).
+AI_MAKES ?= HONDA,TOYOTA,FORD,HYUNDAI,KIA
+AI_YEAR_MIN ?= 2015
+AI_YEAR_MAX ?= 2024
 ai-backtest:
-	$(PY) -m scripts.ai_safety_backtest --zip $(ZIP) --makes $(or $(MAKES),HONDA,TOYOTA,FORD,HYUNDAI,KIA) \
-		--year-min $(or $(YEAR_MIN),2015) --year-max $(or $(YEAR_MAX),2024)
+	$(PY) -m scripts.ai_safety_backtest --zip $(ZIP) --makes $(AI_MAKES) \
+		--year-min $(AI_YEAR_MIN) --year-max $(AI_YEAR_MAX)
 ai-test:
 	FRONTLINE_TEST_ISOLATION=1 $(PY) -m pytest tests/frontline/ai_layer -q
