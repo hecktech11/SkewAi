@@ -4,6 +4,7 @@
   GET  /api/ai/events                                  -> deterministic-vs-AI decision log
   GET  /api/ai/investigations/{investigation_id}/grounded-brief
   GET  /api/ai/early-warning/safety                    -> investigations ordered by safety risk
+  POST /api/ai/demo/seed                               -> seeded India demo contact (synthetic, simulated channel)
   GET  /api/ai/investigations/{investigation_id}/evidence
   GET  /api/ai/clusters/{cluster_id}/evidence?pack_id=
   POST /api/ai/language/normalize                      -> detect + normalise (Hindi/Hinglish)
@@ -95,6 +96,23 @@ async def early_warning_safety(
     from src.ai_layer.safety_board import safety_board
 
     return await ops_in_thread(safety_board, max(1, min(int(limit), 200)))
+
+
+@router.post("/api/ai/demo/seed")
+@limiter.limit("6 per minute")
+async def demo_seed(
+    request: Request,
+    _role: str = Depends(require_perm_dep("contact:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """One synthetic Hinglish/Hindi contact through the real orchestrator,
+    plus a synthetic photo on its case. Disabled unless AI_DEMO_ENABLED=1."""
+    import os
+
+    from src.ai_layer.demo import seed_india_scenario
+
+    if os.environ.get("AI_DEMO_ENABLED", "").strip() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=403, detail="demo seeding disabled (set AI_DEMO_ENABLED=1)")
+    return await seed_india_scenario()
 
 
 @router.get("/api/ai/investigations/{investigation_id}/evidence")

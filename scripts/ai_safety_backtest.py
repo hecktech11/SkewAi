@@ -46,6 +46,7 @@ from src.config import REPO_ROOT, is_default_pilot_domain_path  # noqa: E402
 
 OUT_MD = REPO_ROOT / "reports" / "nhtsa" / "backtest_safety_2015_2024.md"
 OUT_JSON = REPO_ROOT / "reports" / "nhtsa" / "backtest_safety.json"
+OUT_LEAD = REPO_ROOT / "reports" / "nhtsa" / "recall_lead_time_2015_2024.md"
 
 # Positions in the official FLAT_CMPL layout (scripts/ingest_nhtsa._FLAT_FIELDS).
 _I = {"ODINO": 1, "MAKETXT": 3, "MODELTXT": 4, "YEARTXT": 5, "CRASH": 6, "FIRE": 8,
@@ -325,17 +326,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model-grain", action="store_true")
     p.add_argument("--out-md", default=str(OUT_MD))
     p.add_argument("--out-json", default=str(OUT_JSON))
+    p.add_argument("--out-lead", default=str(OUT_LEAD), help="existing-format per-recall lead-time report")
     args = p.parse_args(argv)
     if is_default_pilot_domain_path():
         print("refusing the pilot data/domains directory; set DOMAIN_DB_PATH to a side directory", file=sys.stderr)
         return 2
-    from src.backtest.recall_lead import recall_lead_report
+    from src.backtest.recall_lead import format_recall_lead_report, recall_lead_report
 
     t0 = time.time()
     report = recall_lead_report(args.pack, model_grain=args.model_grain, run_backtests=False)
     print(f"lead report: hits={report['hit_count']} misses={report['miss_count']} "
           f"unconfirmed={report['unconfirmed_count']} ({time.time() - t0:.0f}s)", flush=True)
+    Path(args.out_lead).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out_lead).write_text(format_recall_lead_report(report), encoding="utf-8")
     prec = flag_precision(args.pack, model_grain=args.model_grain)
+    print(f"precision: {prec} ({time.time() - t0:.0f}s)", flush=True)
     makes = {m.strip().upper() for m in args.makes.split(",") if m.strip()}
     slices = {(str(h["scope_category"] or "").upper(), str(h["scope_entity_2"] or "").upper()) for h in report["hits"]}
     safety = safety_rows(iter_flat(Path(args.zip)), makes, args.year_min, args.year_max, slices)

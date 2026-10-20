@@ -30,7 +30,7 @@ def test_levels():
 
 def test_actions():
     acts = recommended_actions("STEERING", {"advisory_id": "24V1", "remedy": "Replace rack"})
-    assert acts[0]["source"] == "nhtsa_recall" and acts[0]["record_ids"] == ["24V1"]
+    assert acts[0]["source"] == "recall_advisory" and acts[0]["record_ids"] == ["24V1"]
     assert any("Part 573" in a["action"] for a in acts)
     assert len(recommended_actions("PAINT")) == 1
     assert len(recommended_actions("STEERING", {"advisory_id": "x", "remedy": None})) == 2

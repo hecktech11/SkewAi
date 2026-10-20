@@ -128,7 +128,7 @@ def deterministic_claims(brief: dict[str, Any]) -> list[dict[str, Any]]:
                        "record_ids": [str(recs[0]["record_id"])], "verified": True, "source": "deterministic"})
     recall = brief.get("recall") or {}
     if recall.get("advisory_id"):
-        claims.append({"text": f"Matched public recall {recall['advisory_id']}.",
+        claims.append({"text": f"Matched recall advisory {recall['advisory_id']}.",
                        "record_ids": [str(recall["advisory_id"])], "verified": True, "source": "deterministic"})
     return claims
 

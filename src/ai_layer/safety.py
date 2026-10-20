@@ -140,8 +140,8 @@ def recommended_actions(category: str | None, recall: dict[str, Any] | None = No
     actions: list[dict[str, Any]] = []
     if recall and recall.get("remedy"):
         actions.append({
-            "action": f"Matched public recall remedy: {str(recall['remedy'])[:400]}",
-            "source": "nhtsa_recall", "record_ids": [str(recall.get("advisory_id"))],
+            "action": f"Matched recall remedy (advisory {recall.get('advisory_id')}): {str(recall['remedy'])[:400]}",
+            "source": "recall_advisory", "record_ids": [str(recall.get("advisory_id"))],
         })
     cat = (category or "").strip().upper()
     actions.append({"action": _ACTIONS.get(cat, _DEFAULT_ACTION), "source": "deterministic_playbook",

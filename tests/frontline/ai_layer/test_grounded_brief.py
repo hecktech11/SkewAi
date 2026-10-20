@@ -50,7 +50,7 @@ def test_no_key_is_deterministic_with_safety_and_actions(no_meta, patched):
     assert out["safety_risk"]["mentions"]["crash"] == 1  # "no crash" is negated
     assert out["safety_risk"]["mentions"]["injury"] == 1
     srcs = [a["source"] for a in out["recommended_actions"]]
-    assert srcs[0] == "nhtsa_recall" and "deterministic_playbook" in srcs
+    assert srcs[0] == "recall_advisory" and "deterministic_playbook" in srcs
     assert any("Part 573" in a["action"] for a in out["recommended_actions"])
 
 
