@@ -222,3 +222,19 @@ clean:
 	rm -f data/frontline.duckdb data/frontline.duckdb.wal
 	rm -rf data/domains/*.duckdb
 	@echo "Cleaned DuckDB files. Rebuild with: make frontline-db"
+
+# ── [AI-LAYER] Optional Meta AI layer / hackathon demo (additive targets) ──
+.PHONY: hackathon-setup ai-demo-seed ai-eval ai-backtest ai-test
+# One command: venv + deps + dashboard + demo warehouses in data/hackathon/ + serve.
+hackathon-setup:
+	./scripts/judge_setup.sh
+ai-demo-seed:
+	$(PY) -m scripts.ai_demo_seed
+ai-eval:
+	$(PY) -m eval.enhanced.run_eval
+# Full recall backtest + preventable-window safety counts (needs DOMAIN_DB_PATH side dir + ZIP=FLAT_CMPL.zip).
+ai-backtest:
+	$(PY) -m scripts.ai_safety_backtest --zip $(ZIP) --makes $(or $(MAKES),HONDA,TOYOTA,FORD,HYUNDAI,KIA) \
+		--year-min $(or $(YEAR_MIN),2015) --year-max $(or $(YEAR_MAX),2024)
+ai-test:
+	FRONTLINE_TEST_ISOLATION=1 $(PY) -m pytest tests/frontline/ai_layer -q
