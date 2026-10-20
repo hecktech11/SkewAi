@@ -8,7 +8,7 @@ Setup (one command, local, nothing deployed):
 
 ```bash
 bash scripts/judge_setup.sh          # venv, deps, dashboard build, demo DBs, India scenario, serves :8000
-# then open http://127.0.0.1:8000/#demo  (the script prints the URL and the local operator key)
+# then open http://127.0.0.1:8000/ui/#demo, Sign in → "Have an operator API key?" → paste the key the script printed
 ```
 
 Without a Meta key everything below runs on the deterministic path, and the badge

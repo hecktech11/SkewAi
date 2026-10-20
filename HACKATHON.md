@@ -14,7 +14,7 @@ write a grounded brief**, and the existing deterministic safety rules still have
 the final say.
 
 - Demo storyboard: [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)
-- One-command judge setup: `bash scripts/judge_setup.sh` → `http://127.0.0.1:8000/#demo`
+- One-command judge setup: `bash scripts/judge_setup.sh` → `http://127.0.0.1:8000/ui/#demo`
 - Single container (not deployed): `docker compose -f docker-compose.hackathon.yml up --build`
 
 ## 1. What is new vs. what already existed
