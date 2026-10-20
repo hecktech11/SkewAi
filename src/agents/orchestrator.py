@@ -769,6 +769,16 @@ class Orchestrator:
                                     asr_confidence=asr_confidence, dtmf=dtmf)
             if self._stop_if_erased():
                 return
+            # [AI-LAYER] Optional Muse Spark pass AFTER deterministic intake: fills
+            # only still-empty slots, normalises Hindi/Hinglish, may only ADD a
+            # kill-switch hit (pack lexicon on the translation). No key -> returns
+            # ires unchanged with no I/O.
+            try:
+                from src.ai_layer.intake_enhancer import maybe_enhance_intake
+
+                ires = await maybe_enhance_intake(self.ctx, text, ires)
+            except Exception:
+                pass
             # 2.1/6.3: turn latency observe vs 1200ms SLO
             try:
                 import time as _t2
@@ -2197,6 +2207,14 @@ class Orchestrator:
         sres = _settle("sentinel", "advisory_check", raw[0])
         tres = _settle("triage", "severity_scored", raw[1])
         ires = _settle("investigator", "brief_written", raw[2])
+        # [AI-LAYER] Optional AI severity: final = max(rule, AI); may only raise.
+        # No key -> tres unchanged. Qubot severity sanity still runs later.
+        try:
+            from src.ai_layer.severity import maybe_raise_severity
+
+            tres = await maybe_raise_severity(self.ctx, tres)
+        except Exception:
+            pass
 
         if sres.get("advisory_match"):
             notice = sres["notice"]
