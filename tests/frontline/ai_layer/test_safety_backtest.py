@@ -66,3 +66,15 @@ def test_summarise_and_render_no_invented_numbers():
 def test_summarise_empty():
     s = summarise({"hits": [], "misses": [], "unconfirmed_count": 0}, {})
     assert s["recall_rate"] is None and s["lead_weeks_median"] is None and s["hero"] is None
+
+
+def test_campaign_level_rollup():
+    from scripts.ai_safety_backtest import campaign_level
+
+    rows = [
+        {"advisory_id": "24V1|2019|HONDA|CR-V|SERVICE BRAKES", "outcome": "hit", "lead_weeks": 3},
+        {"advisory_id": "24V1|2020|HONDA|CR-V|SERVICE BRAKES", "outcome": "hit", "lead_weeks": 7},
+        {"advisory_id": "24V2|2019|FORD|ESCAPE|ENGINE", "outcome": "miss", "lead_weeks": 0},
+    ]
+    c = campaign_level(rows)
+    assert (c["campaigns"], c["hits"], c["misses"], c["lead_weeks_median"]) == (2, 1, 1, 7)

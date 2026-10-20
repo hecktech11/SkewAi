@@ -99,3 +99,47 @@ async def test_seed_with_fake_meta_escalates_hinglish_brake_failure(fake_meta, p
     assert out["severity"] == "Critical"
     assert any("do not" in t["text"].lower() for t in out["transcript"] if t["speaker"] == "agent")
     assert out["evidence"]["analysis_status"] in ("ok", "partial")
+
+
+def test_safety_contrast_without_key_is_identity(no_meta):
+    from src.ai_layer.demo import INDIA_SCENARIO_TURNS, safety_contrast
+
+    out = safety_contrast(INDIA_SCENARIO_TURNS[0], "automotive_nhtsa")
+    assert out["lang"] == "hinglish"
+    assert out["original_kill_switch"] is None
+    assert out["translated_by_meta"] is False
+    assert out["final_kill_switch"] is None
+
+
+def test_safety_contrast_english_hits_existing_lexicon(no_meta):
+    from src.ai_layer.demo import safety_contrast
+
+    out = safety_contrast("my brakes failed on the highway", "automotive_nhtsa")
+    assert out["original_kill_switch"] == "brakes failed"
+    assert out["final_kill_switch"] == "brakes failed"
+
+
+def test_safety_contrast_with_fake_meta_translation_fires_lexicon(fake_meta):
+    from src.ai_layer.demo import INDIA_SCENARIO_TURNS, safety_contrast
+
+    fake_meta.chat["normalize"] = lambda p: {
+        "normalized_en": "Hello. The brakes failed on my 2019 Honda CR-V, the pedal goes all the way down and there is a grinding sound.",
+        "confidence": 0.92,
+    }
+    out = safety_contrast(INDIA_SCENARIO_TURNS[0], "automotive_nhtsa")
+    assert out["translated_by_meta"] is True
+    assert out["original_kill_switch"] is None
+    assert out["normalized_kill_switch"] == "brakes failed"
+    assert out["final_kill_switch"] == "brakes failed"
+
+
+def test_safety_contrast_route(reset_ops_db, no_meta, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
+
+    r = TestClient(app).post("/api/ai/demo/safety-contrast", json={"text": "my brakes failed"})
+    assert r.status_code == 200, r.text
+    assert r.json()["final_kill_switch"] == "brakes failed"

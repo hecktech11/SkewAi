@@ -63,7 +63,7 @@ function Analysis({ ev, enabled, onAnalyze, busy }) {
   if (ev.analysis_status === "not_run") {
     return (
       <div className="muted small">
-        Stored and attached. Analysis not run (no Meta key){enabled ? "" : " - add META_API_KEY to enable SAM 3.1 + Muse Spark."}
+        Stored and attached. {enabled ? "Analysis not run yet." : "Analysis not run (no Meta key) - add META_API_KEY to enable SAM 3.1 + Muse Spark."}
         {enabled && <button className="ghost" style={{ marginLeft: 8 }} disabled={busy} onClick={onAnalyze}>Analyze</button>}
       </div>
     );

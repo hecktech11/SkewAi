@@ -58,6 +58,52 @@ function NormalizeTry() {
   );
 }
 
+// Hero moment: the SAME Hinglish words through the existing kill-switch lexicon,
+// first as spoken, then after English normalisation (Muse Spark when a key is
+// set). The deterministic lexicon makes the decision in both columns.
+function HeroContrast({ text }) {
+  const [out, setOut] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    aiPostJson("/api/ai/demo/safety-contrast", { text })
+      .then((r) => { if (alive) setOut(r); })
+      .catch((e) => { if (alive) setErr(e.message); });
+    return () => { alive = false; };
+  }, [text]);
+  if (err) return <div className="muted small">Safety contrast unavailable ({err}).</div>;
+  if (!out) return null;
+  const hit = (t) => t
+    ? <span className="chip sev-critical">kill-switch: "{t}" → Critical, "do not drive"</span>
+    : <span className="chip">no kill-switch term matched</span>;
+  return (
+    <div className="row" style={{ gap: 12, marginTop: 10, flexWrap: "wrap" }} data-testid="hero-contrast">
+      <div className="card" style={{ flex: "1 1 280px", padding: 10 }}>
+        <div className="small"><strong>Rules only</strong> <MetaTag mode="deterministic" /></div>
+        <div className="small muted" style={{ margin: "4px 0" }}>Existing lexicon on the caller's own words ({out.lang})</div>
+        {hit(out.original_kill_switch)}
+      </div>
+      <div className="card" style={{ flex: "1 1 280px", padding: 10 }}>
+        <div className="small"><strong>Meta AI enhanced</strong>{" "}
+          <MetaTag mode={out.translated_by_meta ? "enhanced" : "deterministic"} models={out.translated_by_meta ? ["Muse Spark"] : []} fallbackReason={out.fallback_reason} />
+        </div>
+        {out.translated_by_meta ? (
+          <>
+            <div className="small" style={{ margin: "4px 0" }}><strong>English:</strong> {out.normalized_en}</div>
+            {hit(out.normalized_kill_switch)}
+          </>
+        ) : (
+          <div className="small muted" style={{ margin: "4px 0" }}>
+            Not run: no Meta key. With a key, Muse Spark translates first and the SAME lexicon runs on the English
+            (covered by a mocked-Meta test; not verified against the live API).
+          </div>
+        )}
+      </div>
+      <div className="muted small" style={{ flexBasis: "100%" }}>Decision: {out.decided_by}. AI can add a safety flag, never remove one.</div>
+    </div>
+  );
+}
+
 function CaseSummary({ caseId }) {
   const [c, setC] = useState(null);
   useEffect(() => {
@@ -122,6 +168,7 @@ export default function DemoMode({ hashQuery }) {
       <Step n={1} title="A driver in Pune calls in Hinglish and sends a photo" link="#call" linkLabel="Open voice agent">
         <SpeechLangSelect />
         <NormalizeTry />
+        <HeroContrast text={seed?.transcript?.find((t) => t.speaker === "customer")?.text || SAMPLE_HINGLISH} />
         {seed?.transcript && (
           <details style={{ marginTop: 8 }} open>
             <summary className="small">Seeded call transcript (synthetic, ran through the real pipeline)</summary>

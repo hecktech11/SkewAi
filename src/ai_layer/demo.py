@@ -94,6 +94,42 @@ def muse_image_photo() -> tuple[bytes, str] | None:
     return None
 
 
+def safety_contrast(text: str, pack_id: str | None = None) -> dict[str, Any]:
+    """Hero-moment check: run the pack's EXISTING kill-switch lexicon on the
+    caller's own words, then on the English normalisation (Muse Spark when a key
+    is set, otherwise the deterministic glossary, which leaves Hinglish as is).
+
+    This is read-only. It does not touch any interaction, and on a real call
+    the enhanced intake does the same thing (raise-only).
+    """
+    from types import SimpleNamespace
+
+    from src.agents.intake import _check_kill_switch
+    from src.ai_layer.normalize import normalize_text
+    from src.domains.active_pack import resolve_active_pack_id
+    from src.domains.loader import load_pack
+
+    pack = load_pack(pack_id or resolve_active_pack_id())
+    ctx = SimpleNamespace(pack=pack)
+    text = str(text or "")[:2000]
+    original_hit = _check_kill_switch(text, ctx)
+    norm = normalize_text(text)
+    translated = norm.get("method") == "meta_muse_spark"
+    normalized_hit = _check_kill_switch(norm["normalized_en"], ctx) if norm["normalized_en"] != text else None
+    return {
+        "original": text,
+        "lang": norm.get("lang"),
+        "original_kill_switch": original_hit,
+        "normalized_en": norm["normalized_en"],
+        "normalization_method": norm.get("method"),
+        "normalized_kill_switch": normalized_hit,
+        "translated_by_meta": translated,
+        "fallback_reason": norm.get("fallback_reason"),
+        "decided_by": "existing pack kill-switch lexicon (deterministic)",
+        "final_kill_switch": original_hit or normalized_hit,
+    }
+
+
 async def seed_india_scenario(*, pack_id: str | None = None, use_muse_image: bool = False,
                               analyze: bool = True) -> dict[str, Any]:
     from src.agents.orchestrator import OrchestratorHooks, create_interaction

@@ -115,6 +115,21 @@ async def demo_seed(
     return await seed_india_scenario()
 
 
+@router.post("/api/ai/demo/safety-contrast")
+@limiter.limit("60 per minute")
+async def demo_safety_contrast(
+    request: Request,
+    body: dict[str, Any],
+    _role: str = Depends(require_perm_dep("contact:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    """Read-only hero check: the existing kill-switch lexicon on the original
+    words vs on their English normalisation. Touches no interaction."""
+    from src.ai_layer.demo import safety_contrast
+
+    text = str((body or {}).get("text") or "")[:2000]
+    return await asyncio.to_thread(safety_contrast, text)
+
+
 @router.get("/api/ai/investigations/{investigation_id}/evidence")
 async def investigation_evidence(
     investigation_id: str,

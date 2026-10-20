@@ -182,6 +182,28 @@ def flag_precision(pack_id: str, model_grain: bool = False) -> dict[str, Any]:
     }
 
 
+def campaign_level(recalls: list[dict[str, Any]]) -> dict[str, Any]:
+    """NHTSA recall rows are campaign x model x model-year scope rows
+    (advisory_id ``24V123000|2019|HONDA|CR-V|SERVICE BRAKES``). Roll them up to
+    the campaign number: a campaign is a hit when any of its rows is, with its
+    best (largest) lead."""
+    camp: dict[str, dict[str, Any]] = {}
+    for r in recalls:
+        cid = str(r.get("advisory_id") or "").split("|")[0]
+        c = camp.setdefault(cid, {"hit": False, "lead": 0})
+        if r.get("outcome") == "hit":
+            c["hit"] = True
+            c["lead"] = max(c["lead"], int(r.get("lead_weeks") or 0))
+    leads = [c["lead"] for c in camp.values() if c["hit"]]
+    n = len(camp)
+    return {
+        "campaigns": n, "hits": len(leads), "misses": n - len(leads),
+        "recall_rate": round(len(leads) / n, 3) if n else None,
+        "lead_weeks_median": statistics.median(leads) if leads else None,
+        "lead_weeks_mean": round(statistics.mean(leads), 1) if leads else None,
+    }
+
+
 def summarise(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[str, Any]]]) -> dict[str, Any]:
     hits, misses = report["hits"], report["misses"]
     leads = [int(h["lead_weeks"]) for h in hits]
@@ -222,6 +244,7 @@ def summarise(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[st
         "lead_weeks_p25": statistics.quantiles(leads, n=4)[0] if len(leads) >= 4 else None,
         "lead_weeks_p75": statistics.quantiles(leads, n=4)[2] if len(leads) >= 4 else None,
         "unconfirmed_flags": report["unconfirmed_count"],
+        "campaign_level": campaign_level(list(hits) + list(misses)),
         "preventable_window_totals_dedup": totals,
         "per_hit": per_hit, "hero": hero,
     }
@@ -229,6 +252,7 @@ def summarise(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[st
 
 def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str:
     t = s["preventable_window_totals_dedup"]
+    c = s["campaign_level"]
     L = [
         "# Recall backtest and preventable-window safety correlation (NHTSA 2015-2024)",
         "",
@@ -245,7 +269,18 @@ def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str
         "",
         "## Early warning vs official recall",
         "",
-        "| Metric | Value |",
+        "NHTSA recall rows are campaign x model x model-year scope rows; both grains are shown.",
+        "",
+        "| Metric | Campaigns | Scope rows |",
+        "| --- | --- | --- |",
+        f"| Scored | {c['campaigns']} | {s['recalls_scored']} |",
+        f"| Flagged early (hit, >= 1 week lead) | {c['hits']} | {s['hits']} |",
+        f"| Missed | {c['misses']} | {s['misses']} |",
+        f"| Recall (hits / scored) | {c['recall_rate']} | {s['recall_rate']} |",
+        f"| Median lead time, weeks (hits) | {c['lead_weeks_median']} | {s['lead_weeks_median']} |",
+        f"| Mean lead time, weeks (hits) | {c['lead_weeks_mean']} | {s['lead_weeks_mean']} |",
+        "",
+        "| Metric (scope rows, flags) | Value |",
         "| --- | --- |",
         f"| Recalls flagged early (hit, >= 1 week lead) | {s['hits']} |",
         f"| Recalls missed | {s['misses']} |",
@@ -324,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--year-min", type=int, default=2015)
     p.add_argument("--year-max", type=int, default=2024)
     p.add_argument("--model-grain", action="store_true")
+    p.add_argument("--cache", default=None, help="JSON cache of the lead report + precision (written after scoring; "
+                   "reused when present so the report can be re-rendered without re-scoring)")
     p.add_argument("--out-md", default=str(OUT_MD))
     p.add_argument("--out-json", default=str(OUT_JSON))
     p.add_argument("--out-lead", default=str(OUT_LEAD), help="existing-format per-recall lead-time report")
@@ -334,13 +371,22 @@ def main(argv: list[str] | None = None) -> int:
     from src.backtest.recall_lead import format_recall_lead_report, recall_lead_report
 
     t0 = time.time()
-    report = recall_lead_report(args.pack, model_grain=args.model_grain, run_backtests=False)
-    print(f"lead report: hits={report['hit_count']} misses={report['miss_count']} "
-          f"unconfirmed={report['unconfirmed_count']} ({time.time() - t0:.0f}s)", flush=True)
+    cache = Path(args.cache) if args.cache else None
+    if cache and cache.exists():
+        cached = json.loads(cache.read_text())
+        report, prec = cached["report"], cached["precision"]
+        print(f"reusing cached scoring from {cache}", flush=True)
+    else:
+        report = recall_lead_report(args.pack, model_grain=args.model_grain, run_backtests=False)
+        report.pop("backtest_rows", None)
+        print(f"lead report: hits={report['hit_count']} misses={report['miss_count']} "
+              f"unconfirmed={report['unconfirmed_count']} ({time.time() - t0:.0f}s)", flush=True)
+        prec = flag_precision(args.pack, model_grain=args.model_grain)
+        print(f"precision: {prec} ({time.time() - t0:.0f}s)", flush=True)
+        if cache:
+            cache.write_text(json.dumps({"report": report, "precision": prec}, default=str))
     Path(args.out_lead).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out_lead).write_text(format_recall_lead_report(report), encoding="utf-8")
-    prec = flag_precision(args.pack, model_grain=args.model_grain)
-    print(f"precision: {prec} ({time.time() - t0:.0f}s)", flush=True)
     makes = {m.strip().upper() for m in args.makes.split(",") if m.strip()}
     slices = {(str(h["scope_category"] or "").upper(), str(h["scope_entity_2"] or "").upper()) for h in report["hits"]}
     safety = safety_rows(iter_flat(Path(args.zip)), makes, args.year_min, args.year_max, slices)
@@ -360,6 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         headline = {
             "recalls_scored": s["recalls_scored"], "hits": s["hits"], "misses": s["misses"],
             "recall_rate": s["recall_rate"], "lead_weeks_median": s["lead_weeks_median"],
+            "campaign_level": s["campaign_level"],
             "lead_weeks_mean": s["lead_weeks_mean"], "precision_episodes": prec["precision_episodes"],
             "preventable_window_crash": t["crash"], "preventable_window_fire": t["fire"],
             "preventable_window_injury_complaints": t["injury_complaints"],

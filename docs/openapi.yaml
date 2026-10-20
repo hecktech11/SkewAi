@@ -6417,6 +6417,71 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/ai/demo/safety-contrast:
+    post:
+      tags:
+      - ai-layer
+      summary: Demo Safety Contrast
+      description: 'Read-only hero check: the existing kill-switch lexicon on the original
+  
+        words vs on their English normalisation. Touches no interaction.'
+      operationId: demo_safety_contrast_api_ai_demo_safety_contrast_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-API-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      - name: x-frontline-role
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Frontline-Role
+      - name: x-frontline-session
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Frontline-Session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Demo Safety Contrast Api Ai Demo Safety Contrast Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/ai/demo/seed:
     post:
       tags:

@@ -7,10 +7,13 @@ import SafetyRiskChip from "./SafetyRiskChip.jsx";
 export function BacktestHero({ h }) {
   if (!h) return null;
   const hero = h.hero;
+  const c = h.campaign_level || {};
   return (
     <div className="banner banner-ok ai-hero" data-testid="backtest-hero" style={{ marginBottom: 10 }}>
-      <strong>NHTSA backtest (2015-2024, 5 makes):</strong> {h.hits} of {h.recalls_scored} recalls flagged early,
-      median lead {h.lead_weeks_median} weeks. In the windows between flag and recall, NHTSA received{" "}
+      <strong>NHTSA backtest (2015-2024, 5 makes):</strong>{" "}
+      {c.campaigns ? <>{c.hits} of {c.campaigns} recall campaigns flagged early (median lead {c.lead_weeks_median} weeks)</>
+        : <>{h.hits} of {h.recalls_scored} recall scope rows flagged early (median lead {h.lead_weeks_median} weeks)</>}.
+      {" "}In the windows between flag and recall, NHTSA received{" "}
       {h.preventable_window_crash} crash-, {h.preventable_window_fire} fire- and {h.preventable_window_injury_complaints} injury-linked
       complaints on the flagged slices.
       {hero && (
