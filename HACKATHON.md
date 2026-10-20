@@ -64,7 +64,46 @@ Every AI surface in the UI carries a **Meta model tag** (e.g. `Muse Spark 1.3`,
 
 ### 4.1 Recall early-warning backtest (NHTSA)
 
-BT_SECTION
+Full run on public NHTSA ODI data:
+- complaints: `FLAT_CMPL`, Honda / Toyota / Ford / Hyundai / Kia, model years 2015–2024, **219,510 complaints**;
+- recalls: `FLAT_RCL_POST_2010`, **4,393 recall scope rows = 1,172 campaigns**.
+
+The detector is the **existing** deterministic weekly z-score scan; no AI is involved in these numbers. Each recall is scored only on complaints NHTSA had *received* by the recall report date, and misses stay in.
+Full report: [`reports/nhtsa/backtest_safety_2015_2024.md`](reports/nhtsa/backtest_safety_2015_2024.md). Reproduce with `make ai-backtest ZIP=FLAT_CMPL.zip` (needs a side `DOMAIN_DB_PATH` loaded by `scripts/ingest_nhtsa.py` + `scripts/ingest_recalls.py`).
+
+**Headline: actionable early warning** (a flag episode on the same make + component ending within 52 weeks before the recall):
+
+| | Campaigns | Scope rows |
+|---|---|---|
+| Flagged early (hits) | **535 / 1,172 (45.6%)** | 2,090 / 4,393 (47.6%) |
+| Missed | 637 | 2,303 |
+| Median / mean lead | **11 / 15.9 weeks** | 10 / 14.8 weeks (IQR 3–23) |
+
+| Flag quality (full series) | Value |
+|---|---|
+| Flag episodes | 1,540 |
+| Confirmed by a later recall of the same make + component | 985, so **precision 0.64** |
+| False-alarm episodes (no later recall in the data) | 555 |
+| Slice-weeks flagged / confirmed / false alarm | 2,409 / 1,619 / 790 (precision 0.672) |
+
+**Preventable window (correlation only, not "lives saved"):** this counts distinct complaints on the flagged make + component that NHTSA received between the start of the flag episode and the recall report date, using NHTSA's own owner-entered fields:
+
+| CRASH = Y | FIRE = Y | INJURED > 0 | DEATHS > 0 | Any of these |
+|---|---|---|---|---|
+| 1,379 | 712 | 882 (1,266 persons) | 19 (29 deaths reported) | 2,331 |
+
+**Upper bound we do not quote as the headline:** counting from the *first-ever* flag of a slice gives 735 / 1,172 campaigns (62.7%) with a median lead of 214 weeks. That lead is inflated. A broad slice such as FORD ENGINE is first flagged in 2015 and then "matches" an unrelated 2026 recall. Both metrics are in the report.
+
+Caveats:
+- Matching is at make + component grain, so a flag can come from a different defect than the one recalled.
+- The 52-week window is a chosen parameter, not a tuned one.
+- "False alarm" includes real defects that were never recalled, or that were recalled after the data window (right-censoring).
+- Complaints are self-reported.
+- The recall date is the Part 573 receipt date, and manufacturers often know earlier.
+- Precision uses the full series.
+- Only 5 makes were ingested (2,258,118 FLAT_CMPL lines read, 219,510 kept for these makes and model years). The existing trust check marked only 9,198 of them "trusted" (mostly freshness/staleness on historical data). They were loaded with the existing historical-backfill option (`enforce_trust=False`), so every scored complaint is real, but most are not "fresh" by the product's live-data rules.
+
+Memory note: the existing `recall_lead_report` caches every as-of series and ran the box out of RAM at this scale. `scripts/ai_safety_backtest.py` therefore calls the same building blocks but keeps only one series in memory per worker. A test asserts that its output is identical to `recall_lead_report` on a fixture.
 
 ### 4.2 Hindi/Hinglish intake eval (`eval/enhanced/REPORT.md`)
 

@@ -84,7 +84,12 @@ Tags: `Muse Spark 1.3` (brief wording), `Qubot audited`.
   safety risk first, then by case count.
 - **Backtest headline** (real NHTSA data, Honda/Toyota/Ford/Hyundai/Kia, model
   years 2015–2024; read live from `reports/nhtsa/backtest_safety.json`):
-  BT_HEADLINE
+  **535 of 1,172 recall campaigns (45.6%)** had a flag episode on the same
+  make + component within the 52 weeks before NHTSA received the recall report.
+  The median lead was **11 weeks** (mean 15.9), scored only on complaints that
+  had arrived by that date. Episode precision is 0.64 (36% of flag episodes
+  had no later recall). In those windows NHTSA received **1,379 complaints
+  marked CRASH, 712 marked FIRE and 882 with injuries** on the flagged slices.
 - Say the caveat out loud: "These are complaints filed during the window
   between our flag and the recall. They show correlation and potential
   exposure. We do not claim lives saved."
