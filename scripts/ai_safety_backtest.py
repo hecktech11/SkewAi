@@ -151,12 +151,14 @@ def _rows_for_stamps(stamps: list[Any]) -> dict[int, dict[str, Any]]:
     advisories, records, by_stamp = _G["advisories"], _G["records"], _G["by_stamp"]
     pack_id, model_grain, progress = _G["pack_id"], _G["model_grain"], _G["progress"]
     rows: dict[int, dict[str, Any]] = {}
+    recent: dict[int, dict[str, Any] | None] = {}
     t0 = time.time()
     for n, issued in enumerate(stamps, 1):
         series = [r for r in _score_received(records, pack_id=pack_id, as_of=issued, model_grain=model_grain)
                   if r.get("is_anomaly")]
         for i in by_stamp[issued]:
             advisory = advisories[i]
+            recent[i] = _recent_episode(series, advisory, issued, model_grain=model_grain)
             flag = _first_flag(series, advisory, model_grain=model_grain)
             if flag is None:
                 lead, first_week, count, baseline, z_score = 0, None, None, None, None
@@ -184,7 +186,45 @@ def _rows_for_stamps(stamps: list[Any]) -> dict[int, dict[str, Any]]:
             }
         if progress and n % 25 == 0:
             print(f"  worker scored {n}/{len(stamps)} as-of dates ({time.time() - t0:.0f}s)", flush=True)
-    return rows
+    return {"rows": rows, "recent": recent}
+
+
+RECENT_WINDOW_WEEKS = 52
+
+
+def _recent_episode(series: list[dict[str, Any]], advisory: dict[str, Any], issued: Any, *,
+                    model_grain: bool) -> dict[str, Any] | None:
+    """The flag episode an engineer would actually act on: the LATEST run of
+    consecutive flagged weeks for the recall's slice, if its last week is
+    within RECENT_WINDOW_WEEKS before the recall. Returns the episode start
+    and lead, or None. Uses the same as-of series as the first-flag metric
+    (nothing after the recall date is seen)."""
+    from src.backtest.engine import _weeks_between
+    from src.backtest.recall_lead import _slice_match
+    from src.ml_runtime.anomalies import _week_monday
+
+    weeks: dict[Any, str] = {}
+    for row in series:
+        if not _slice_match(row, advisory, model_grain=model_grain):
+            continue
+        m = _week_monday(str(row.get("iso_week") or ""))
+        if m is not None and m < issued:
+            weeks[m] = str(row["iso_week"])
+    if not weeks:
+        return None
+    ordered = sorted(weeks)
+    last = ordered[-1]
+    if _weeks_between(last, issued) > RECENT_WINDOW_WEEKS:
+        return None
+    start = last
+    for m in reversed(ordered[:-1]):
+        if (start - m).days > 7:
+            break
+        start = m
+    lead = _weeks_between(start, issued)
+    if lead < 1:
+        return None
+    return {"episode_start_week": weeks[start], "last_flag_week": weeks[last], "lead_weeks": lead}
 
 
 def lead_report_streaming(pack_id: str, *, model_grain: bool = False, progress: bool = False,
@@ -210,16 +250,19 @@ def lead_report_streaming(pack_id: str, *, model_grain: bool = False, progress: 
     _G.update(advisories=advisories, records=records, by_stamp=by_stamp, pack_id=pack_id,
               model_grain=model_grain, progress=progress)
     rows: dict[int, dict[str, Any]] = {}
+    recent: dict[int, Any] = {}
     workers = max(1, int(workers))
     if workers == 1 or len(stamps) < 2:
-        rows.update(_rows_for_stamps(stamps))
+        parts = [_rows_for_stamps(stamps)]
     else:
         import multiprocessing as mp
 
         chunks = [stamps[k::workers] for k in range(workers)]  # round-robin balances early/late cost
         with mp.get_context("fork").Pool(workers) as pool:
-            for part in pool.map(_rows_for_stamps, [c for c in chunks if c]):
-                rows.update(part)
+            parts = pool.map(_rows_for_stamps, [c for c in chunks if c])
+    for part in parts:
+        rows.update(part["rows"])
+        recent.update(part["recent"])
     recalls = [rows[i] for i in range(len(advisories))]
     full = _score_received(records, pack_id=pack_id, as_of=None, model_grain=model_grain)
     unconfirmed = []
@@ -238,6 +281,8 @@ def lead_report_streaming(pack_id: str, *, model_grain: bool = False, progress: 
         "pack_id": pack_id, "model_grain": model_grain, "recalls": recalls, "hits": hits, "misses": misses,
         "unconfirmed": unconfirmed, "backtest_rows": [], "hit_count": len(hits), "miss_count": len(misses),
         "unconfirmed_count": len(unconfirmed),
+        # Extra (not in recall_lead_report): latest flag episode within 52 weeks, aligned with "recalls".
+        "recent_episode": [recent.get(i) for i in range(len(advisories))],
     }
 
 
@@ -337,6 +382,7 @@ def summarise(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[st
         "crash_fire_or_injury": sum(1 for r in uniq if r["crash"] or r["fire"] or r["injured"] > 0 or r["deaths"] > 0),
     }
     n = len(hits) + len(misses)
+    recent = _summarise_recent(report, safety)
     hero = max(per_hit, key=lambda r: (r["window"].get("crash_fire_or_injury", 0), r["lead_weeks"]), default=None)
     return {
         "recalls_scored": n, "hits": len(hits), "misses": len(misses),
@@ -348,8 +394,114 @@ def summarise(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[st
         "unconfirmed_flags": report["unconfirmed_count"],
         "campaign_level": campaign_level(list(hits) + list(misses)),
         "preventable_window_totals_dedup": totals,
-        "per_hit": per_hit, "hero": hero,
+        "per_hit": per_hit, "hero": hero, "recent": recent,
     }
+
+
+def _summarise_recent(report: dict[str, Any], safety: dict[tuple[str, str], list[dict[str, Any]]]) -> dict[str, Any] | None:
+    """Actionable-lead metric: recalls whose slice had a flag episode ending
+    within RECENT_WINDOW_WEEKS before the recall; lead from that episode's start."""
+    eps = report.get("recent_episode")
+    if eps is None:
+        return None
+    recalls = report["recalls"]
+    rows = []
+    for r, ep in zip(recalls, eps):
+        rows.append({**r, "outcome": "hit" if ep else "miss", "lead_weeks": ep["lead_weeks"] if ep else 0,
+                     "first_flagged_week": ep["episode_start_week"] if ep else None})
+    hits = [r for r in rows if r["outcome"] == "hit"]
+    leads = [int(r["lead_weeks"]) for r in hits]
+    per_hit = []
+    uniq: dict[str, dict[str, Any]] = {}
+    for h in hits:
+        start = _monday(str(h["first_flagged_week"]))
+        end = date.fromisoformat(str(h["issued_at"]))
+        key = (str(h["scope_category"] or "").upper(), str(h["scope_entity_2"] or "").upper())
+        srows = safety.get(key, [])
+        counts, ids = window_counts(srows, start, end) if start else ({}, set())
+        for x in srows:
+            if x["odino"] in ids:
+                uniq.setdefault(f"{key}:{x['odino']}", x)
+        per_hit.append({**{k: h[k] for k in ("advisory_id", "issued_at", "scope_category", "scope_entity_2",
+                                               "scope_entity_3", "first_flagged_week", "lead_weeks")},
+                        "window": counts})
+    u = list(uniq.values())
+    totals = {
+        "complaints": len(u),
+        "crash": sum(1 for r in u if r["crash"]),
+        "fire": sum(1 for r in u if r["fire"]),
+        "injury_complaints": sum(1 for r in u if r["injured"] > 0),
+        "injured_persons_reported": sum(r["injured"] for r in u),
+        "death_complaints": sum(1 for r in u if r["deaths"] > 0),
+        "deaths_reported": sum(r["deaths"] for r in u),
+        "crash_fire_or_injury": sum(1 for r in u if r["crash"] or r["fire"] or r["injured"] > 0 or r["deaths"] > 0),
+    }
+    n = len(rows)
+    hero = max(per_hit, key=lambda r: (r["window"].get("crash_fire_or_injury", 0), r["lead_weeks"]), default=None)
+    return {
+        "window_weeks": RECENT_WINDOW_WEEKS,
+        "recalls_scored": n, "hits": len(hits), "misses": n - len(hits),
+        "recall_rate": round(len(hits) / n, 3) if n else None,
+        "lead_weeks_median": statistics.median(leads) if leads else None,
+        "lead_weeks_mean": round(statistics.mean(leads), 1) if leads else None,
+        "lead_weeks_p25": statistics.quantiles(leads, n=4)[0] if len(leads) >= 4 else None,
+        "lead_weeks_p75": statistics.quantiles(leads, n=4)[2] if len(leads) >= 4 else None,
+        "campaign_level": campaign_level(rows),
+        "preventable_window_totals_dedup": totals,
+        "hero": hero,
+        "per_hit": per_hit,
+    }
+
+
+def _render_recent(r: dict[str, Any] | None) -> list[str]:
+    if not r:
+        return []
+    c, t, h = r["campaign_level"], r["preventable_window_totals_dedup"], r["hero"]
+    L = [
+        f"## Actionable early warning (headline metric): flag episode within {r['window_weeks']} weeks before the recall",
+        "",
+        f"A recall counts as flagged early only if its make + component slice had a flag episode (consecutive",
+        f"flagged weeks) whose last week falls within {r['window_weeks']} weeks before the recall report date, scored",
+        "only on complaints NHTSA had received by that date. Lead = weeks from that episode's first week to the",
+        "recall report date. This is the signal an engineer would act on.",
+        "",
+        "| Metric | Campaigns | Scope rows |",
+        "| --- | --- | --- |",
+        f"| Scored | {c['campaigns']} | {r['recalls_scored']} |",
+        f"| Flagged early | {c['hits']} | {r['hits']} |",
+        f"| Missed | {c['misses']} | {r['misses']} |",
+        f"| Recall (hits / scored) | {c['recall_rate']} | {r['recall_rate']} |",
+        f"| Median lead time, weeks | {c['lead_weeks_median']} | {r['lead_weeks_median']} |",
+        f"| Mean lead time, weeks | {c['lead_weeks_mean']} | {r['lead_weeks_mean']} |",
+        f"| Lead time IQR, weeks (scope rows) | | {r['lead_weeks_p25']} - {r['lead_weeks_p75']} |",
+        "",
+        "Campaign lead is the campaign's best scope-row lead.",
+        "",
+        "### Preventable window (correlation, not proof)",
+        "",
+        "Distinct ODI complaints on the flagged make + component received between the start of that episode and",
+        "the recall report date, from NHTSA's own CRASH / FIRE / INJURED / DEATHS fields, deduplicated across",
+        "overlapping recalls.",
+        "",
+        "| Field | Complaints |",
+        "| --- | --- |",
+        f"| All complaints | {t['complaints']} |",
+        f"| CRASH = Y | {t['crash']} |",
+        f"| FIRE = Y | {t['fire']} |",
+        f"| INJURED > 0 | {t['injury_complaints']} (persons reported: {t['injured_persons_reported']}) |",
+        f"| DEATHS > 0 | {t['death_complaints']} (deaths reported: {t['deaths_reported']}) |",
+        f"| Crash, fire, injury or death | {t['crash_fire_or_injury']} |",
+        "",
+    ]
+    if h:
+        w = h["window"]
+        L += [
+            f"Largest window: {h['scope_entity_2']} {h['scope_category']}, episode from {h['first_flagged_week']},",
+            f"{h['lead_weeks']} weeks before recall {h['advisory_id']} ({h['issued_at']}): {w.get('complaints')} complaints,",
+            f"{w.get('crash')} CRASH, {w.get('fire')} FIRE, {w.get('injury_complaints')} with injuries.",
+            "",
+        ]
+    return L
 
 
 def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str:
@@ -369,9 +521,15 @@ def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str
         f"  {s['recalls_scored']} scored make+component recalls.",
         f"- Grain: make + component (`model_grain={meta['model_grain']}`). Run time {meta['elapsed_s']} s on the build box.",
         "",
-        "## Early warning vs official recall",
+    ]
+    L += _render_recent(s.get("recent"))
+    L += [
+        "## First-ever flag vs official recall (upper bound; read the caveat)",
         "",
-        "NHTSA recall rows are campaign x model x model-year scope rows; both grains are shown.",
+        "Lead here runs from the FIRST week the make+component slice was ever flagged, which for broad slices",
+        "(e.g. FORD ENGINE) is years before an unrelated later recall. These leads are inflated; the",
+        "actionable metric above is the one to quote. NHTSA recall rows are campaign x model x model-year",
+        "scope rows; both grains are shown.",
         "",
         "| Metric | Campaigns | Scope rows |",
         "| --- | --- | --- |",
@@ -397,11 +555,11 @@ def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str
         f"| Flag episodes (consecutive weeks merged) | {prec['flag_episodes']} |",
         f"| Precision, episodes | {prec['precision_episodes']} |",
         "",
-        "## Preventable window (correlation, not proof)",
+        "## Preventable window, first-ever flag (upper bound; correlation, not proof)",
         "",
-        "For every hit: distinct ODI complaints of the same make + component received between the Monday of the",
-        "first flagged week and the recall report date, using NHTSA's own CRASH / FIRE / INJURED / DEATHS fields.",
-        "Deduplicated across overlapping recalls of the same slice.",
+        "For every first-flag hit: distinct ODI complaints of the same make + component received between the",
+        "Monday of the first flagged week and the recall report date, using NHTSA's own CRASH / FIRE / INJURED /",
+        "DEATHS fields. Deduplicated across overlapping recalls of the same slice. Inflated by the long leads above.",
         "",
         "| Field | Complaints in preventable windows |",
         "| --- | --- |",
@@ -416,7 +574,7 @@ def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str
     if s["hero"]:
         h = s["hero"]
         L += [
-            "### Largest single window",
+            "### Largest single first-flag window",
             "",
             f"{h['scope_entity_2']} {h['scope_category']}: first flagged {h['first_flagged_week']}, recall {h['advisory_id']}",
             f"report date {h['issued_at']} ({h['lead_weeks']} weeks later). In between, NHTSA received",
@@ -435,11 +593,14 @@ def render(meta: dict[str, Any], s: dict[str, Any], prec: dict[str, Any]) -> str
         "- 'False alarm' means no later recall of that make+component in this data window; it can be a real",
         "  defect that was never recalled, or one recalled after the data window ends (right-censoring).",
         "- Recall dates are RCDATE (Part 573 report received). Manufacturers often know earlier (TSBs, warranty).",
+        "- The 52-week actionable window is a chosen parameter, not tuned; a recent flag on a broad slice can",
+        "  still come from a different defect than the one recalled.",
+        "- Flag precision is computed on the full series (all data), which uses later weeks in each baseline.",
         "- Only five makes and model years 2015-2024 were ingested; other makes may behave differently.",
         "- The detector is the existing deterministic weekly z-score scan; the optional Meta AI layer is not",
         "  involved in these numbers.",
         "",
-        "## Per-recall hits",
+        "## Per-recall hits (first-ever flag)",
         "",
         "| Advisory | Report date | Slice | First flag | Lead wk | Complaints | Crash | Fire | Injury |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -505,7 +666,25 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.out_md).write_text(render(meta, s, prec), encoding="utf-8")
     t = s["preventable_window_totals_dedup"]
     headline = None
-    if s["hits"]:
+    r = s.get("recent")
+    if r and r["hits"]:
+        rt = r["preventable_window_totals_dedup"]
+        headline = {
+            "metric": f"flag episode within {r['window_weeks']} weeks before the recall (scored as of recall date)",
+            "recalls_scored": r["recalls_scored"], "hits": r["hits"], "misses": r["misses"],
+            "recall_rate": r["recall_rate"], "lead_weeks_median": r["lead_weeks_median"],
+            "lead_weeks_mean": r["lead_weeks_mean"], "campaign_level": r["campaign_level"],
+            "precision_episodes": prec["precision_episodes"],
+            "preventable_window_crash": rt["crash"], "preventable_window_fire": rt["fire"],
+            "preventable_window_injury_complaints": rt["injury_complaints"],
+            "preventable_window_crash_fire_or_injury": rt["crash_fire_or_injury"],
+            "hero": r["hero"],
+            "first_flag": {"hits": s["hits"], "recall_rate": s["recall_rate"], "lead_weeks_median": s["lead_weeks_median"],
+                           "note": "first-ever slice flag; inflated by broad make+component slices"},
+            "caveat": "correlation from self-reported NHTSA complaints; not proof of prevention",
+            "source": str(Path(args.out_md).relative_to(REPO_ROOT)) if Path(args.out_md).resolve().is_relative_to(REPO_ROOT) else args.out_md,
+        }
+    elif s["hits"]:
         headline = {
             "recalls_scored": s["recalls_scored"], "hits": s["hits"], "misses": s["misses"],
             "recall_rate": s["recall_rate"], "lead_weeks_median": s["lead_weeks_median"],
@@ -518,7 +697,9 @@ def main(argv: list[str] | None = None) -> int:
             "source": str(Path(args.out_md).relative_to(REPO_ROOT)) if Path(args.out_md).resolve().is_relative_to(REPO_ROOT) else args.out_md,
         }
     Path(args.out_json).write_text(json.dumps({"meta": meta, "precision": prec, "headline": headline,
-                                               "summary": {k: v for k, v in s.items() if k != "per_hit"},
+                                               "summary": {k: ({kk: vv for kk, vv in v.items() if kk != "per_hit"} if k == "recent" and v else v)
+                                                           for k, v in s.items() if k != "per_hit"},
+                                               "recent_per_hit": (s.get("recent") or {}).get("per_hit"),
                                                "per_hit": s["per_hit"]}, indent=2, default=str), encoding="utf-8")
     print(json.dumps({"headline": headline, "precision": prec}, default=str, indent=2))
     return 0

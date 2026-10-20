@@ -123,3 +123,45 @@ def test_streaming_lead_report_matches_existing_function(tmp_path, monkeypatch):
         for k in ("recalls", "hits", "misses", "unconfirmed", "hit_count", "miss_count", "unconfirmed_count"):
             assert got[k] == expected[k], (workers, k)
     assert expected["hit_count"] >= 1 and expected["miss_count"] >= 1
+
+
+def test_recent_episode_picks_latest_run_within_window():
+    from datetime import datetime
+
+    from scripts.ai_safety_backtest import _recent_episode
+
+    adv = {"scope_category": "SERVICE BRAKES", "scope_entity_2": "HONDA", "scope_entity_3": "CR-V"}
+    mk = lambda wk: {"iso_week": wk, "category": "SERVICE BRAKES", "entity_2": "HONDA", "entity_3": "", "is_anomaly": True}
+    series = [mk("2015-W10"), mk("2018-W01"), mk("2018-W02"), mk("2018-W03"), mk("2018-W10")]
+    other = {"iso_week": "2018-W09", "category": "ENGINE", "entity_2": "HONDA", "entity_3": "", "is_anomaly": True}
+    ep = _recent_episode(series + [other], adv, datetime(2018, 4, 2), model_grain=False)
+    assert ep["episode_start_week"] == "2018-W10" and ep["last_flag_week"] == "2018-W10"
+    assert ep["lead_weeks"] >= 1
+    ep2 = _recent_episode(series[:4], adv, datetime(2018, 4, 2), model_grain=False)
+    assert ep2["episode_start_week"] == "2018-W01"
+    assert _recent_episode(series[:1], adv, datetime(2018, 4, 2), model_grain=False) is None  # > 52 weeks old
+
+
+def test_summarise_recent_block_and_render():
+    from datetime import date
+
+    from scripts.ai_safety_backtest import render, summarise
+
+    hit = {"advisory_id": "18V1|2018|HONDA|CR-V|SERVICE BRAKES", "issued_at": "2018-04-02", "scope_category": "SERVICE BRAKES",
+           "scope_entity_2": "HONDA", "scope_entity_3": "CR-V", "first_flagged_week": "2015-W10", "lead_weeks": 160, "outcome": "hit"}
+    miss = {**hit, "advisory_id": "18V2|2018|HONDA|CR-V|SERVICE BRAKES", "first_flagged_week": None, "lead_weeks": 0, "outcome": "miss"}
+    report = {"recalls": [hit, miss], "hits": [hit], "misses": [miss], "unconfirmed_count": 0,
+              "recent_episode": [{"episode_start_week": "2018-W10", "last_flag_week": "2018-W10", "lead_weeks": 4}, None]}
+    safety = {("SERVICE BRAKES", "HONDA"): [
+        {"odino": "1", "datea": date(2018, 3, 10), "crash": True, "fire": False, "injured": 1, "deaths": 0},
+        {"odino": "2", "datea": date(2016, 1, 1), "crash": True, "fire": False, "injured": 0, "deaths": 0},
+    ]}
+    s = summarise(report, safety)
+    r = s["recent"]
+    assert (r["hits"], r["misses"], r["lead_weeks_median"]) == (1, 1, 4)
+    assert r["preventable_window_totals_dedup"]["crash"] == 1  # the 2016 complaint is outside the episode window
+    assert s["preventable_window_totals_dedup"]["crash"] == 2  # first-flag window includes it
+    prec = {"records": 2, "advisories": 2, "flagged_slice_weeks": 1, "confirmed_slice_weeks": 1, "false_alarm_slice_weeks": 0,
+            "precision_slice_weeks": 1.0, "flag_episodes": 1, "confirmed_episodes": 1, "precision_episodes": 1.0}
+    md = render({"makes": "HONDA", "year_min": 2015, "year_max": 2024, "model_grain": False, "elapsed_s": 1, "command": "x"}, s, prec)
+    assert "Actionable early warning" in md and "upper bound" in md
