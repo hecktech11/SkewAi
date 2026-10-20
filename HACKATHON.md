@@ -108,6 +108,7 @@ modified.
 - The following are assumptions: `json_schema` strict-mode support on Muse Spark, the exact SAM box-token grammar, image-input formatting for vision, rate limits and pricing. Every one is env-configurable (`META_API_BASE`, `META_MODEL_*`, `META_CHAT_PATH`, `META_SAM_ENDPOINT`, `META_IMAGE_ENDPOINT`, `META_TIMEOUT_S`, …; see `src/ai_layer/config.py`).
 - Muse Voice Transcribe (`muse-voice-transcribe-1.0`) exists in the docs but is **not implemented**. Hindi speech uses the browser's `hi-IN` Web Speech recogniser.
 - Enhanced-mode accuracy numbers do not exist yet (see §4.2).
+- **To verify in about 30 seconds with a key:** `META_API_KEY=… python -m scripts.ai_meta_smoke` (add `--image` for Muse Image). It makes one small call each to text, vision and SAM 3.1 through the product client and prints ok/failed with the reason. Without a key it is skipped and makes no network call.
 
 ## 7. Known limitations (honest list)
 

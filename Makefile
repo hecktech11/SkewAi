@@ -224,7 +224,7 @@ clean:
 	@echo "Cleaned DuckDB files. Rebuild with: make frontline-db"
 
 # ── [AI-LAYER] Optional Meta AI layer / hackathon demo (additive targets) ──
-.PHONY: hackathon-setup ai-demo-seed ai-eval ai-backtest ai-test
+.PHONY: hackathon-setup ai-demo-seed ai-eval ai-backtest ai-test ai-smoke
 # One command: venv + deps + dashboard + demo warehouses in data/hackathon/ + serve.
 hackathon-setup:
 	./scripts/judge_setup.sh
@@ -241,3 +241,6 @@ ai-backtest:
 		--year-min $(AI_YEAR_MIN) --year-max $(AI_YEAR_MAX)
 ai-test:
 	FRONTLINE_TEST_ISOLATION=1 $(PY) -m pytest tests/frontline/ai_layer -q
+# Live check of the Meta endpoints (needs META_API_KEY; no key -> skipped, no network).
+ai-smoke:
+	$(PY) -m scripts.ai_meta_smoke

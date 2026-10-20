@@ -12,12 +12,13 @@ export function BacktestHero({ h }) {
     <div className="banner banner-ok ai-hero" data-testid="backtest-hero" style={{ marginBottom: 10 }}>
       <strong>NHTSA backtest (2015-2024, 5 makes):</strong>{" "}
       {c.campaigns ? <>{c.hits} of {c.campaigns} recall campaigns flagged early (median lead {c.lead_weeks_median} weeks)</>
-        : <>{h.hits} of {h.recalls_scored} recall scope rows flagged early (median lead {h.lead_weeks_median} weeks)</>}.
+        : <>{h.hits} of {h.recalls_scored} recall scope rows flagged early (median lead {h.lead_weeks_median} weeks)</>}
+      {h.metric ? <span className="muted"> ({h.metric})</span> : null}.
       {" "}In the windows between flag and recall, NHTSA received{" "}
       {h.preventable_window_crash} crash-, {h.preventable_window_fire} fire- and {h.preventable_window_injury_complaints} injury-linked
       complaints on the flagged slices.
       {hero && (
-        <> Largest: {hero.scope_entity_2} {hero.scope_category} flagged {hero.first_flagged_week}, {hero.lead_weeks} weeks before recall {hero.advisory_id}.</>
+        <> Largest: {hero.scope_entity_2} {hero.scope_category} flagged from {hero.first_flagged_week}, {hero.lead_weeks} weeks before recall {hero.advisory_id}.</>
       )}
       <div className="muted small">Correlation from self-reported complaints, not proof that a crash would have been prevented. Source: {h.source}</div>
     </div>

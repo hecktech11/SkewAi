@@ -257,6 +257,7 @@ Quick start:
 bash scripts/judge_setup.sh                 # one command: deps, build, demo data, serve → http://127.0.0.1:8000/#demo
 export META_API_KEY=...                     # optional; base/models are env-configurable (src/ai_layer/config.py)
 python -m eval.enhanced.run_eval            # 60 labelled synthetic calls; enhanced column "not run" without a key
+python -m scripts.ai_meta_smoke             # live check of Muse Spark / vision / SAM 3.1 settings (skips without a key)
 python -m pytest tests/frontline/ai_layer   # all Meta calls mocked
 ```
 
