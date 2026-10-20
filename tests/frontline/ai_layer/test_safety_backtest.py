@@ -78,3 +78,48 @@ def test_campaign_level_rollup():
     ]
     c = campaign_level(rows)
     assert (c["campaigns"], c["hits"], c["misses"], c["lead_weeks_median"]) == (2, 1, 1, 7)
+
+
+def _insert_week(con, prefix, day, n, *, category, entity_2, entity_3=""):
+    for i in range(n):
+        con.execute(
+            "INSERT INTO records (record_id, occurred_at, received_at, entity_2, entity_3, category, text, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'NHTSA')",
+            [f"{prefix}-{day:%Y%m%d}-{i}", day, day, entity_2, entity_3, category, f"{prefix} note {i}"],
+        )
+
+
+def test_streaming_lead_report_matches_existing_function(tmp_path, monkeypatch):
+    """The memory-bounded runner must give exactly what recall_lead_report gives."""
+    from datetime import datetime, timedelta
+
+    from scripts.ai_safety_backtest import lead_report_streaming
+    from scripts.ingest_recalls import advisory_contract, insert_advisories
+    from src.backtest.recall_lead import recall_lead_report
+    from src.data.warehouse import apply_domain_schema, domain_con
+
+    monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+    pack = "ai_stream_eq"
+    start = datetime(2018, 1, 8)
+    with domain_con(pack, read_only=False) as con:
+        apply_domain_schema(con)
+        for w in range(12):
+            day = start + timedelta(weeks=w)
+            _insert_week(con, "hit", day, 2 if w not in (5, 9) else 20, category="SERVICE BRAKES", entity_2="HONDA")
+            _insert_week(con, "lone", day, 2 if w < 7 else 18, category="STEERING", entity_2="HONDA")
+        _insert_week(con, "late", datetime(2018, 6, 4), 20, category="ENGINE", entity_2="HONDA")
+    rows = []
+    for key, rc, comp in [("18V100|2018|HONDA|ACCORD|SERVICE BRAKES", "20180312", "SERVICE BRAKES"),
+                          ("18V150|2018|HONDA|CIVIC|SERVICE BRAKES", "20180416", "SERVICE BRAKES"),
+                          ("18V200|2018|HONDA|ACCORD|ENGINE", "20180115", "ENGINE"),
+                          ("18V201|2018|HONDA|CR-V|ENGINE", "20180115", "ENGINE")]:
+        rows.append({"ADVISORY_KEY": key, "RCDATE": rc, "YEARTXT": "2018", "MAKETXT": "HONDA",
+                     "MODELTXT": key.split("|")[3], "COMPONENT": comp, "DESC_DEFECT": "d.",
+                     "CORRECTIVE_ACTION": "r.", "RCL_URL": "https://www.nhtsa.gov/recalls"})
+    insert_advisories(pack, rows, contract=advisory_contract("automotive_nhtsa"))
+    expected = recall_lead_report(pack, run_backtests=False)
+    for workers in (1, 2):
+        got = lead_report_streaming(pack, workers=workers)
+        for k in ("recalls", "hits", "misses", "unconfirmed", "hit_count", "miss_count", "unconfirmed_count"):
+            assert got[k] == expected[k], (workers, k)
+    assert expected["hit_count"] >= 1 and expected["miss_count"] >= 1

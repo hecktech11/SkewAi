@@ -139,6 +139,108 @@ def window_counts(rows: list[dict[str, Any]], start: date, end: date) -> tuple[d
     }, set(seen)
 
 
+_G: dict[str, Any] = {}
+
+
+def _rows_for_stamps(stamps: list[Any]) -> dict[int, dict[str, Any]]:
+    """Score each as-of stamp once and build the per-advisory rows for it."""
+    from src.backtest.engine import _weeks_between
+    from src.backtest.recall_lead import _first_flag, _score_received
+    from src.ml_runtime.anomalies import _week_monday
+
+    advisories, records, by_stamp = _G["advisories"], _G["records"], _G["by_stamp"]
+    pack_id, model_grain, progress = _G["pack_id"], _G["model_grain"], _G["progress"]
+    rows: dict[int, dict[str, Any]] = {}
+    t0 = time.time()
+    for n, issued in enumerate(stamps, 1):
+        series = [r for r in _score_received(records, pack_id=pack_id, as_of=issued, model_grain=model_grain)
+                  if r.get("is_anomaly")]
+        for i in by_stamp[issued]:
+            advisory = advisories[i]
+            flag = _first_flag(series, advisory, model_grain=model_grain)
+            if flag is None:
+                lead, first_week, count, baseline, z_score = 0, None, None, None, None
+            else:
+                start = _week_monday(str(flag["iso_week"]))
+                lead = _weeks_between(start, issued) if start is not None else 0
+                first_week = flag["iso_week"]
+                count = flag.get("record_count")
+                baseline = flag.get("baseline_mean")
+                z_score = flag.get("z_score")
+            rows[i] = {
+                "advisory_id": advisory["advisory_id"],
+                "issued_at": issued.date().isoformat(),
+                "scope_category": advisory.get("scope_category"),
+                "scope_entity_2": advisory.get("scope_entity_2"),
+                "scope_entity_3": advisory.get("scope_entity_3"),
+                "first_flagged_week": first_week,
+                "lead_weeks": lead,
+                "outcome": "hit" if lead > 0 else "miss",
+                "record_count": count,
+                "baseline_mean": baseline,
+                "z_score": z_score,
+                "backtest_matched": False,
+                "backtest_best_lead": 0,
+            }
+        if progress and n % 25 == 0:
+            print(f"  worker scored {n}/{len(stamps)} as-of dates ({time.time() - t0:.0f}s)", flush=True)
+    return rows
+
+
+def lead_report_streaming(pack_id: str, *, model_grain: bool = False, progress: bool = False,
+                          workers: int = 1) -> dict[str, Any]:
+    """Same result as ``recall_lead_report(pack_id, run_backtests=False)``.
+
+    It calls the same building blocks (``_load``, ``_score_received``,
+    ``_first_flag``, ``_later_recall``) with the same as-of clock. Only memory
+    and wall time differ. The existing function caches every as-of series
+    (749 distinct dates x 219k records ran the box out of RAM), while this
+    keeps one series per worker at a time. ``workers`` > 1 forks processes over
+    disjoint sets of as-of dates. Rows come back in the original advisory order.
+    The existing module is not modified. Equality is asserted in
+    tests/frontline/ai_layer/test_safety_backtest.py.
+    """
+    from src.backtest.recall_lead import _later_recall, _load, _score_received
+
+    advisories, records = _load(pack_id)
+    by_stamp: dict[Any, list[int]] = defaultdict(list)
+    for i, a in enumerate(advisories):
+        by_stamp[a["issued_at"]].append(i)
+    stamps = sorted(by_stamp)
+    _G.update(advisories=advisories, records=records, by_stamp=by_stamp, pack_id=pack_id,
+              model_grain=model_grain, progress=progress)
+    rows: dict[int, dict[str, Any]] = {}
+    workers = max(1, int(workers))
+    if workers == 1 or len(stamps) < 2:
+        rows.update(_rows_for_stamps(stamps))
+    else:
+        import multiprocessing as mp
+
+        chunks = [stamps[k::workers] for k in range(workers)]  # round-robin balances early/late cost
+        with mp.get_context("fork").Pool(workers) as pool:
+            for part in pool.map(_rows_for_stamps, [c for c in chunks if c]):
+                rows.update(part)
+    recalls = [rows[i] for i in range(len(advisories))]
+    full = _score_received(records, pack_id=pack_id, as_of=None, model_grain=model_grain)
+    unconfirmed = []
+    for row in full:
+        if not row.get("is_anomaly") or _later_recall(row, advisories, model_grain=model_grain):
+            continue
+        unconfirmed.append({
+            "iso_week": row.get("iso_week"), "category": row.get("category"), "entity_2": row.get("entity_2"),
+            "entity_3": row.get("entity_3") or "", "record_count": row.get("record_count"),
+            "baseline_mean": row.get("baseline_mean"), "z_score": row.get("z_score"), "status": "unconfirmed",
+        })
+    unconfirmed.sort(key=lambda r: (str(r["iso_week"]), str(r["category"]), str(r["entity_2"])))
+    hits = [r for r in recalls if r["outcome"] == "hit"]
+    misses = [r for r in recalls if r["outcome"] == "miss"]
+    return {
+        "pack_id": pack_id, "model_grain": model_grain, "recalls": recalls, "hits": hits, "misses": misses,
+        "unconfirmed": unconfirmed, "backtest_rows": [], "hit_count": len(hits), "miss_count": len(misses),
+        "unconfirmed_count": len(unconfirmed),
+    }
+
+
 def flag_precision(pack_id: str, model_grain: bool = False) -> dict[str, Any]:
     from src.backtest.recall_lead import _later_recall, _load, _score_received
 
@@ -359,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--year-min", type=int, default=2015)
     p.add_argument("--year-max", type=int, default=2024)
     p.add_argument("--model-grain", action="store_true")
+    p.add_argument("--workers", type=int, default=1, help="processes for as-of scoring (same result)")
     p.add_argument("--cache", default=None, help="JSON cache of the lead report + precision (written after scoring; "
                    "reused when present so the report can be re-rendered without re-scoring)")
     p.add_argument("--out-md", default=str(OUT_MD))
@@ -368,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
     if is_default_pilot_domain_path():
         print("refusing the pilot data/domains directory; set DOMAIN_DB_PATH to a side directory", file=sys.stderr)
         return 2
-    from src.backtest.recall_lead import format_recall_lead_report, recall_lead_report
+    from src.backtest.recall_lead import format_recall_lead_report
 
     t0 = time.time()
     cache = Path(args.cache) if args.cache else None
@@ -377,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         report, prec = cached["report"], cached["precision"]
         print(f"reusing cached scoring from {cache}", flush=True)
     else:
-        report = recall_lead_report(args.pack, model_grain=args.model_grain, run_backtests=False)
+        report = lead_report_streaming(args.pack, model_grain=args.model_grain, progress=True, workers=args.workers)
         report.pop("backtest_rows", None)
         print(f"lead report: hits={report['hit_count']} misses={report['miss_count']} "
               f"unconfirmed={report['unconfirmed_count']} ({time.time() - t0:.0f}s)", flush=True)
