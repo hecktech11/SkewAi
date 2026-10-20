@@ -3,6 +3,7 @@
   GET  /api/ai/status                                  -> mode badge (enhanced | deterministic)
   GET  /api/ai/events                                  -> deterministic-vs-AI decision log
   GET  /api/ai/investigations/{investigation_id}/grounded-brief
+  GET  /api/ai/early-warning/safety                    -> investigations ordered by safety risk
   GET  /api/ai/investigations/{investigation_id}/evidence
   GET  /api/ai/clusters/{cluster_id}/evidence?pack_id=
   POST /api/ai/language/normalize                      -> detect + normalise (Hindi/Hinglish)
@@ -84,6 +85,16 @@ async def grounded_brief(
         return await asyncio.to_thread(build_grounded_brief, investigation_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/api/ai/early-warning/safety")
+async def early_warning_safety(
+    limit: int = 50,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.safety_board import safety_board
+
+    return await ops_in_thread(safety_board, max(1, min(int(limit), 200)))
 
 
 @router.get("/api/ai/investigations/{investigation_id}/evidence")

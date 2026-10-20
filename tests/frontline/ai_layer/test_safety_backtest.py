@@ -1,0 +1,68 @@
+"""Preventable-window counting in scripts/ai_safety_backtest.py.  [AI-LAYER]"""
+
+from datetime import date
+
+from scripts.ai_safety_backtest import _monday, render, safety_rows, summarise, window_counts
+
+
+def _line(odino, make, comp, datea, crash="N", fire="N", injured="0", deaths="0", year="2018"):
+    p = [""] * 51
+    p[1], p[3], p[5], p[6], p[8], p[9], p[10], p[11], p[15] = odino, make, year, crash, fire, injured, deaths, comp, datea
+    return p
+
+
+def test_monday():
+    assert _monday("2024-W01") == date(2024, 1, 1)
+    assert _monday("bad") is None
+
+
+def test_window_counts_dedupes_odino_and_respects_bounds():
+    rows = [
+        {"odino": "1", "datea": date(2024, 1, 2), "crash": True, "fire": False, "injured": 0, "deaths": 0},
+        {"odino": "1", "datea": date(2024, 1, 2), "crash": False, "fire": False, "injured": 2, "deaths": 0},
+        {"odino": "2", "datea": date(2024, 1, 5), "crash": False, "fire": True, "injured": 0, "deaths": 0},
+        {"odino": "3", "datea": date(2024, 2, 1), "crash": True, "fire": False, "injured": 1, "deaths": 0},  # == end
+        {"odino": "4", "datea": date(2023, 12, 31), "crash": True, "fire": False, "injured": 0, "deaths": 0},
+    ]
+    c, ids = window_counts(rows, date(2024, 1, 1), date(2024, 2, 1))
+    assert ids == {"1", "2"}
+    assert c == {"complaints": 2, "crash": 1, "fire": 1, "injury_complaints": 1, "injured_persons_reported": 2,
+                 "death_complaints": 0, "deaths_reported": 0, "crash_fire_or_injury": 2}
+
+
+def test_safety_rows_filters_make_year_slice():
+    lines = [
+        _line("1", "HONDA", "SERVICE BRAKES, HYDRAULIC", "20240102", crash="Y"),
+        _line("2", "BMW", "SERVICE BRAKES, HYDRAULIC", "20240102"),
+        _line("3", "HONDA", "SERVICE BRAKES, HYDRAULIC", "20240102", year="2010"),
+        _line("4", "HONDA", "ENGINE", "20240102"),
+        _line("5", "HONDA", "SERVICE BRAKES", "bad"),
+    ]
+    out = safety_rows(lines, {"HONDA"}, 2015, 2024, {("SERVICE BRAKES", "HONDA")})
+    assert [r["odino"] for r in out[("SERVICE BRAKES", "HONDA")]] == ["1"]
+    assert out[("SERVICE BRAKES", "HONDA")][0]["crash"] is True
+
+
+def test_summarise_and_render_no_invented_numbers():
+    hit = {"advisory_id": "24V001", "issued_at": "2024-02-01", "scope_category": "SERVICE BRAKES",
+           "scope_entity_2": "HONDA", "scope_entity_3": None, "first_flagged_week": "2024-W01", "lead_weeks": 4}
+    miss = {**hit, "advisory_id": "24V002", "lead_weeks": 0, "first_flagged_week": None}
+    report = {"hits": [hit], "misses": [miss], "unconfirmed_count": 3}
+    safety = {("SERVICE BRAKES", "HONDA"): [
+        {"odino": "1", "datea": date(2024, 1, 3), "crash": True, "fire": False, "injured": 1, "deaths": 0}]}
+    s = summarise(report, safety)
+    assert (s["hits"], s["misses"], s["recall_rate"], s["lead_weeks_median"]) == (1, 1, 0.5, 4)
+    assert s["preventable_window_totals_dedup"]["crash"] == 1
+    assert s["hero"]["advisory_id"] == "24V001"
+    prec = {"records": 10, "advisories": 2, "flagged_slice_weeks": 4, "confirmed_slice_weeks": 1,
+            "false_alarm_slice_weeks": 3, "precision_slice_weeks": 0.25, "flag_episodes": 2,
+            "confirmed_episodes": 1, "precision_episodes": 0.5}
+    md = render({"makes": "HONDA", "year_min": 2015, "year_max": 2024, "model_grain": False,
+                 "elapsed_s": 1, "command": "x"}, s, prec)
+    assert "correlation" in md.lower() and "| Recalls missed | 1 |" in md
+    assert "lives" not in md.lower()
+
+
+def test_summarise_empty():
+    s = summarise({"hits": [], "misses": [], "unconfirmed_count": 0}, {})
+    assert s["recall_rate"] is None and s["lead_weeks_median"] is None and s["hero"] is None
