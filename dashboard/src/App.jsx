@@ -20,6 +20,7 @@ import FeatureStudio from "../routes/FeatureStudio.jsx";
 import PackBuilder from "../routes/PackBuilder.jsx";
 // [AI-LAYER] optional Meta AI layer: demo path page + mode badge
 import DemoMode from "../routes/DemoMode.jsx";
+import AiTools from "../routes/AiTools.jsx"; // [AI-LAYER] road-safety tools hub
 import AiModeBadge from "./ai/AiModeBadge.jsx";
 import CommandPalette from "./ui/CommandPalette.jsx";
 import { ToastProvider, useToast } from "./ui/Toast.jsx";
@@ -84,6 +85,8 @@ const EXTRA_PAGES = [
   { id: "builder", label: "Pack builder", route: PackBuilder, keywords: "pack builder upload yaml" },
   // [AI-LAYER] hackathon demo path (#demo); not in the nav, existing screens unchanged
   { id: "demo", label: "Demo tour", route: DemoMode, keywords: "demo hackathon hindi photo brief safety meta muse sam" },
+  // [AI-LAYER] road-safety tools hub (#ai-tools): vehicle risk, alerts, service centre, spread, WhatsApp mock
+  { id: "ai-tools", label: "Road-safety tools", route: AiTools, keywords: "vehicle risk alerts service centre spread whatsapp video" },
 ];
 const ALL_PAGES = [...ALL_NAV, ...EXTRA_PAGES];
 const THEMES = ["dark", "light"];

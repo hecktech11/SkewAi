@@ -321,3 +321,10 @@ async def analyze(
         return await asyncio.to_thread(analyze_evidence, evidence_id)
     except Exception as e:
         raise _evidence_http(e) from e
+
+
+# Hackathon extensions live in their own module and are mounted here so the
+# existing app wiring (src/api/main.py) stays a single include.
+from src.api.routes.ai_layer_plus import router as _plus_router  # noqa: E402
+
+router.include_router(_plus_router)
