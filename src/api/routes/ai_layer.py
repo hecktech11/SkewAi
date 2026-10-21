@@ -328,3 +328,8 @@ async def analyze(
 from src.api.routes.ai_layer_plus import router as _plus_router  # noqa: E402
 
 router.include_router(_plus_router)
+
+# [AI-LAYER] v2: Meta call health, supervisor review of AI raises, status overview.
+from src.api.routes.ai_layer_v2 import router as _v2_router  # noqa: E402
+
+router.include_router(_v2_router)
