@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Skew AI — Ops Console</title>
+    <meta
+      name="description"
+      content="Skew AI — voice-of-customer ops: live agent, cases, early warning, and grounded audit."
+    />
+    <script type="module" crossorigin src="/ui/assets/index-BPIThkMj.js"></script>
+    <link rel="stylesheet" crossorigin href="/ui/assets/index-BsqkUrWz.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

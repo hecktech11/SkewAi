@@ -1,0 +1,2182 @@
+{
+  "generated_at": "2026-10-21 08:01 UTC",
+  "sets": {
+    "original_60": {
+      "path": "eval/enhanced/calls.jsonl",
+      "rules_only": {
+        "en": {
+          "n": 20,
+          "severity_counts": {
+            "Low": 4,
+            "Medium": 10,
+            "Critical": 2
+          },
+          "triage_skipped": 4,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 4,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 16,
+          "category_wrong": 0
+        },
+        "hi": {
+          "n": 20,
+          "severity_counts": {},
+          "triage_skipped": 20,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 0,
+          "kill_switch_misses": 4,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 0,
+          "category_wrong": 0
+        },
+        "hinglish": {
+          "n": 20,
+          "severity_counts": {
+            "Low": 2,
+            "Medium": 12,
+            "Critical": 2
+          },
+          "triage_skipped": 4,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 2,
+          "kill_switch_misses": 2,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 16,
+          "category_wrong": 0
+        },
+        "all": {
+          "n": 60,
+          "severity_counts": {
+            "Low": 6,
+            "Medium": 22,
+            "Critical": 4
+          },
+          "triage_skipped": 28,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 12,
+          "kill_switch_hits": 6,
+          "kill_switch_misses": 6,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 60,
+          "category_correct": 32,
+          "category_wrong": 0
+        }
+      },
+      "rules_plus_hindi": {
+        "en": {
+          "n": 20,
+          "severity_counts": {
+            "Low": 4,
+            "Medium": 10,
+            "Critical": 2
+          },
+          "triage_skipped": 4,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 4,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 16,
+          "category_wrong": 0
+        },
+        "hi": {
+          "n": 20,
+          "severity_counts": {
+            "Low": 2,
+            "Medium": 14
+          },
+          "triage_skipped": 4,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 4,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 16,
+          "category_wrong": 0
+        },
+        "hinglish": {
+          "n": 20,
+          "severity_counts": {
+            "Low": 2,
+            "Medium": 12,
+            "Critical": 4
+          },
+          "triage_skipped": 2,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 4,
+          "kill_switch_hits": 4,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 18,
+          "category_wrong": 0
+        },
+        "all": {
+          "n": 60,
+          "severity_counts": {
+            "Low": 8,
+            "Medium": 36,
+            "Critical": 6
+          },
+          "triage_skipped": 10,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 12,
+          "kill_switch_hits": 12,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 60,
+          "category_correct": 50,
+          "category_wrong": 0
+        }
+      },
+      "lowers": 0,
+      "per_call": [
+        {
+          "id": "en_00_0",
+          "lang": "en",
+          "text": "My 2019 Honda CR-V - the brakes make a loud grinding noise when I stop.",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "hi_00_0",
+          "lang": "hi",
+          "text": "मेरी 2019 की होंडा CR-V में समस्या है, रुकते समय ब्रेक से तेज़ घिसने की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "hl_00_0",
+          "lang": "hinglish",
+          "text": "Meri Honda CR-V 2019 mein problem hai, rukte waqt brakes se bahut grinding ki awaaz aati hai.",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "en_00_1",
+          "lang": "en",
+          "text": "My 2016 Honda CIVIC - the brakes make a loud grinding noise when I stop.",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "hi_00_1",
+          "lang": "hi",
+          "text": "मेरी 2016 की होंडा CIVIC में समस्या है, रुकते समय ब्रेक से तेज़ घिसने की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "hl_00_1",
+          "lang": "hinglish",
+          "text": "Meri Honda CIVIC 2016 mein problem hai, rukte waqt brakes se bahut grinding ki awaaz aati hai.",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "en_01_0",
+          "lang": "en",
+          "text": "My 2018 Toyota CAMRY - the brakes failed completely on the highway.",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          }
+        },
+        {
+          "id": "hi_01_0",
+          "lang": "hi",
+          "text": "मेरी 2018 की टोयोटा CAMRY में समस्या है, हाईवे पर ब्रेक पूरी तरह फेल हो गए।",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          }
+        },
+        {
+          "id": "hl_01_0",
+          "lang": "hinglish",
+          "text": "Meri Toyota CAMRY 2018 mein problem hai, highway pe brakes poori tarah fail ho gaye.",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "en_01_1",
+          "lang": "en",
+          "text": "My 2022 Toyota COROLLA - the brakes failed completely on the highway.",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          }
+        },
+        {
+          "id": "hi_01_1",
+          "lang": "hi",
+          "text": "मेरी 2022 की टोयोटा COROLLA में समस्या है, हाईवे पर ब्रेक पूरी तरह फेल हो गए।",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          }
+        },
+        {
+          "id": "hl_01_1",
+          "lang": "hinglish",
+          "text": "Meri Toyota COROLLA 2022 mein problem hai, highway pe brakes poori tarah fail ho gaye.",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "en_02_0",
+          "lang": "en",
+          "text": "My 2020 Ford ESCAPE - the steering wheel is very hard to turn at low speed.",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "hi_02_0",
+          "lang": "hi",
+          "text": "मेरी 2020 की फोर्ड ESCAPE में समस्या है, धीमी रफ़्तार पर स्टीयरिंग घुमाना बहुत मुश्किल है।",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "hl_02_0",
+          "lang": "hinglish",
+          "text": "Meri Ford ESCAPE 2020 mein problem hai, slow speed pe steering ghumana bahut mushkil hai.",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "en_02_1",
+          "lang": "en",
+          "text": "My 2019 Ford EXPLORER - the steering wheel is very hard to turn at low speed.",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "hi_02_1",
+          "lang": "hi",
+          "text": "मेरी 2019 की फोर्ड EXPLORER में समस्या है, धीमी रफ़्तार पर स्टीयरिंग घुमाना बहुत मुश्किल है।",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "hl_02_1",
+          "lang": "hinglish",
+          "text": "Meri Ford EXPLORER 2019 mein problem hai, slow speed pe steering ghumana bahut mushkil hai.",
+          "kill_switch_expected": false,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "en_03_0",
+          "lang": "en",
+          "text": "My 2017 Hyundai ELANTRA - the airbag warning light stays on all the time.",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "hi_03_0",
+          "lang": "hi",
+          "text": "मेरी 2017 की ह्युंडई ELANTRA में समस्या है, एयरबैग की चेतावनी लाइट हमेशा जलती रहती है।",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "hl_03_0",
+          "lang": "hinglish",
+          "text": "Meri Hyundai ELANTRA 2017 mein problem hai, airbag ki warning light hamesha on rehti hai.",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "en_03_1",
+          "lang": "en",
+          "text": "My 2020 Hyundai TUCSON - the airbag warning light stays on all the time.",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "hi_03_1",
+          "lang": "hi",
+          "text": "मेरी 2020 की ह्युंडई TUCSON में समस्या है, एयरबैग की चेतावनी लाइट हमेशा जलती रहती है।",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "hl_03_1",
+          "lang": "hinglish",
+          "text": "Meri Hyundai TUCSON 2020 mein problem hai, airbag ki warning light hamesha on rehti hai.",
+          "kill_switch_expected": false,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "en_04_0",
+          "lang": "en",
+          "text": "My 2021 Kia SPORTAGE - the engine stalls at traffic lights.",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "hi_04_0",
+          "lang": "hi",
+          "text": "मेरी 2021 की किआ SPORTAGE में समस्या है, ट्रैफिक लाइट पर इंजन बंद हो जाता है।",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "hl_04_0",
+          "lang": "hinglish",
+          "text": "Meri Kia SPORTAGE 2021 mein problem hai, traffic signal pe engine band ho jata hai.",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "en_04_1",
+          "lang": "en",
+          "text": "My 2018 Kia SORRENTO - the engine stalls at traffic lights.",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "hi_04_1",
+          "lang": "hi",
+          "text": "मेरी 2018 की किआ SORRENTO में समस्या है, ट्रैफिक लाइट पर इंजन बंद हो जाता है।",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "hl_04_1",
+          "lang": "hinglish",
+          "text": "Meri Kia SORRENTO 2018 mein problem hai, traffic signal pe engine band ho jata hai.",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "en_05_0",
+          "lang": "en",
+          "text": "My 2016 Honda CIVIC - smells of fuel and there was smoke coming from the hood.",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "hi_05_0",
+          "lang": "hi",
+          "text": "मेरी 2016 की होंडा CIVIC में समस्या है, पेट्रोल की गंध आती है और बोनट से धुआं निकला।",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "hl_05_0",
+          "lang": "hinglish",
+          "text": "Meri Honda CIVIC 2016 mein problem hai, petrol ki smell aati hai aur bonnet se smoke nikla.",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "en_05_1",
+          "lang": "en",
+          "text": "My 2019 Honda CR-V - smells of fuel and there was smoke coming from the hood.",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "hi_05_1",
+          "lang": "hi",
+          "text": "मेरी 2019 की होंडा CR-V में समस्या है, पेट्रोल की गंध आती है और बोनट से धुआं निकला।",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "hl_05_1",
+          "lang": "hinglish",
+          "text": "Meri Honda CR-V 2019 mein problem hai, petrol ki smell aati hai aur bonnet se smoke nikla.",
+          "kill_switch_expected": true,
+          "expected_category": "FUEL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "smoke",
+            "category": null
+          }
+        },
+        {
+          "id": "en_06_0",
+          "lang": "en",
+          "text": "My 2022 Toyota COROLLA - the battery drains overnight and the dashboard flickers.",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "hi_06_0",
+          "lang": "hi",
+          "text": "मेरी 2022 की टोयोटा COROLLA में समस्या है, बैटरी रात भर में खत्म हो जाती है और डैशबोर्ड टिमटिमाता है।",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "hl_06_0",
+          "lang": "hinglish",
+          "text": "Meri Toyota COROLLA 2022 mein problem hai, battery raat bhar mein drain ho jati hai aur dashboard flicker karta hai.",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "en_06_1",
+          "lang": "en",
+          "text": "My 2018 Toyota CAMRY - the battery drains overnight and the dashboard flickers.",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "hi_06_1",
+          "lang": "hi",
+          "text": "मेरी 2018 की टोयोटा CAMRY में समस्या है, बैटरी रात भर में खत्म हो जाती है और डैशबोर्ड टिमटिमाता है।",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "hl_06_1",
+          "lang": "hinglish",
+          "text": "Meri Toyota CAMRY 2018 mein problem hai, battery raat bhar mein drain ho jati hai aur dashboard flicker karta hai.",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "en_07_0",
+          "lang": "en",
+          "text": "My 2019 Ford EXPLORER - the transmission jerks when shifting gears.",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "hi_07_0",
+          "lang": "hi",
+          "text": "मेरी 2019 की फोर्ड EXPLORER में समस्या है, गियर बदलते समय ट्रांसमिशन झटका देता है।",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "hl_07_0",
+          "lang": "hinglish",
+          "text": "Meri Ford EXPLORER 2019 mein problem hai, gear badalte waqt transmission jhatka deta hai.",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "en_07_1",
+          "lang": "en",
+          "text": "My 2020 Ford ESCAPE - the transmission jerks when shifting gears.",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "hi_07_1",
+          "lang": "hi",
+          "text": "मेरी 2020 की फोर्ड ESCAPE में समस्या है, गियर बदलते समय ट्रांसमिशन झटका देता है।",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "hl_07_1",
+          "lang": "hinglish",
+          "text": "Meri Ford ESCAPE 2020 mein problem hai, gear badalte waqt transmission jhatka deta hai.",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "en_08_0",
+          "lang": "en",
+          "text": "My 2020 Hyundai TUCSON - there is a clunking noise from the front suspension over bumps.",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "hi_08_0",
+          "lang": "hi",
+          "text": "मेरी 2020 की ह्युंडई TUCSON में समस्या है, गड्ढों पर आगे के सस्पेंशन से खटखट की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "hl_08_0",
+          "lang": "hinglish",
+          "text": "Meri Hyundai TUCSON 2020 mein problem hai, speed breaker pe front suspension se khat khat ki awaaz aati hai.",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "en_08_1",
+          "lang": "en",
+          "text": "My 2017 Hyundai ELANTRA - there is a clunking noise from the front suspension over bumps.",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "hi_08_1",
+          "lang": "hi",
+          "text": "मेरी 2017 की ह्युंडई ELANTRA में समस्या है, गड्ढों पर आगे के सस्पेंशन से खटखट की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "hl_08_1",
+          "lang": "hinglish",
+          "text": "Meri Hyundai ELANTRA 2017 mein problem hai, speed breaker pe front suspension se khat khat ki awaaz aati hai.",
+          "kill_switch_expected": false,
+          "expected_category": "SUSPENSION",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SUSPENSION"
+          }
+        },
+        {
+          "id": "en_09_0",
+          "lang": "en",
+          "text": "My 2018 Kia SORRENTO - the front tire tread is separating.",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "hi_09_0",
+          "lang": "hi",
+          "text": "मेरी 2018 की किआ SORRENTO में समस्या है, आगे के टायर की ट्रेड अलग हो रही है।",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "hl_09_0",
+          "lang": "hinglish",
+          "text": "Meri Kia SORRENTO 2018 mein problem hai, front tyre ki tread alag ho rahi hai.",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "en_09_1",
+          "lang": "en",
+          "text": "My 2021 Kia SPORTAGE - the front tire tread is separating.",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "hi_09_1",
+          "lang": "hi",
+          "text": "मेरी 2021 की किआ SPORTAGE में समस्या है, आगे के टायर की ट्रेड अलग हो रही है।",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "hl_09_1",
+          "lang": "hinglish",
+          "text": "Meri Kia SPORTAGE 2021 mein problem hai, front tyre ki tread alag ho rahi hai.",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        }
+      ]
+    },
+    "fresh_24": {
+      "path": "eval/hindi_fresh/fresh_calls.jsonl",
+      "rules_only": {
+        "hi": {
+          "n": 12,
+          "severity_counts": {},
+          "triage_skipped": 12,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 6,
+          "kill_switch_hits": 0,
+          "kill_switch_misses": 6,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 11,
+          "category_correct": 0,
+          "category_wrong": 0
+        },
+        "hinglish": {
+          "n": 12,
+          "severity_counts": {
+            "Low": 1,
+            "Medium": 7,
+            "Critical": 1
+          },
+          "triage_skipped": 3,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 6,
+          "kill_switch_hits": 0,
+          "kill_switch_misses": 6,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 9,
+          "category_correct": 9,
+          "category_wrong": 0
+        },
+        "all": {
+          "n": 24,
+          "severity_counts": {
+            "Low": 1,
+            "Medium": 7,
+            "Critical": 1
+          },
+          "triage_skipped": 15,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 12,
+          "kill_switch_hits": 0,
+          "kill_switch_misses": 12,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 20,
+          "category_correct": 9,
+          "category_wrong": 0
+        }
+      },
+      "rules_plus_hindi": {
+        "hi": {
+          "n": 12,
+          "severity_counts": {
+            "Medium": 6
+          },
+          "triage_skipped": 6,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 6,
+          "kill_switch_hits": 6,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 0,
+          "category_expected": 11,
+          "category_correct": 6,
+          "category_wrong": 0
+        },
+        "hinglish": {
+          "n": 12,
+          "severity_counts": {
+            "Medium": 4,
+            "Critical": 5
+          },
+          "triage_skipped": 3,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 6,
+          "kill_switch_hits": 6,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 1,
+          "category_expected": 9,
+          "category_correct": 9,
+          "category_wrong": 0
+        },
+        "all": {
+          "n": 24,
+          "severity_counts": {
+            "Medium": 10,
+            "Critical": 5
+          },
+          "triage_skipped": 9,
+          "pipeline_errors": 0,
+          "kill_switch_expected": 12,
+          "kill_switch_hits": 12,
+          "kill_switch_misses": 0,
+          "kill_switch_false_alarms": 1,
+          "category_expected": 20,
+          "category_correct": 15,
+          "category_wrong": 0
+        }
+      },
+      "lowers": 0,
+      "per_call": [
+        {
+          "id": "fr_hi_01",
+          "lang": "hi",
+          "text": "कल हाईवे पर मेरी 2017 फोर्ड एस्केप के ब्रेक अचानक फेल हो गए, गाड़ी रुकी ही नहीं।",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hi_02",
+          "lang": "hi",
+          "text": "इंजन से धुआँ निकल रहा था और फिर बोनट के नीचे आग लग गई।",
+          "kill_switch_expected": true,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "fire",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hi_03",
+          "lang": "hi",
+          "text": "मोड़ लेते समय स्टीयरिंग पूरी तरह जाम हो गया, बड़ी मुश्किल से गाड़ी संभाली।",
+          "kill_switch_expected": true,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "steering locked",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hi_04",
+          "lang": "hi",
+          "text": "छोटी सी टक्कर हुई और एयरबैग खुला ही नहीं, मेरे सिर में चोट आई।",
+          "kill_switch_expected": true,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "collision",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hi_05",
+          "lang": "hi",
+          "text": "पिछले हफ्ते हमारी कार की दुर्घटना हुई, मेरी बेटी घायल है और अस्पताल में है।",
+          "kill_switch_expected": true,
+          "expected_category": null,
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "crash",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hi_06",
+          "lang": "hi",
+          "text": "मेरी 2020 होंडा सिविक के ब्रेक लगाने पर चीं-चीं की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "fr_hi_07",
+          "lang": "hi",
+          "text": "सर्दियों में बैटरी बार-बार डाउन हो जाती है, सुबह गाड़ी स्टार्ट नहीं होती।",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "fr_hi_08",
+          "lang": "hi",
+          "text": "गियर बदलते समय झटका लगता है और गियरबॉक्स से खट-खट की आवाज़ आती है।",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "fr_hi_09",
+          "lang": "hi",
+          "text": "नए टायर तीन महीने में ही एक तरफ से घिस गए हैं।",
+          "kill_switch_expected": false,
+          "expected_category": "TIRES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "TIRES"
+          }
+        },
+        {
+          "id": "fr_hi_10",
+          "lang": "hi",
+          "text": "इंजन में से हल्का तेल रिस रहा है, पर कोई धुआँ या आग नहीं है।",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "fr_hi_11",
+          "lang": "hi",
+          "text": "पार्किंग में हल्की सी खरोंच लगी, कोई घायल नहीं हुआ, बस ब्रेक थोड़े ढीले लगते हैं।",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "fr_hi_12",
+          "lang": "hi",
+          "text": "सिग्नल पर खड़ी गाड़ी अपने आप तेज़ी से आगे भागी, एक्सीलेटर अटक गया था।",
+          "kill_switch_expected": true,
+          "expected_category": "VEHICLE SPEED CONTROL",
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "unintended acceleration",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hl_01",
+          "lang": "hinglish",
+          "text": "Bhai meri 2016 Hyundai Elantra ke brake fail ho gaye, gaadi ruki hi nahi signal pe.",
+          "kill_switch_expected": true,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "brakes failed",
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "fr_hl_02",
+          "lang": "hinglish",
+          "text": "Engine se dhuan nikal raha tha aur thodi der mein aag lag gayi.",
+          "kill_switch_expected": true,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "fire",
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "fr_hl_03",
+          "lang": "hinglish",
+          "text": "Highway pe steering achanak jam ho gaya, gaadi control se bahar ho gayi.",
+          "kill_switch_expected": true,
+          "expected_category": "STEERING",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "STEERING"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "loss of control",
+            "category": "STEERING"
+          }
+        },
+        {
+          "id": "fr_hl_04",
+          "lang": "hinglish",
+          "text": "Kal hamari car ki takkar ho gayi, papa ko chot lagi hai aur woh aspatal mein hain.",
+          "kill_switch_expected": true,
+          "expected_category": null,
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "collision",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hl_05",
+          "lang": "hinglish",
+          "text": "Bina kisi accident ke airbag apne aap khul gaya, mere haath jal gaye.",
+          "kill_switch_expected": true,
+          "expected_category": "AIR BAGS",
+          "rules_only": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "AIR BAGS"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "airbag deployed",
+            "category": "AIR BAGS"
+          }
+        },
+        {
+          "id": "fr_hl_06",
+          "lang": "hinglish",
+          "text": "Meri 2019 Toyota Corolla mein brake lagate waqt bahut aawaz aati hai.",
+          "kill_switch_expected": false,
+          "expected_category": "SERVICE BRAKES",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "SERVICE BRAKES"
+          }
+        },
+        {
+          "id": "fr_hl_07",
+          "lang": "hinglish",
+          "text": "Battery har hafte down ho jaati hai, aur dashboard ki lights blink karti hain.",
+          "kill_switch_expected": false,
+          "expected_category": "ELECTRICAL SYSTEM",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ELECTRICAL SYSTEM"
+          }
+        },
+        {
+          "id": "fr_hl_08",
+          "lang": "hinglish",
+          "text": "Gear shift karte waqt jhatka lagta hai, clutch bhi bahut hard hai.",
+          "kill_switch_expected": false,
+          "expected_category": "POWER TRAIN",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "POWER TRAIN"
+          }
+        },
+        {
+          "id": "fr_hl_09",
+          "lang": "hinglish",
+          "text": "Gaadi theek chal rahi hai, bas service ke baare mein poochna tha.",
+          "kill_switch_expected": false,
+          "expected_category": null,
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hl_10",
+          "lang": "hinglish",
+          "text": "Engine thoda garam ho jaata hai lekin koi dhuan ya aag nahi hai.",
+          "kill_switch_expected": false,
+          "expected_category": "ENGINE",
+          "rules_only": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Medium",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "ENGINE"
+          }
+        },
+        {
+          "id": "fr_hl_11",
+          "lang": "hinglish",
+          "text": "Choti si takkar hui thi parking mein, koi chot nahi lagi, bas bumper pe scratch hai.",
+          "kill_switch_expected": false,
+          "expected_category": null,
+          "rules_only": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": null
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": null,
+            "triage_skipped": true,
+            "kill_switch": true,
+            "kill_switch_term": "collision",
+            "category": null
+          }
+        },
+        {
+          "id": "fr_hl_12",
+          "lang": "hinglish",
+          "text": "Accelerator atak gaya aur gaadi apne aap speed pakadne lagi, bahut darr gaye.",
+          "kill_switch_expected": true,
+          "expected_category": "VEHICLE SPEED CONTROL",
+          "rules_only": {
+            "error": null,
+            "severity": "Low",
+            "triage_skipped": false,
+            "kill_switch": false,
+            "kill_switch_term": null,
+            "category": "VEHICLE SPEED CONTROL"
+          },
+          "rules_plus_hindi": {
+            "error": null,
+            "severity": "Critical",
+            "triage_skipped": false,
+            "kill_switch": true,
+            "kill_switch_term": "unintended acceleration",
+            "category": "VEHICLE SPEED CONTROL"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+......................F.F..F..........................................
+[killed manually at 2026-10-21T06:30:24Z after ~60 min: stuck >40 min in tests/frontline/test_cluster_builds.py::test_rebuild_clusters_assigns_records_beyond_5000 (DuckDB executemany in C; pytest-timeout signal method could not interrupt). Full suites re-run with that test deselected in both before and after.]
