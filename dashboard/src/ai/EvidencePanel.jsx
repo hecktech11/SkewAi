@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiHeaders } from "../apiAuth.js";
 import { aiGet, aiPostJson, aiUpload, aiStatus } from "./aiApi.js";
 import MetaTag from "./MetaTag.jsx";
+import FaultCodesPanel from "./FaultCodesPanel.jsx"; // [AI-LAYER] fault codes as evidence
 
 function listPath({ caseId, interactionId, investigationId }) {
   if (caseId) return `/api/cases/${encodeURIComponent(caseId)}/evidence`;
@@ -159,6 +160,8 @@ export default function EvidencePanel({ caseId, interactionId, investigationId, 
           <Analysis ev={ev} enabled={enabled} busy={busy} onAnalyze={() => analyze(ev.evidence_id)} />
         </div>
       ))}
+      {/* [AI-LAYER] OBD-II fault codes next to the photos */}
+      {caseId && <FaultCodesPanel caseId={caseId} readOnly={readOnly} />}
     </section>
   );
 }

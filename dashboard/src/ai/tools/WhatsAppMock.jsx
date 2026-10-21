@@ -42,7 +42,7 @@ export default function WhatsAppMock() {
         ))}
       </div>
       <form className="row" style={{ gap: 6, marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); send(); }}>
-        <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a message" disabled={busy} />
+        <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a message (optional: codes: C0035 P0300)" disabled={busy} />
         <button className="primary" disabled={busy}>Send</button>
       </form>
       <div className="row small" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -51,7 +51,7 @@ export default function WhatsAppMock() {
       {info && (
         <div className="muted small" style={{ marginTop: 6 }}>
           interaction {info.interaction_id} · state {info.state}{info.case_id ? <> · case <a href={`#cases?case=${info.case_id}`}>{info.case_id}</a></> : null}
-          {info.severity ? ` · severity ${info.severity}` : ""}{info.safety_flags?.length ? ` · safety: ${info.safety_flags.join(", ")}` : ""}
+          {info.severity ? ` · severity ${info.severity}` : ""}{info.safety_flags?.length ? ` · safety: ${info.safety_flags.join(", ")}` : ""}{/* [AI-LAYER] fault codes */}{info.fault_codes?.length ? ` · fault codes: ${info.fault_codes.map((c) => `${c.code} (${c.component || "unknown code"})`).join(", ")}` : ""}
         </div>
       )}
     </div>

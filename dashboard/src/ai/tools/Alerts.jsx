@@ -32,6 +32,8 @@ export default function Alerts() {
               <span className={`chip ${a.level === "high" ? "sev-critical" : "sev-medium"}`}>{a.level}</span>
               <strong>{a.title || a.investigation_id}</strong>
               <span className="muted small">{a.case_count} cases · {a.created_at} · {a.status}</span>
+              {/* [AI-LAYER] fault codes */}
+              {p.cases_with_matching_fault_code != null && <span className="muted small"> · cases with matching fault code: {p.cases_with_matching_fault_code}</span>}
               <MetaTag mode={(p.powered_by || []).length ? "enhanced" : "deterministic"} models={p.powered_by || []} />
               {a.status === "open" && <button className="ghost" style={{ marginLeft: "auto" }} onClick={() => ack(a.alert_id)}>Acknowledge</button>}
             </div>

@@ -52,6 +52,8 @@ export default function VehicleRisk() {
                     {c.data.relative_rate != null ? ` · ${c.data.relative_rate}× model-year norm` : ""}
                     {c.data.recall_count ? ` · ${c.data.recall_count} recall row(s)` : ""}
                     {c.data.hazard && c.data.hazard.records_with_hazard_mention ? ` · ${c.data.hazard.records_with_hazard_mention} mention crash/fire/injury` : ""}
+                    {/* [AI-LAYER] fault codes */}
+                    {c.data.cases_with_matching_fault_code != null ? ` · cases with matching fault code: ${c.data.cases_with_matching_fault_code}` : ""}
                   </td>
                 </tr>
               ))}
