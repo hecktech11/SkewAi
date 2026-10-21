@@ -1,0 +1,1278 @@
+{
+  "grid_results": [
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.05_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 217,
+        "misses": 256,
+        "recall_rate": 0.459,
+        "lead_weeks_median": 13,
+        "lead_weeks_mean": 16.0
+      },
+      "recent_scope_hits": 634,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 1080,
+        "confirmed_slice_weeks": 648,
+        "false_alarm_slice_weeks": 432,
+        "precision_slice_weeks": 0.6,
+        "flag_episodes": 807,
+        "confirmed_episodes": 472,
+        "precision_episodes": 0.585,
+        "unconfirmed_slice_weeks": 432
+      },
+      "precision_episodes": 0.585,
+      "objective": 0.5144
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.05_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 217,
+        "misses": 256,
+        "recall_rate": 0.459,
+        "lead_weeks_median": 13,
+        "lead_weeks_mean": 16.0
+      },
+      "recent_scope_hits": 634,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 1080,
+        "confirmed_slice_weeks": 648,
+        "false_alarm_slice_weeks": 432,
+        "precision_slice_weeks": 0.6,
+        "flag_episodes": 807,
+        "confirmed_episodes": 472,
+        "precision_episodes": 0.585,
+        "unconfirmed_slice_weeks": 432
+      },
+      "precision_episodes": 0.585,
+      "objective": 0.5144
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.05_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 159,
+        "misses": 314,
+        "recall_rate": 0.336,
+        "lead_weeks_median": 14,
+        "lead_weeks_mean": 18.6
+      },
+      "recent_scope_hits": 504,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 587,
+        "confirmed_slice_weeks": 362,
+        "false_alarm_slice_weeks": 225,
+        "precision_slice_weeks": 0.617,
+        "flag_episodes": 410,
+        "confirmed_episodes": 250,
+        "precision_episodes": 0.61,
+        "unconfirmed_slice_weeks": 225
+      },
+      "precision_episodes": 0.61,
+      "objective": 0.4333
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.05_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 159,
+        "misses": 314,
+        "recall_rate": 0.336,
+        "lead_weeks_median": 14,
+        "lead_weeks_mean": 18.6
+      },
+      "recent_scope_hits": 504,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 587,
+        "confirmed_slice_weeks": 362,
+        "false_alarm_slice_weeks": 225,
+        "precision_slice_weeks": 0.617,
+        "flag_episodes": 410,
+        "confirmed_episodes": 250,
+        "precision_episodes": 0.61,
+        "unconfirmed_slice_weeks": 225
+      },
+      "precision_episodes": 0.61,
+      "objective": 0.4333
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.05_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 109,
+        "misses": 364,
+        "recall_rate": 0.23,
+        "lead_weeks_median": 12,
+        "lead_weeks_mean": 16.5
+      },
+      "recent_scope_hits": 362,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 338,
+        "confirmed_slice_weeks": 223,
+        "false_alarm_slice_weeks": 115,
+        "precision_slice_weeks": 0.66,
+        "flag_episodes": 214,
+        "confirmed_episodes": 143,
+        "precision_episodes": 0.668,
+        "unconfirmed_slice_weeks": 115
+      },
+      "precision_episodes": 0.668,
+      "objective": 0.3422
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.05_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 109,
+        "misses": 364,
+        "recall_rate": 0.23,
+        "lead_weeks_median": 12,
+        "lead_weeks_mean": 16.5
+      },
+      "recent_scope_hits": 362,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 338,
+        "confirmed_slice_weeks": 223,
+        "false_alarm_slice_weeks": 115,
+        "precision_slice_weeks": 0.66,
+        "flag_episodes": 214,
+        "confirmed_episodes": 143,
+        "precision_episodes": 0.668,
+        "unconfirmed_slice_weeks": 115
+      },
+      "precision_episodes": 0.668,
+      "objective": 0.3422
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.01_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.01_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.01_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.01_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z2.0_q0.01_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    },
+    {
+      "config": {
+        "z": 2.0,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z2.0_q0.01_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.05_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 217,
+        "misses": 256,
+        "recall_rate": 0.459,
+        "lead_weeks_median": 13,
+        "lead_weeks_mean": 16.0
+      },
+      "recent_scope_hits": 634,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 1080,
+        "confirmed_slice_weeks": 648,
+        "false_alarm_slice_weeks": 432,
+        "precision_slice_weeks": 0.6,
+        "flag_episodes": 807,
+        "confirmed_episodes": 472,
+        "precision_episodes": 0.585,
+        "unconfirmed_slice_weeks": 432
+      },
+      "precision_episodes": 0.585,
+      "objective": 0.5144
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.05_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 217,
+        "misses": 256,
+        "recall_rate": 0.459,
+        "lead_weeks_median": 13,
+        "lead_weeks_mean": 16.0
+      },
+      "recent_scope_hits": 634,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 1080,
+        "confirmed_slice_weeks": 648,
+        "false_alarm_slice_weeks": 432,
+        "precision_slice_weeks": 0.6,
+        "flag_episodes": 807,
+        "confirmed_episodes": 472,
+        "precision_episodes": 0.585,
+        "unconfirmed_slice_weeks": 432
+      },
+      "precision_episodes": 0.585,
+      "objective": 0.5144
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.05_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 159,
+        "misses": 314,
+        "recall_rate": 0.336,
+        "lead_weeks_median": 14,
+        "lead_weeks_mean": 18.6
+      },
+      "recent_scope_hits": 504,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 587,
+        "confirmed_slice_weeks": 362,
+        "false_alarm_slice_weeks": 225,
+        "precision_slice_weeks": 0.617,
+        "flag_episodes": 410,
+        "confirmed_episodes": 250,
+        "precision_episodes": 0.61,
+        "unconfirmed_slice_weeks": 225
+      },
+      "precision_episodes": 0.61,
+      "objective": 0.4333
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.05_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 159,
+        "misses": 314,
+        "recall_rate": 0.336,
+        "lead_weeks_median": 14,
+        "lead_weeks_mean": 18.6
+      },
+      "recent_scope_hits": 504,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 587,
+        "confirmed_slice_weeks": 362,
+        "false_alarm_slice_weeks": 225,
+        "precision_slice_weeks": 0.617,
+        "flag_episodes": 410,
+        "confirmed_episodes": 250,
+        "precision_episodes": 0.61,
+        "unconfirmed_slice_weeks": 225
+      },
+      "precision_episodes": 0.61,
+      "objective": 0.4333
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.05_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 109,
+        "misses": 364,
+        "recall_rate": 0.23,
+        "lead_weeks_median": 12,
+        "lead_weeks_mean": 16.5
+      },
+      "recent_scope_hits": 362,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 338,
+        "confirmed_slice_weeks": 223,
+        "false_alarm_slice_weeks": 115,
+        "precision_slice_weeks": 0.66,
+        "flag_episodes": 214,
+        "confirmed_episodes": 143,
+        "precision_episodes": 0.668,
+        "unconfirmed_slice_weeks": 115
+      },
+      "precision_episodes": 0.668,
+      "objective": 0.3422
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.05_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 109,
+        "misses": 364,
+        "recall_rate": 0.23,
+        "lead_weeks_median": 12,
+        "lead_weeks_mean": 16.5
+      },
+      "recent_scope_hits": 362,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 338,
+        "confirmed_slice_weeks": 223,
+        "false_alarm_slice_weeks": 115,
+        "precision_slice_weeks": 0.66,
+        "flag_episodes": 214,
+        "confirmed_episodes": 143,
+        "precision_episodes": 0.668,
+        "unconfirmed_slice_weeks": 115
+      },
+      "precision_episodes": 0.668,
+      "objective": 0.3422
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.01_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.01_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.01_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.01_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z2.5_q0.01_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    },
+    {
+      "config": {
+        "z": 2.5,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z2.5_q0.01_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.05_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 210,
+        "misses": 263,
+        "recall_rate": 0.444,
+        "lead_weeks_median": 15.0,
+        "lead_weeks_mean": 18.4
+      },
+      "recent_scope_hits": 613,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 924,
+        "confirmed_slice_weeks": 550,
+        "false_alarm_slice_weeks": 374,
+        "precision_slice_weeks": 0.595,
+        "flag_episodes": 710,
+        "confirmed_episodes": 406,
+        "precision_episodes": 0.572,
+        "unconfirmed_slice_weeks": 374
+      },
+      "precision_episodes": 0.572,
+      "objective": 0.4999
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.05_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 210,
+        "misses": 263,
+        "recall_rate": 0.444,
+        "lead_weeks_median": 15.0,
+        "lead_weeks_mean": 18.4
+      },
+      "recent_scope_hits": 613,
+      "first_flag_scope_hits": 855,
+      "precision": {
+        "flagged_slice_weeks": 924,
+        "confirmed_slice_weeks": 550,
+        "false_alarm_slice_weeks": 374,
+        "precision_slice_weeks": 0.595,
+        "flag_episodes": 710,
+        "confirmed_episodes": 406,
+        "precision_episodes": 0.572,
+        "unconfirmed_slice_weeks": 374
+      },
+      "precision_episodes": 0.572,
+      "objective": 0.4999
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.05_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 155,
+        "misses": 318,
+        "recall_rate": 0.328,
+        "lead_weeks_median": 18,
+        "lead_weeks_mean": 20.7
+      },
+      "recent_scope_hits": 490,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 511,
+        "confirmed_slice_weeks": 312,
+        "false_alarm_slice_weeks": 199,
+        "precision_slice_weeks": 0.611,
+        "flag_episodes": 369,
+        "confirmed_episodes": 220,
+        "precision_episodes": 0.596,
+        "unconfirmed_slice_weeks": 199
+      },
+      "precision_episodes": 0.596,
+      "objective": 0.4231
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.05_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 155,
+        "misses": 318,
+        "recall_rate": 0.328,
+        "lead_weeks_median": 18,
+        "lead_weeks_mean": 20.7
+      },
+      "recent_scope_hits": 490,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 511,
+        "confirmed_slice_weeks": 312,
+        "false_alarm_slice_weeks": 199,
+        "precision_slice_weeks": 0.611,
+        "flag_episodes": 369,
+        "confirmed_episodes": 220,
+        "precision_episodes": 0.596,
+        "unconfirmed_slice_weeks": 199
+      },
+      "precision_episodes": 0.596,
+      "objective": 0.4231
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.05_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 104,
+        "misses": 369,
+        "recall_rate": 0.22,
+        "lead_weeks_median": 14.0,
+        "lead_weeks_mean": 18.8
+      },
+      "recent_scope_hits": 348,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 294,
+        "confirmed_slice_weeks": 187,
+        "false_alarm_slice_weeks": 107,
+        "precision_slice_weeks": 0.636,
+        "flag_episodes": 194,
+        "confirmed_episodes": 124,
+        "precision_episodes": 0.639,
+        "unconfirmed_slice_weeks": 107
+      },
+      "precision_episodes": 0.639,
+      "objective": 0.3273
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.05,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.05_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 104,
+        "misses": 369,
+        "recall_rate": 0.22,
+        "lead_weeks_median": 14.0,
+        "lead_weeks_mean": 18.8
+      },
+      "recent_scope_hits": 348,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 294,
+        "confirmed_slice_weeks": 187,
+        "false_alarm_slice_weeks": 107,
+        "precision_slice_weeks": 0.636,
+        "flag_episodes": 194,
+        "confirmed_episodes": 124,
+        "precision_episodes": 0.639,
+        "unconfirmed_slice_weeks": 107
+      },
+      "precision_episodes": 0.639,
+      "objective": 0.3273
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.01_abs3_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 3,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.01_abs3_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 197,
+        "misses": 276,
+        "recall_rate": 0.416,
+        "lead_weeks_median": 16,
+        "lead_weeks_mean": 19.9
+      },
+      "recent_scope_hits": 563,
+      "first_flag_scope_hits": 853,
+      "precision": {
+        "flagged_slice_weeks": 731,
+        "confirmed_slice_weeks": 430,
+        "false_alarm_slice_weeks": 301,
+        "precision_slice_weeks": 0.588,
+        "flag_episodes": 569,
+        "confirmed_episodes": 329,
+        "precision_episodes": 0.578,
+        "unconfirmed_slice_weeks": 301
+      },
+      "precision_episodes": 0.578,
+      "objective": 0.4838
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.01_abs5_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 5,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.01_abs5_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 143,
+        "misses": 330,
+        "recall_rate": 0.302,
+        "lead_weeks_median": 20,
+        "lead_weeks_mean": 21.5
+      },
+      "recent_scope_hits": 450,
+      "first_flag_scope_hits": 645,
+      "precision": {
+        "flagged_slice_weeks": 431,
+        "confirmed_slice_weeks": 258,
+        "false_alarm_slice_weeks": 173,
+        "precision_slice_weeks": 0.599,
+        "flag_episodes": 318,
+        "confirmed_episodes": 188,
+        "precision_episodes": 0.591,
+        "unconfirmed_slice_weeks": 173
+      },
+      "precision_episodes": 0.591,
+      "objective": 0.3997
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 0.5
+      },
+      "id": "z3.0_q0.01_abs8_rel0.5",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    },
+    {
+      "config": {
+        "z": 3.0,
+        "q": 0.01,
+        "abs_lift": 8,
+        "rel_lift": 1.0
+      },
+      "id": "z3.0_q0.01_abs8_rel1.0",
+      "recent_campaign": {
+        "campaigns": 473,
+        "hits": 96,
+        "misses": 377,
+        "recall_rate": 0.203,
+        "lead_weeks_median": 15.5,
+        "lead_weeks_mean": 19.7
+      },
+      "recent_scope_hits": 320,
+      "first_flag_scope_hits": 475,
+      "precision": {
+        "flagged_slice_weeks": 253,
+        "confirmed_slice_weeks": 159,
+        "false_alarm_slice_weeks": 94,
+        "precision_slice_weeks": 0.628,
+        "flag_episodes": 169,
+        "confirmed_episodes": 109,
+        "precision_episodes": 0.645,
+        "unconfirmed_slice_weeks": 94
+      },
+      "precision_episodes": 0.645,
+      "objective": 0.3088
+    }
+  ],
+  "chosen": "z2.0_q0.05_abs3_rel0.5",
+  "production": "z2.0_q0.05_abs5_rel0.5",
+  "regate_mismatches_vs_scorer": 0,
+  "regate_rows_checked": 81386,
+  "elapsed_s": 177,
+  "in_sample_frozen": {
+    "config_id": "z2.0_q0.05_abs3_rel0.5",
+    "records_received_by_period_end": 50822,
+    "advisories": 1423,
+    "as_of_dates": 337,
+    "precision": {
+      "flagged_slice_weeks": 1080,
+      "confirmed_slice_weeks": 648,
+      "false_alarm_slice_weeks": 432,
+      "precision_slice_weeks": 0.6,
+      "flag_episodes": 807,
+      "confirmed_episodes": 472,
+      "precision_episodes": 0.585,
+      "unconfirmed_slice_weeks": 432
+    },
+    "first_flag": {
+      "recalls_scored": 1423,
+      "hits": 855,
+      "misses": 568,
+      "recall_rate": 0.601,
+      "lead_weeks_median": 128,
+      "lead_weeks_mean": 135.3,
+      "lead_weeks_p25": 70.0,
+      "lead_weeks_p75": 199.0,
+      "campaign_level": {
+        "campaigns": 473,
+        "hits": 276,
+        "misses": 197,
+        "recall_rate": 0.584,
+        "lead_weeks_median": 120.5,
+        "lead_weeks_mean": 128.9
+      },
+      "preventable_window_totals_dedup": {
+        "complaints": 24478,
+        "crash": 1525,
+        "fire": 539,
+        "injury_complaints": 1047,
+        "injured_persons_reported": 1541,
+        "death_complaints": 22,
+        "deaths_reported": 63,
+        "crash_fire_or_injury": 2234
+      }
+    },
+    "actionable_52w": {
+      "window_weeks": 52,
+      "recalls_scored": 1423,
+      "hits": 634,
+      "misses": 789,
+      "recall_rate": 0.446,
+      "lead_weeks_median": 13.0,
+      "lead_weeks_mean": 15.8,
+      "lead_weeks_p25": 4.0,
+      "lead_weeks_p75": 21.25,
+      "campaign_level": {
+        "campaigns": 473,
+        "hits": 217,
+        "misses": 256,
+        "recall_rate": 0.459,
+        "lead_weeks_median": 13,
+        "lead_weeks_mean": 16.0
+      },
+      "preventable_window_totals_dedup": {
+        "complaints": 8944,
+        "crash": 542,
+        "fire": 138,
+        "injury_complaints": 386,
+        "injured_persons_reported": 589,
+        "death_complaints": 4,
+        "deaths_reported": 24,
+        "crash_fire_or_injury": 764
+      }
+    },
+    "preventable_window_source": "computed from FLAT_CMPL.zip",
+    "regate_mismatches_vs_scorer": 0,
+    "regate_rows_checked": 81386
+  },
+  "in_sample_production": {
+    "config_id": "z2.0_q0.05_abs5_rel0.5",
+    "records_received_by_period_end": 50822,
+    "advisories": 1423,
+    "as_of_dates": 337,
+    "precision": {
+      "flagged_slice_weeks": 587,
+      "confirmed_slice_weeks": 362,
+      "false_alarm_slice_weeks": 225,
+      "precision_slice_weeks": 0.617,
+      "flag_episodes": 410,
+      "confirmed_episodes": 250,
+      "precision_episodes": 0.61,
+      "unconfirmed_slice_weeks": 225
+    },
+    "first_flag": {
+      "recalls_scored": 1423,
+      "hits": 645,
+      "misses": 778,
+      "recall_rate": 0.453,
+      "lead_weeks_median": 97,
+      "lead_weeks_mean": 113.7,
+      "lead_weeks_p25": 41.5,
+      "lead_weeks_p75": 190.0,
+      "campaign_level": {
+        "campaigns": 473,
+        "hits": 201,
+        "misses": 272,
+        "recall_rate": 0.425,
+        "lead_weeks_median": 94,
+        "lead_weeks_mean": 110.9
+      },
+      "preventable_window_totals_dedup": {
+        "complaints": 20352,
+        "crash": 999,
+        "fire": 473,
+        "injury_complaints": 702,
+        "injured_persons_reported": 1025,
+        "death_complaints": 14,
+        "deaths_reported": 35,
+        "crash_fire_or_injury": 1618
+      }
+    },
+    "actionable_52w": {
+      "window_weeks": 52,
+      "recalls_scored": 1423,
+      "hits": 504,
+      "misses": 919,
+      "recall_rate": 0.354,
+      "lead_weeks_median": 17.0,
+      "lead_weeks_mean": 18.7,
+      "lead_weeks_p25": 5.0,
+      "lead_weeks_p75": 29.0,
+      "campaign_level": {
+        "campaigns": 473,
+        "hits": 159,
+        "misses": 314,
+        "recall_rate": 0.336,
+        "lead_weeks_median": 14,
+        "lead_weeks_mean": 18.6
+      },
+      "preventable_window_totals_dedup": {
+        "complaints": 8733,
+        "crash": 481,
+        "fire": 146,
+        "injury_complaints": 336,
+        "injured_persons_reported": 493,
+        "death_complaints": 1,
+        "deaths_reported": 1,
+        "crash_fire_or_injury": 706
+      }
+    },
+    "preventable_window_source": "computed from FLAT_CMPL.zip",
+    "regate_mismatches_vs_scorer": 0,
+    "regate_rows_checked": 81386
+  },
+  "config_sha256": "520ec7b0fdb6c18b5fe388102100334bd969e6308ff33b86ebfed0c556159e23"
+}
