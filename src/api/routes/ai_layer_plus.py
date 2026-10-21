@@ -122,3 +122,22 @@ async def ai_fault_spread(
                                        months=max(1, min(int(months), 240)))
     except FileNotFoundError:
         raise HTTPException(status_code=503, detail="domain warehouse not built") from None
+
+
+# ── WhatsApp intake MOCK (no WhatsApp/Meta API is called) ───────────────────
+@router.post("/api/ai/whatsapp-mock/webhook")
+async def whatsapp_mock_webhook(
+    request: Request,
+    _role: str = Depends(require_perm_dep("contact:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.whatsapp_mock import handle_webhook
+    from src.ops.drain import ServiceDrainingError
+
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="JSON body required") from None
+    try:
+        return await handle_webhook(body)
+    except ServiceDrainingError:
+        raise HTTPException(status_code=503, detail="service_draining") from None
