@@ -68,7 +68,11 @@ def call_in_action(c: dict[str, Any]) -> str:
     base = _ADVICE.get(cat, _DEFAULT_ADVICE)
     if c.get("advisory_match_id"):
         return f"Call in: check recall {c['advisory_match_id']} coverage for this VIN. {base}"
-    return f"Call in for inspection. {base}" if cat else "Call back to complete the vehicle details."
+    if cat:
+        return f"Call in for inspection. {base}"
+    if str(c.get("severity") or "").lower() == "critical":
+        return "Safety escalation with no vehicle details yet: call the owner now, advise not to drive, arrange a tow/inspection."
+    return "Call back to complete the vehicle details."
 
 
 def service_queue(limit: int = 50, include_simulated: bool = True) -> dict[str, Any]:
