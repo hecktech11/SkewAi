@@ -769,6 +769,15 @@ class Orchestrator:
                                     asr_confidence=asr_confidence, dtmf=dtmf)
             if self._stop_if_erased():
                 return
+            # [AI-LAYER] Deterministic Hindi/Hinglish pass (no key needed): may only
+            # ADD a kill-switch hit (pack lexicon on a Hindi gloss) and fill slots
+            # that are still empty. AI_HINDI_SAFETY=0 disables it.
+            try:
+                from src.ai_layer.hindi_safety import maybe_apply_hindi_intake
+
+                ires = await maybe_apply_hindi_intake(self.ctx, text, ires)
+            except Exception:
+                pass
             # [AI-LAYER] Optional Muse Spark pass AFTER deterministic intake: fills
             # only still-empty slots, normalises Hindi/Hinglish, may only ADD a
             # kill-switch hit (pack lexicon on the translation). No key -> returns
@@ -2213,6 +2222,13 @@ class Orchestrator:
             from src.ai_layer.severity import maybe_raise_severity
 
             tres = await maybe_raise_severity(self.ctx, tres)
+        except Exception:
+            pass
+        # [AI-LAYER] Hindi/Hinglish safety vocabulary floor: final = max(rule, floor); raise-only.
+        try:
+            from src.ai_layer.hindi_safety import maybe_raise_severity_hi
+
+            tres = await maybe_raise_severity_hi(self.ctx, tres)
         except Exception:
             pass
 
