@@ -87,3 +87,15 @@ async def alerts_ack(
     if not await asyncio.to_thread(ack_alert, alert_id):
         raise HTTPException(status_code=404, detail="alert not found")
     return {"alert_id": alert_id, "status": "acknowledged"}
+
+
+# ── Service-centre inspection queue ─────────────────────────────────────────
+@router.get("/api/ai/service-centre/queue")
+async def service_centre_queue(
+    limit: int = 50,
+    include_simulated: bool = True,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.service_centre import service_queue
+
+    return await asyncio.to_thread(service_queue, max(1, min(int(limit), 500)), include_simulated)

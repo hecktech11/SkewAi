@@ -4,10 +4,12 @@
 import { useState } from "react";
 import VehicleRisk from "../src/ai/tools/VehicleRisk.jsx";
 import Alerts from "../src/ai/tools/Alerts.jsx";
+import ServiceQueue from "../src/ai/tools/ServiceQueue.jsx";
 
 const TABS = [
   { id: "vehicle", label: "Vehicle fault risk", el: VehicleRisk },
   { id: "alerts", label: "Manufacturer alerts", el: Alerts },
+  { id: "service", label: "Service-centre queue", el: ServiceQueue },
 ];
 
 export default function AiTools({ hashQuery }) {
