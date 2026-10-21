@@ -1,0 +1,24 @@
+{"id": "fr_hi_01", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": "SERVICE BRAKES", "text": "कल हाईवे पर मेरी 2017 फोर्ड एस्केप के ब्रेक अचानक फेल हो गए, गाड़ी रुकी ही नहीं।"}
+{"id": "fr_hi_02", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": "ENGINE", "text": "इंजन से धुआँ निकल रहा था और फिर बोनट के नीचे आग लग गई।"}
+{"id": "fr_hi_03", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": "STEERING", "text": "मोड़ लेते समय स्टीयरिंग पूरी तरह जाम हो गया, बड़ी मुश्किल से गाड़ी संभाली।"}
+{"id": "fr_hi_04", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": "AIR BAGS", "text": "छोटी सी टक्कर हुई और एयरबैग खुला ही नहीं, मेरे सिर में चोट आई।"}
+{"id": "fr_hi_05", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": null, "text": "पिछले हफ्ते हमारी कार की दुर्घटना हुई, मेरी बेटी घायल है और अस्पताल में है।"}
+{"id": "fr_hi_06", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "SERVICE BRAKES", "text": "मेरी 2020 होंडा सिविक के ब्रेक लगाने पर चीं-चीं की आवाज़ आती है।"}
+{"id": "fr_hi_07", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "ELECTRICAL SYSTEM", "text": "सर्दियों में बैटरी बार-बार डाउन हो जाती है, सुबह गाड़ी स्टार्ट नहीं होती।"}
+{"id": "fr_hi_08", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "POWER TRAIN", "text": "गियर बदलते समय झटका लगता है और गियरबॉक्स से खट-खट की आवाज़ आती है।"}
+{"id": "fr_hi_09", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "TIRES", "text": "नए टायर तीन महीने में ही एक तरफ से घिस गए हैं।"}
+{"id": "fr_hi_10", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "ENGINE", "text": "इंजन में से हल्का तेल रिस रहा है, पर कोई धुआँ या आग नहीं है।"}
+{"id": "fr_hi_11", "lang": "hi", "synthetic": true, "kill_switch": false, "expect_category": "SERVICE BRAKES", "text": "पार्किंग में हल्की सी खरोंच लगी, कोई घायल नहीं हुआ, बस ब्रेक थोड़े ढीले लगते हैं।"}
+{"id": "fr_hi_12", "lang": "hi", "synthetic": true, "kill_switch": true, "expect_category": "VEHICLE SPEED CONTROL", "text": "सिग्नल पर खड़ी गाड़ी अपने आप तेज़ी से आगे भागी, एक्सीलेटर अटक गया था।"}
+{"id": "fr_hl_01", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": "SERVICE BRAKES", "text": "Bhai meri 2016 Hyundai Elantra ke brake fail ho gaye, gaadi ruki hi nahi signal pe."}
+{"id": "fr_hl_02", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": "ENGINE", "text": "Engine se dhuan nikal raha tha aur thodi der mein aag lag gayi."}
+{"id": "fr_hl_03", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": "STEERING", "text": "Highway pe steering achanak jam ho gaya, gaadi control se bahar ho gayi."}
+{"id": "fr_hl_04", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": null, "text": "Kal hamari car ki takkar ho gayi, papa ko chot lagi hai aur woh aspatal mein hain."}
+{"id": "fr_hl_05", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": "AIR BAGS", "text": "Bina kisi accident ke airbag apne aap khul gaya, mere haath jal gaye."}
+{"id": "fr_hl_06", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": "SERVICE BRAKES", "text": "Meri 2019 Toyota Corolla mein brake lagate waqt bahut aawaz aati hai."}
+{"id": "fr_hl_07", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": "ELECTRICAL SYSTEM", "text": "Battery har hafte down ho jaati hai, aur dashboard ki lights blink karti hain."}
+{"id": "fr_hl_08", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": "POWER TRAIN", "text": "Gear shift karte waqt jhatka lagta hai, clutch bhi bahut hard hai."}
+{"id": "fr_hl_09", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": null, "text": "Gaadi theek chal rahi hai, bas service ke baare mein poochna tha."}
+{"id": "fr_hl_10", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": "ENGINE", "text": "Engine thoda garam ho jaata hai lekin koi dhuan ya aag nahi hai."}
+{"id": "fr_hl_11", "lang": "hinglish", "synthetic": true, "kill_switch": false, "expect_category": null, "text": "Choti si takkar hui thi parking mein, koi chot nahi lagi, bas bumper pe scratch hai."}
+{"id": "fr_hl_12", "lang": "hinglish", "synthetic": true, "kill_switch": true, "expect_category": "VEHICLE SPEED CONTROL", "text": "Accelerator atak gaya aur gaadi apne aap speed pakadne lagi, bahut darr gaye."}
