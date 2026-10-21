@@ -21,6 +21,7 @@ import PackBuilder from "../routes/PackBuilder.jsx";
 // [AI-LAYER] optional Meta AI layer: demo path page + mode badge
 import DemoMode from "../routes/DemoMode.jsx";
 import AiTools from "../routes/AiTools.jsx"; // [AI-LAYER] road-safety tools hub
+import AiStatus from "../routes/AiStatus.jsx"; // [AI-LAYER] AI status page: call health + raise review
 import AiModeBadge from "./ai/AiModeBadge.jsx";
 import CommandPalette from "./ui/CommandPalette.jsx";
 import { ToastProvider, useToast } from "./ui/Toast.jsx";
@@ -87,6 +88,8 @@ const EXTRA_PAGES = [
   { id: "demo", label: "Demo tour", route: DemoMode, keywords: "demo hackathon hindi photo brief safety meta muse sam" },
   // [AI-LAYER] road-safety tools hub (#ai-tools): vehicle risk, alerts, service centre, spread, WhatsApp mock
   { id: "ai-tools", label: "Road-safety tools", route: AiTools, keywords: "vehicle risk alerts service centre spread whatsapp video" },
+  // [AI-LAYER] AI status page (#ai-status): Meta call health + supervisor review of AI severity raises
+  { id: "ai-status", label: "AI status", route: AiStatus, keywords: "ai status meta call health latency fallback review raise supervisor agreement" },
 ];
 const ALL_PAGES = [...ALL_NAV, ...EXTRA_PAGES];
 const THEMES = ["dark", "light"];
