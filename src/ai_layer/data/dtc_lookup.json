@@ -1,0 +1,33 @@
+{
+  "_about": "Generic OBD-II diagnostic trouble code (DTC) lookup for the SkewAi AI layer. Only generic, widely published SAE J2012-style meanings that the author is confident of are listed. No manufacturer-specific meanings. Codes not listed resolve to 'unknown code' and have no effect. safety: 'safety' = fault in a safety-critical system (may raise case severity to the pack's safety-system level, never lower); 'elevated' = drivability/component fault shown as evidence only; neither ever lowers severity. There is NO public dataset linking DTCs to recalls, so no accuracy or recall-backtest claim is made for this table.",
+  "_source": "Author knowledge of SAE J2012 / ISO 15031-6 generic code structure and commonly published generic definitions; not copied from the standard. confidence: 'high' = standard generic definition; 'medium' = widely published but definitions may vary by manufacturer.",
+  "format": "^[PCBU][0-3][0-9A-F]{3}$",
+  "families": {
+    "P": "Powertrain",
+    "C": "Chassis",
+    "B": "Body",
+    "U": "Network / communication"
+  },
+  "ranges": [
+    {"from": "P0300", "to": "P0300", "meaning": "Random/multiple cylinder misfire detected", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0301", "to": "P0312", "meaning": "Cylinder N misfire detected (N = last two digits)", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0171", "to": "P0171", "meaning": "System too lean (bank 1)", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0174", "to": "P0174", "meaning": "System too lean (bank 2)", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0217", "to": "P0217", "meaning": "Engine coolant over-temperature condition", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0335", "to": "P0335", "meaning": "Crankshaft position sensor A circuit", "component": "ENGINE", "safety": "elevated", "confidence": "high"},
+    {"from": "P0087", "to": "P0087", "meaning": "Fuel rail/system pressure too low", "component": "FUEL SYSTEM", "safety": "elevated", "confidence": "high"},
+    {"from": "P0440", "to": "P0457", "meaning": "Evaporative emission (EVAP) system fault family", "component": "FUEL SYSTEM", "safety": "elevated", "confidence": "high"},
+    {"from": "P0562", "to": "P0563", "meaning": "System voltage low / high", "component": "ELECTRICAL SYSTEM", "safety": "elevated", "confidence": "high"},
+    {"from": "P0700", "to": "P0700", "meaning": "Transmission control system malfunction", "component": "POWER TRAIN", "safety": "elevated", "confidence": "high"},
+    {"from": "P0715", "to": "P0715", "meaning": "Input/turbine speed sensor A circuit", "component": "POWER TRAIN", "safety": "elevated", "confidence": "high"},
+    {"from": "P0730", "to": "P0730", "meaning": "Incorrect gear ratio", "component": "POWER TRAIN", "safety": "elevated", "confidence": "high"},
+    {"from": "C0035", "to": "C0050", "meaning": "Wheel speed sensor circuit (C0035 LF, C0040 RF, C0045 LR, C0050 RR): ABS / brake system input", "component": "SERVICE BRAKES", "safety": "safety", "confidence": "medium"},
+    {"from": "B0001", "to": "B0099", "meaning": "Restraint system (airbag / pretensioner) deployment-loop family", "component": "AIR BAGS", "safety": "safety", "confidence": "medium"},
+    {"from": "U0121", "to": "U0121", "meaning": "Lost communication with anti-lock brake system (ABS) control module", "component": "SERVICE BRAKES", "safety": "safety", "confidence": "high"},
+    {"from": "U0126", "to": "U0126", "meaning": "Lost communication with steering angle sensor module", "component": "STEERING", "safety": "safety", "confidence": "high"},
+    {"from": "U0131", "to": "U0131", "meaning": "Lost communication with power steering control module", "component": "STEERING", "safety": "safety", "confidence": "high"},
+    {"from": "U0151", "to": "U0151", "meaning": "Lost communication with restraints control module", "component": "AIR BAGS", "safety": "safety", "confidence": "high"},
+    {"from": "U0100", "to": "U0100", "meaning": "Lost communication with ECM/PCM A", "component": "ENGINE", "safety": "elevated", "confidence": "high"}
+  ],
+  "excluded_on_purpose": ["C04xx / C0455 steering codes: meanings vary by manufacturer, not confident enough to map"]
+}

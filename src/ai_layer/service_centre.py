@@ -10,6 +10,7 @@ point is explained in ``reasons``; nothing is AI-generated.
   recall advisory     +15                                  (existing advisory match)
   part of an investigation (cluster) +10
   waiting time        +1 per day open, max +10
+  [AI-LAYER] safety-system OBD-II fault code on the case  +10  (src.ai_layer.fault_codes)
 """
 
 from __future__ import annotations
@@ -53,6 +54,14 @@ def score_case(c: dict[str, Any], now: datetime | None = None) -> tuple[int, lis
     if c.get("investigation_id"):
         pts += 10
         reasons.append(f"part of investigation {c['investigation_id']} (+10)")
+    # [AI-LAYER] fault codes: explained additive bonus for a known safety-system code
+    if c.get("fault_codes"):
+        from src.ai_layer.fault_codes import queue_bonus
+
+        add, line = queue_bonus(list(c.get("fault_codes") or []))
+        if add:
+            pts += add
+            reasons.append(line)
     created = c.get("created_at")
     if isinstance(created, datetime):
         days = max(0, int((now - created).total_seconds() // 86400))
@@ -93,6 +102,16 @@ def service_queue(limit: int = 50, include_simulated: bool = True) -> dict[str, 
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # [AI-LAYER] fault codes attached to these cases (none -> no change)
+    try:
+        from src.ai_layer.fault_codes import codes_by_case
+
+        fcodes = codes_by_case([r["case_id"] for r in rows])
+    except Exception:
+        fcodes = {}
+    for r in rows:
+        if fcodes.get(r["case_id"]):
+            r["fault_codes"] = fcodes[r["case_id"]]
     out = []
     for r in rows:
         pts, reasons = score_case(r, now)
@@ -101,6 +120,7 @@ def service_queue(limit: int = 50, include_simulated: bool = True) -> dict[str, 
             "vehicle": " ".join(str(x) for x in (r.get("entity_1"), r.get("entity_2"), r.get("entity_3")) if x) or None,
             "category": r.get("category"), "severity": r.get("severity"), "advisory_match_id": r.get("advisory_match_id"),
             "investigation_id": r.get("investigation_id"), "case_kind": r.get("case_kind"), "channel": r.get("channel"),
+            "fault_codes": r.get("fault_codes") or [],  # [AI-LAYER] fault codes
             "created_at": r["created_at"].isoformat() if hasattr(r.get("created_at"), "isoformat") else r.get("created_at"),
         })
     out.sort(key=lambda x: (-x["score"], x["created_at"] or ""))

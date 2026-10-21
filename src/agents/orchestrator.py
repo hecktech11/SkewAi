@@ -778,6 +778,13 @@ class Orchestrator:
                 ires = await maybe_apply_hindi_intake(self.ctx, text, ires)
             except Exception:
                 pass
+            # [AI-LAYER] Optional OBD-II fault codes typed as 'codes: C0035 P0300': stored as evidence only.
+            try:
+                from src.ai_layer.fault_codes import maybe_capture_fault_codes
+
+                await maybe_capture_fault_codes(self.ctx, text)
+            except Exception:
+                pass
             # [AI-LAYER] Optional Muse Spark pass AFTER deterministic intake: fills
             # only still-empty slots, normalises Hindi/Hinglish, may only ADD a
             # kill-switch hit (pack lexicon on the translation). No key -> returns
@@ -2229,6 +2236,13 @@ class Orchestrator:
             from src.ai_layer.hindi_safety import maybe_raise_severity_hi
 
             tres = await maybe_raise_severity_hi(self.ctx, tres)
+        except Exception:
+            pass
+        # [AI-LAYER] Safety-system fault code floor: final = max(rule, floor); raise-only.
+        try:
+            from src.ai_layer.fault_codes import maybe_raise_severity_dtc
+
+            tres = await maybe_raise_severity_dtc(self.ctx, tres)
         except Exception:
             pass
 

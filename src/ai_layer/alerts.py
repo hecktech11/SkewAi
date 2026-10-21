@@ -118,6 +118,13 @@ def scan_alerts(limit: int = 200) -> dict[str, Any]:
         except Exception:
             brief = None
         payload = build_payload(inv, brief)
+        # [AI-LAYER] fault codes: corroborating-code case count (evidence only; thresholds unchanged)
+        try:
+            from src.ai_layer.fault_codes import matching_for_investigation
+
+            payload["cases_with_matching_fault_code"] = matching_for_investigation(inv["investigation_id"])
+        except Exception:
+            pass
         row = {"alert_id": _new_id(), "investigation_id": inv["investigation_id"], "pack_id": inv.get("pack_id"),
                "created_at": datetime.now(timezone.utc).replace(tzinfo=None), "level": level, "case_count": cases,
                "title": inv.get("title"), "payload": payload}

@@ -95,7 +95,18 @@ async def handle_message(msg: dict[str, Any], *, pack_id: str | None = None) -> 
             _sessions.pop(wa_id, None)
         return {"from": wa_id, "interaction_id": ctx.interaction_id, "state": ctx.state, "case_id": ctx.case_id,
                 "severity": ctx.severity, "safety_flags": sorted(k for k, v in (ctx.safety_flags or {}).items() if v),
+                "fault_codes": _fault_codes(ctx.interaction_id),  # [AI-LAYER] 'codes: C0035 P0300'
                 "replies": [_reply(wa_id, t) for t in new]}
+
+
+def _fault_codes(interaction_id: str) -> list[dict[str, Any]]:
+    # [AI-LAYER] fault codes the customer typed (e.g. 'codes: C0035 P0300'), with generic meanings
+    try:
+        from src.ai_layer.fault_codes import codes_for_interaction, lookup
+
+        return [lookup(c) for c in codes_for_interaction(interaction_id)]
+    except Exception:
+        return []
 
 
 async def handle_webhook(body: Any, *, pack_id: str | None = None) -> dict[str, Any]:

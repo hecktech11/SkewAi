@@ -172,6 +172,16 @@ def vehicle_risk(make: str, model: str, year: str | int, mileage: int | None = N
                      "recall_count": len(rec)},
         })
     comps.sort(key=lambda c: (_LEVEL_ORDER[c["level"]], -c["data"]["complaints"]))
+    # [AI-LAYER] fault codes: 'cases with matching fault code: n' (evidence only; level/score unchanged)
+    try:
+        from src.ai_layer.fault_codes import matching_for_vehicle
+
+        fc = matching_for_vehicle(make, model, year)
+        out["fault_codes"] = fc
+        for c in comps:
+            c["data"]["cases_with_matching_fault_code"] = int(fc["by_component"].get(c["component"], 0))
+    except Exception:
+        pass
     out["components"] = comps
     out["summary"] = {"complaints_total": total, "components_with_data": len(comps),
                       "act_now": sum(1 for c in comps if c["level"] == "act_now"),

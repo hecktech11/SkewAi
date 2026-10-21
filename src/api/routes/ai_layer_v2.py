@@ -111,3 +111,9 @@ async def verify_review_audit(
     from src.ai_layer.raise_review import verify_audit_chain
 
     return await ops_in_thread(verify_audit_chain)
+
+
+# [AI-LAYER] fault-code (OBD-II DTC) routes
+from src.api.routes.ai_fault_codes import router as _fault_codes_router  # noqa: E402
+
+router.include_router(_fault_codes_router)
