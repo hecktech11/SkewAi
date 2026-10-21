@@ -1,0 +1,323 @@
+........................................................................ [ 38%]
+........................................................................ [ 77%]
+..F...F..................................                                [100%]
+=================================== FAILURES ===================================
+___________ test_read_routes_accept_with_key[/api/frontline/digest] ____________
+
+self = PosixPath('/reports/qubot/digests'), mode = 511, parents = True
+exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/reports/qubot/digests'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: FileNotFoundError
+
+During handling of the above exception, another exception occurred:
+
+self = PosixPath('/reports/qubot'), mode = 511, parents = True, exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/reports/qubot'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: FileNotFoundError
+
+During handling of the above exception, another exception occurred:
+
+locked = <starlette.testclient.TestClient object at 0x7f7e543da1e0>
+path = '/api/frontline/digest'
+
+    @pytest.mark.parametrize("path", READ_PATHS)
+    def test_read_routes_accept_with_key(locked, path):
+>       r = locked.get(path, headers=HDR)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_read_auth.py:52: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:482: in get
+    return super().get(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:454: in request
+    return super().request(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:356: in handle_request
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:353: in handle_request
+    portal.call(self.app, scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+src/api/main.py:399: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:375: in __call__
+    await self.app(scope, receive, send_with_version)
+src/api/main.py:349: in __call__
+    await self.app(scope, receive, send_with_obs)
+src/security/headers.py:71: in __call__
+    await self.app(scope, receive, send_with_headers)
+src/api/identifier_guard.py:82: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:65: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/cors.py:88: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2685: in app
+    await route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1766: in handle
+    await self.original_router.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2740: in handle
+    await included_router._handle_selected(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1786: in _handle_selected
+    await original_route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1265: in handle
+    await app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:151: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:137: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:691: in app
+    raw_response = await run_endpoint_function(
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:345: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/frontline.py:1297: in get_digest
+    path = write_daily_digest(window_days=window_days)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/qubot/auditor.py:922: in write_daily_digest
+    DIGESTS_DIR.mkdir(parents=True, exist_ok=True)
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1315: in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1315: in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/reports'), mode = 511, parents = True, exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           PermissionError: [Errno 13] Permission denied: '/reports'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: PermissionError
+_____________________ test_digest_regenerate_requires_key ______________________
+
+self = PosixPath('/reports/qubot/digests'), mode = 511, parents = True
+exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/reports/qubot/digests'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: FileNotFoundError
+
+During handling of the above exception, another exception occurred:
+
+self = PosixPath('/reports/qubot'), mode = 511, parents = True, exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/reports/qubot'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: FileNotFoundError
+
+During handling of the above exception, another exception occurred:
+
+locked = <starlette.testclient.TestClient object at 0x7f7e36563f50>
+
+    def test_digest_regenerate_requires_key(locked):
+        r = locked.get("/api/frontline/digest", params={"regenerate": "true"})
+        assert r.status_code == 401
+>       r2 = locked.get(
+            "/api/frontline/digest",
+            params={"regenerate": "true"},
+            headers=HDR,
+        )
+
+tests/frontline/test_read_auth.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:482: in get
+    return super().get(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:454: in request
+    return super().request(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:356: in handle_request
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:353: in handle_request
+    portal.call(self.app, scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+src/api/main.py:399: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:375: in __call__
+    await self.app(scope, receive, send_with_version)
+src/api/main.py:349: in __call__
+    await self.app(scope, receive, send_with_obs)
+src/security/headers.py:71: in __call__
+    await self.app(scope, receive, send_with_headers)
+src/api/identifier_guard.py:82: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:65: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/cors.py:88: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2685: in app
+    await route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1766: in handle
+    await self.original_router.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2740: in handle
+    await included_router._handle_selected(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1786: in _handle_selected
+    await original_route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1265: in handle
+    await app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:151: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:137: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:691: in app
+    raw_response = await run_endpoint_function(
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:345: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/frontline.py:1291: in get_digest
+    path = write_daily_digest(window_days=window_days)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/qubot/auditor.py:922: in write_daily_digest
+    DIGESTS_DIR.mkdir(parents=True, exist_ok=True)
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1315: in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1315: in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/reports'), mode = 511, parents = True, exist_ok = True
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           PermissionError: [Errno 13] Permission denied: '/reports'
+
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/pathlib.py:1311: PermissionError
+=============================== warnings summary ===============================
+../skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/frontline/test_read_auth.py::test_read_routes_accept_with_key[/api/frontline/digest]
+FAILED tests/frontline/test_read_auth.py::test_digest_regenerate_requires_key
+2 failed, 183 passed, 1 warning in 186.83s (0:03:06)
