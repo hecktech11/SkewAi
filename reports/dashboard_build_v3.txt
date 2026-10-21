@@ -13,9 +13,9 @@ dist/assets/geist-sans-400-B40WzpMT.woff2   12.95 kB
 dist/assets/geist-sans-500-CTWBw9NS.woff2   13.29 kB
 dist/assets/geist-sans-600-CSETrqM2.woff2   13.37 kB
 dist/assets/index-BsqkUrWz.css              78.48 kB │ gzip:  14.79 kB
-dist/assets/index-CX3tHP8s.js              550.17 kB │ gzip: 144.84 kB
+dist/assets/index-am0msTGB.js              550.32 kB │ gzip: 144.86 kB
 
-✓ built in 330ms
+✓ built in 274ms
 [plugin builtin:vite-reporter] 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
