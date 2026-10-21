@@ -6,6 +6,8 @@ import { hashQueryObject, openCases, openIssue, patchHashQuery } from "../src/ui
 import { packLabel } from "../src/ui/labels.js";
 import InsightsBoard from "./InsightsBoard.jsx";
 import QualityEconomics from "./QualityEconomics.jsx";
+// [AI-LAYER] safety-first queue + NHTSA backtest headline (deterministic, real data)
+import SafetyRiskBoard from "../src/ai/SafetyRiskBoard.jsx";
 
 
 
@@ -204,6 +206,8 @@ export default function EarlyWarningBoard() {
           </button>
         </div>
       </header>
+      {/* [AI-LAYER] safety-first ordering of open investigations */}
+      <SafetyRiskBoard />
 
       {error && (
         <div className="banner banner-error" role="alert">

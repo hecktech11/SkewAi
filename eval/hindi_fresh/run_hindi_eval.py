@@ -1,0 +1,178 @@
+"""Hindi/Hinglish gap: rules-only vs rules + hindi_safety, on two call sets.  [AI-LAYER]
+
+    python -m eval.hindi_fresh.run_hindi_eval [--out-dir reports/hindi_safety]
+
+Sets: the original 60-call set (``eval/enhanced/calls.jsonl``) and the fresh
+24-sentence hold-out (``eval/hindi_fresh/fresh_calls.jsonl``). Both are SYNTHETIC.
+
+Modes (no key, no network):
+* rules-only  : EXISTING IntakeAgent -> EXISTING TriageAgent.
+* rules+hindi : IntakeAgent -> hindi_safety.maybe_apply_hindi_intake -> TriageAgent
+                -> hindi_safety.maybe_raise_severity_hi (raise-only), i.e. the same
+                order as the [AI-LAYER] hooks in the orchestrator.
+
+Per set x language: severity counts, triage skipped, kill-switch hits / expected,
+kill-switch misses and false alarms (vs the set's kill_switch label), category
+correct / wrong vs the set's expected category, and lowers (must be 0).
+Labels come from the files; the lexicon was not built from them.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+sys.path.insert(0, str(ROOT))
+
+from eval.enhanced.run_eval_modes import ORDER, _isolate, load_calls  # noqa: E402
+
+SETS = {"original_60": ROOT / "eval" / "enhanced" / "calls.jsonl", "fresh_24": HERE / "fresh_calls.jsonl"}
+
+
+def expected_category(call: dict[str, Any]) -> str | None:
+    if "expect_category" in call:
+        return call["expect_category"]
+    return (call.get("expected") or {}).get("category")
+
+
+async def run_call(pack, call: dict[str, Any], *, hindi: bool, tag: str) -> dict[str, Any]:
+    from src.agents.base import InteractionContext
+    from src.agents.intake import IntakeAgent
+    from src.agents.triage import TriageAgent
+    from src.ai_layer import hindi_safety
+
+    ctx = InteractionContext(interaction_id=f"int_hev_{tag}_{'h' if hindi else 'r'}_{call['id']}", pack=pack, channel="web_text")
+    ctx.record_turn("customer", call["text"])
+    out: dict[str, Any] = {"error": None}
+    try:
+        ires = await IntakeAgent(ctx).run(customer_turn=call["text"])
+        if hindi:
+            ires = await hindi_safety.maybe_apply_hindi_intake(ctx, call["text"], ires)
+        tres = await TriageAgent(ctx).run()
+        if hindi:
+            tres = await hindi_safety.maybe_raise_severity_hi(ctx, tres)
+        out.update({
+            "severity": None if tres.get("skipped") else tres.get("severity"),
+            "triage_skipped": bool(tres.get("skipped")),
+            "kill_switch": bool(ires.get("kill_switch") or (ctx.safety_flags or {}).get("escalation")),
+            "kill_switch_term": ires.get("kill_switch"),
+            "category": ctx.slots.get("category"),
+        })
+    except Exception as e:
+        out.update({"severity": None, "triage_skipped": False, "kill_switch": None, "kill_switch_term": None,
+                    "category": None, "error": f"{type(e).__name__}: {str(e)[:160]}"})
+    return out
+
+
+def summarise(calls, res) -> dict[str, Any]:
+    by: dict[str, Any] = {}
+    langs = sorted({c["lang"] for c in calls}, key=lambda x: ("en", "hi", "hinglish").index(x) if x in ("en", "hi", "hinglish") else 9)
+    for lang in (*langs, "all"):
+        idx = [i for i, c in enumerate(calls) if lang == "all" or c["lang"] == lang]
+        exp_cat = [i for i in idx if expected_category(calls[i])]
+        by[lang] = {
+            "n": len(idx),
+            "severity_counts": dict(sorted(Counter(str(res[i]["severity"]) for i in idx if res[i]["severity"]).items(),
+                                           key=lambda kv: ORDER.get(kv[0], 9))),
+            "triage_skipped": sum(1 for i in idx if res[i]["triage_skipped"]),
+            "pipeline_errors": sum(1 for i in idx if res[i]["error"]),
+            "kill_switch_expected": sum(1 for i in idx if calls[i]["kill_switch"]),
+            "kill_switch_hits": sum(1 for i in idx if calls[i]["kill_switch"] and res[i]["kill_switch"]),
+            "kill_switch_misses": sum(1 for i in idx if calls[i]["kill_switch"] and not res[i]["kill_switch"]),
+            "kill_switch_false_alarms": sum(1 for i in idx if not calls[i]["kill_switch"] and res[i]["kill_switch"]),
+            "category_expected": len(exp_cat),
+            "category_correct": sum(1 for i in exp_cat if res[i]["category"] == expected_category(calls[i])),
+            "category_wrong": sum(1 for i in idx if res[i]["category"] and res[i]["category"] != expected_category(calls[i])),
+        }
+    return by
+
+
+def lowers(rules, hindi) -> int:
+    return sum(1 for r, h in zip(rules, hindi)
+               if r["severity"] and h["severity"] and ORDER.get(h["severity"], 9) < ORDER.get(r["severity"], 9))
+
+
+def render(out: dict[str, Any]) -> str:
+    L = ["# Hindi / Hinglish gap: rules-only vs rules + hindi_safety", "",
+         "Generated by `eval/hindi_fresh/run_hindi_eval.py` (no API key, no network). Raw per-call output in",
+         "`hindi_eval.json` next to this file. Both sets are SYNTHETIC. Labels (kill_switch, category) are",
+         "read from the set files for scoring only; the lexicon in `src/ai_layer/hindi_safety.py` was not",
+         "built from them. The fresh set was committed before the lexicon existed (git history).", ""]
+    for name, s in out["sets"].items():
+        L += [f"## {name} (`{s['path']}`)", "",
+              "| Lang | Mode | Calls | Severity counts | Triage skipped | Kill-switch hits / expected | Misses | False alarms | Category correct / expected | Category wrong | Errors |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for lang in s["rules_only"]:
+            for mode in ("rules_only", "rules_plus_hindi"):
+                r = s[mode][lang]
+                sev = ", ".join(f"{k} {v}" for k, v in r["severity_counts"].items()) or "none"
+                L.append(f"| {lang} | {mode.replace('_', '-')} | {r['n']} | {sev} | {r['triage_skipped']} | "
+                         f"{r['kill_switch_hits']} / {r['kill_switch_expected']} | {r['kill_switch_misses']} | "
+                         f"{r['kill_switch_false_alarms']} | {r['category_correct']} / {r['category_expected']} | "
+                         f"{r['category_wrong']} | {r['pipeline_errors']} |")
+        L += ["", f"Severity lowers (rules+hindi below rules-only, must be 0): **{s['lowers']}**", ""]
+        miss = [p for p in s["per_call"] if p["kill_switch_expected"] and not p["rules_plus_hindi"]["kill_switch"]]
+        fa = [p for p in s["per_call"] if not p["kill_switch_expected"] and p["rules_plus_hindi"]["kill_switch"]]
+        if miss or fa:
+            L += ["Still missed / false alarms after the layer:", ""]
+            L += [f"- MISS `{p['id']}`: {p['text']}" for p in miss]
+            L += [f"- FALSE ALARM `{p['id']}` ({p['rules_plus_hindi']['kill_switch_term']}): {p['text']}" for p in fa]
+            L.append("")
+    L += ["Notes:", "- 'Triage skipped' = category or description still empty after one turn; kill-switch calls take the",
+          "  escalation fast path, so they show no triage severity here (the live call escalates them).",
+          f"- Generated {out['generated_at']}.", ""]
+    return "\n".join(L)
+
+
+async def run_all() -> dict[str, Any]:
+    from src.data.warehouse import init_ops_db
+    from src.domains.loader import load_pack
+
+    init_ops_db()
+    try:
+        from scripts.seed_domains import build as build_domain
+
+        build_domain("automotive_nhtsa")
+    except Exception:
+        pass
+    pack = load_pack("automotive_nhtsa")
+    out: dict[str, Any] = {"generated_at": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), "sets": {}}
+    for name, path in SETS.items():
+        calls = load_calls(path)
+        r = [await run_call(pack, c, hindi=False, tag=name) for c in calls]
+        h = [await run_call(pack, c, hindi=True, tag=name) for c in calls]
+        out["sets"][name] = {
+            "path": str(path.relative_to(ROOT)), "rules_only": summarise(calls, r), "rules_plus_hindi": summarise(calls, h),
+            "lowers": lowers(r, h),
+            "per_call": [{"id": c["id"], "lang": c["lang"], "text": c["text"], "kill_switch_expected": c["kill_switch"],
+                          "expected_category": expected_category(c), "rules_only": a, "rules_plus_hindi": b}
+                         for c, a, b in zip(calls, r, h)],
+        }
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--out-dir", default=str(ROOT / "reports" / "hindi_safety"))
+    args = p.parse_args(argv)
+    _isolate()
+    out = asyncio.run(run_all())
+    od = Path(args.out_dir)
+    od.mkdir(parents=True, exist_ok=True)
+    (od / "hindi_eval.json").write_text(json.dumps(out, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    (od / "HINDI_EVAL.md").write_text(render(out), encoding="utf-8")
+    print(json.dumps({k: {"lowers": v["lowers"], "all_rules": v["rules_only"]["all"], "all_hindi": v["rules_plus_hindi"]["all"]}
+                      for k, v in out["sets"].items()}, indent=1, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

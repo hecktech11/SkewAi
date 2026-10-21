@@ -1,5 +1,8 @@
 # Skew AI
 
+<!-- [AI-LAYER] mission line -->
+> **Mission: help vehicle manufacturers reduce road accidents by recording vehicle faults from every customer contact and predicting defects early.** See [HACKATHON.md](HACKATHON.md) for the optional Meta AI layer and [DEMO_SCRIPT.md](DEMO_SCRIPT.md) for the demo.
+
 Skew AI is a single-tenant pilot for live customer contacts. A **domain pack** (YAML + CSV) supplies the questions, safety rules, and known issues. The same agents then run the contact, write an audit ledger, and hand a supervisor a live console.
 
 The product name is Skew AI (`skewai`). API paths and environment variables still use `frontline` (`/api/frontline/*`, `FRONTLINE_*`).
@@ -225,6 +228,48 @@ Every ordinary customer-visible line is ledgered before it is sent. A failed tra
 | `docs/frontline_architecture.md` | Longer design note |
 | `docs/domain_pack_guide.md` | How to add a vertical |
 | `docs/demo_script.md` | Demo beats for both packs |
+
+<!-- [AI-LAYER] optional Meta AI layer section (additive) -->
+## AI Layer (optional)
+
+**Mission: reduce road accidents by catching vehicle faults early, from every call, in the caller's own language.**
+
+Road-safety tools at `/ui/#ai-tools`: per-vehicle fault risk, manufacturer alert feed (pull only), service-centre call-in queue, fault spread by state and month, WhatsApp intake **mock** (no WhatsApp API), and 5–10 s video evidence (analysis flag-gated, unverified). Details in [HACKATHON.md](HACKATHON.md).
+
+The deterministic pipeline above is the default and the fallback. The AI layer
+switches on only when `META_API_KEY` (or `MODEL_API_KEY`) is set. With no key,
+nothing changes and no network call is made. On any error, timeout, invalid
+output or low confidence, it falls back silently. Kill-switch, `assess_safety`,
+Qubot and the ledger always run and have the final say. AI can only **raise**
+severity or **add** a safety flag.
+
+| Feature | Meta model | Without a key |
+|---|---|---|
+| Enhanced intake (fill only empty slots, validated) | Muse Spark 1.3 | Regex/gazetteer intake |
+| Hindi/Hinglish → English, then the existing kill-switch on the translation; `hi-IN` speech picker | Muse Spark 1.3 | Deterministic glossary; picker still works |
+| Photo evidence: upload → validate → store → attach to case/cluster; region overlay | SAM 3.1 + Muse Spark (vision) | Upload/storage/attach work; analysis "not run" |
+| Severity + sentiment, `final = max(rule, AI)` | Muse Spark 1.3 | Rule severity |
+| Grounded investigation brief (claims cite real IDs, must pass Qubot), safety-risk chip, recommended inspection/repair actions | Muse Spark 1.3 | Deterministic brief + deterministic actions |
+| Safety-risk board on Early warning + backtest headline | none (deterministic) | Same |
+| Synthetic demo photo | Muse Image 1.0 (optional) | Code-generated PNG labelled SYNTHETIC |
+
+Quick start:
+
+```bash
+bash scripts/judge_setup.sh                 # one command: deps, build, demo data, serve → http://127.0.0.1:8000/ui/#demo
+export META_API_KEY=...                     # optional; base/models are env-configurable (src/ai_layer/config.py)
+python -m eval.enhanced.run_eval            # 60 labelled synthetic calls; enhanced column "not run" without a key
+python -m scripts.ai_meta_smoke             # live check of Muse Spark / vision / SAM 3.1 settings (skips without a key)
+python -m pytest tests/frontline/ai_layer   # all Meta calls mocked
+```
+
+Endpoints: `GET /api/ai/status`, `POST /api/ai/language/normalize`,
+`GET /api/ai/investigations/{id}/grounded-brief`, `GET /api/ai/early-warning/safety`,
+`POST|GET /api/cases/{id}/evidence`, `GET /api/evidence/{id}/file`, `POST /api/evidence/{id}/analyze`,
+`POST /api/ai/demo/seed` (only with `AI_DEMO_ENABLED=1`), `POST /api/ai/demo/safety-contrast`.
+
+Backtest on real NHTSA data: `reports/nhtsa/backtest_safety_2015_2024.md`.
+Meta API details are unverified against the live API (no key in this project). See [HACKATHON.md](HACKATHON.md) §6.
 
 ## Operating limits
 
