@@ -1,0 +1,58 @@
+# head $(git rev-parse --short HEAD) (after A+B): orchestrator/intake/safety/Hindi-text suites; pytest -q -p no:cacheprovider --timeout 120 tests/frontline/test_voice_helpers.py tests/frontline/test_crypto_shred_real.py tests/frontline/test_pii_token_integrity.py tests/frontline/test_remediation_high.py tests/frontline/test_followup_audit_findings.py tests/frontline/test_intake_slots.py tests/frontline/test_journey_critical.py tests/frontline/test_journey_high.py tests/frontline/test_live_safety_voice.py tests/frontline/test_orchestrator.py tests/frontline/test_safety_gate_preemption.py tests/frontline/test_safety_ml_disabled.py tests/frontline/test_safety_p1_case.py tests/frontline/test_contact_audit.py
+........................................................................ [ 43%]
+.....................F.................................................. [ 87%]
+.....................                                                    [100%]
+=================================== FAILURES ===================================
+____________________ test_h04_reingest_is_idempotent_upsert ____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-20/test_h04_reingest_is_idempoten0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fe5d9fe1040>
+
+    def test_h04_reingest_is_idempotent_upsert(tmp_path, monkeypatch):
+        from src.data.warehouse import domain_con
+        from src.domains.source_ingest import ingest_source
+    
+        from src.config import REPO_ROOT
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        auto = REPO_ROOT / "domains" / "automotive_nhtsa" / "data"
+        csv = tmp_path / "w.csv"
+        csv.write_text(
+            "CLAIM_ID,CLAIM_DATE,REPAIR_DATE,MODEL_YR,MAKETXT,MODELTXT,COMPNAME,"
+            "FAIL_CODE,TECH_NOTES,CLAIM_SEVERITY,STATE\n"
+            "1,2024-03-01,2024-02-20,2019,HONDA,CR-V,SERVICE BRAKES,,grinding pads,Medium,CA\n",
+            encoding="utf-8",
+        )
+>       r1 = ingest_source("h04_pack", "warranty", csv, mapping_path=auto / "mapping.warranty.yaml")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_journey_high.py:93: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7fe5d9b3e4f0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+=============================== warnings summary ===============================
+../skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/frontline/test_journey_high.py::test_h04_reingest_is_idempotent_upsert
+1 failed, 164 passed, 1 warning in 435.52s (0:07:15)
+EXIT 1
