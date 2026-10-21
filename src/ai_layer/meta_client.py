@@ -374,6 +374,20 @@ def meta_narrate(*, site: str, system: str, user: str, fallback: str, model: str
                                prompt_hash=ph, used_llm=False, reason=e.reason)
 
 
+# [AI-LAYER] call-health instrumentation (additive). Wraps the three adapter entry
+# points so every call that reaches the network records latency + outcome in the
+# ops table ai_call_health (src/ai_layer/call_health.py). The wrapper returns and
+# raises exactly what the wrapped function does; meta_disabled (no key) is never
+# recorded. If the instrumentation module cannot be imported the plain functions stay.
+try:
+    from src.ai_layer.call_health import instrument as _instrument_call_health
+
+    chat_json = _instrument_call_health(chat_json, kind="chat")
+    sam_segment = _instrument_call_health(sam_segment, kind="sam")
+    image_generate = _instrument_call_health(image_generate, kind="image")
+except Exception:  # pragma: no cover - instrumentation must never break the adapter
+    pass
+
 __all__ = [
     "HttpResponse",
     "MetaError",
