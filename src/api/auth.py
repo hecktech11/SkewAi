@@ -16,11 +16,11 @@ even if ``FRONTLINE_API_KEY`` is empty (forces configuration).
 
 Credentials
 -----------
-HTTP: ``X-API-Key`` or ``Authorization: Bearer`` (query ``api_key`` still accepted
-but discouraged).
+HTTP: ``X-API-Key`` or ``Authorization: Bearer``. A query-string ``api_key``
+never authenticates.
 
-WebSocket: prefer first-message ``{"type":"auth","api_key":"..."}`` or headers.
-Query ``?api_key=`` remains a **deprecated** fallback for older clients/tests.
+WebSocket: first-message ``{"type":"auth","api_key":"..."}`` or headers.
+``?api_key=`` is not a credential.
 """
 
 from __future__ import annotations
@@ -210,27 +210,26 @@ async def require_api_key(
         except HTTPException:
             pass
 
-    # Query keys rejected unless FRONTLINE_ALLOW_QUERY_KEY=1 (hermetic/legacy opt-in).
+    # Query-string keys are never credentials, including when other routes are open.
     q = request.query_params.get("api_key")
-    allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
     header_present = bool(
         (x_api_key and x_api_key.strip())
         or (authorization and authorization.strip())
     )
-    if q and not allow_query and not header_present:
+    if isinstance(q, str) and q.strip() and not header_present:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 "API key in query string is disabled; use X-API-Key or "
-                "Authorization: Bearer (set FRONTLINE_ALLOW_QUERY_KEY=1 only for tests)."
+                "Authorization: Bearer."
             ),
             headers={"WWW-Authenticate": "Bearer"},
         )
     p = check_api_key(
         authorization=authorization,
         x_api_key=x_api_key,
-        api_key=q if allow_query else None,
-        allow_query_key=allow_query,
+        api_key=None,
+        allow_query_key=False,
     )
     try:
         setattr(request.state, PRINCIPAL_ATTR, p)
@@ -304,11 +303,8 @@ async def require_ws_api_key(
 ) -> bool:
     """FastAPI dependency for WebSocket routes (headers preferred; query deprecated).
 
-    Mirrors HTTP ``require_api_key`` (item 11): query-string keys are rejected
-    by default and accepted only when ``FRONTLINE_ALLOW_QUERY_KEY=1`` is set
-    explicitly — so hardened deploys never accept keys from URLs (logs/proxy
-    history). Prefer the ``authenticate_websocket`` first-message frame path
-    for browser clients.
+    Mirrors HTTP ``require_api_key``: a query-string key never authenticates.
+    Prefer the ``authenticate_websocket`` first-message frame for browsers.
     """
     if x_frontline_session and isinstance(x_frontline_session, str):
         from src.api.rbac import verify_session
@@ -319,7 +315,6 @@ async def require_ws_api_key(
         except HTTPException:
             pass
 
-    allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
     auth_str = authorization if isinstance(authorization, str) else None
     x_key_str = x_api_key if isinstance(x_api_key, str) else None
     q_key_str = api_key if isinstance(api_key, str) else None
@@ -328,21 +323,20 @@ async def require_ws_api_key(
         (x_key_str and x_key_str.strip())
         or (auth_str and auth_str.strip())
     )
-    if q_key_str and not allow_query and not header_present:
+    if q_key_str and q_key_str.strip() and not header_present:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 "API key in query string is disabled; use X-API-Key, "
-                "Authorization: Bearer, or the WebSocket auth frame "
-                "(set FRONTLINE_ALLOW_QUERY_KEY=1 only for tests)."
+                "Authorization: Bearer, or the WebSocket auth frame."
             ),
             headers={"WWW-Authenticate": "Bearer"},
         )
     check_api_key(
         authorization=auth_str,
         x_api_key=x_key_str,
-        api_key=q_key_str if allow_query else None,
-        allow_query_key=allow_query,
+        api_key=None,
+        allow_query_key=False,
     )
     return True
 
@@ -376,9 +370,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
       3. Header API key (preferred for non-browser clients)
       4. Accept + first-message auth frame (preferred for browsers)
 
-    Query ``?api_key=`` is deprecated and rejected unless
-    ``FRONTLINE_ALLOW_QUERY_KEY=1`` (mirrors HTTP ``require_api_key``) so
-    hardened deploys don't leak keys via logs/proxy history.
+    Query ``?api_key=`` is not a credential.
 
     Returns the verified principal and stores it on ``websocket.state`` so
     every later authorization decision uses the credential that was actually
@@ -413,9 +405,6 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
             pass
 
     # 2. Header API key
-    allow_query = _env_bool("FRONTLINE_ALLOW_QUERY_KEY", False)
-    q = websocket.query_params.get("api_key")
-    # Headers first (no query involved)
     try:
         return store_ws_principal(
             websocket,
@@ -423,23 +412,13 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
                 authorization=websocket.headers.get("authorization"),
                 x_api_key=websocket.headers.get("x-api-key"),
                 api_key=None,
+                allow_query_key=False,
             ),
         )
     except HTTPException:
         pass
 
-    # 3. Deprecated query fallback — only when explicitly opted in for tests.
-    if q and allow_query:
-        try:
-            return store_ws_principal(websocket, check_api_key(api_key=q))
-        except HTTPException:
-            pass
-    elif q and not allow_query:
-        # Do not silently accept: force header/first-message path below.
-        # Fall through to first-message auth (which will 401 without a key).
-        pass
-
-    # 4. Browser path: first message after accept
+    # 3. Browser path: first message after accept
     if websocket.client_state.name != "CONNECTED":
         await websocket.accept()
     try:
@@ -467,7 +446,11 @@ async def authenticate_websocket(websocket: WebSocket) -> Principal:
         except HTTPException as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.detail) from e
     return store_ws_principal(
-        websocket, check_api_key(api_key=str(raw.get("api_key") or ""))
+        websocket,
+        check_api_key(
+            x_api_key=str(raw.get("api_key") or ""),
+            allow_query_key=False,
+        ),
     )
 
 

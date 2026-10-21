@@ -359,6 +359,13 @@ def record_action(action: AgentAction, *, on_degraded=None) -> str:
     still raises (fail-closed).     ``replay_ledger_wal()`` re-inserts WAL rows
     into the chain on recovery.
     """
+    if action.interaction_id:
+        from src.frontline.dsr import is_interaction_erased
+        if is_interaction_erased(action.interaction_id):
+            raise RuntimeError(
+                f"interaction {action.interaction_id} has been erased; ledger writes blocked"
+            )
+
     pack_id = _PACK_BY_INTERACTION.get(action.interaction_id)
     degraded: list[str] = []
     snaps: dict[str, dict[str, Any]] = {}
@@ -463,6 +470,19 @@ def _wal_append(action: AgentAction, cause: BaseException) -> None:
             _os.fsync(fh.fileno())
 
 
+def _fsync_file(path) -> None:
+    """Flush a file and its directory. Callers unlink a source only after this."""
+    import os as _os
+
+    with open(path, "rb") as fh:
+        _os.fsync(fh.fileno())
+    dir_fd = _os.open(str(path.parent), _os.O_RDONLY)
+    try:
+        _os.fsync(dir_fd)
+    finally:
+        _os.close(dir_fd)
+
+
 def _mark_degraded_ledger(interaction_id: str) -> None:
     try:
         with ops_con() as con:
@@ -509,6 +529,7 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
     replayed = 0
     failed: list[str] = []
     all_rest: list[str] = []
+    retained_segments: list[Path] = []
     processed_iids: set[str] = set()
     budget_remaining = limit
 
@@ -577,17 +598,17 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
         seg_rest = seg_kept + [ln for ln in overflow if ln.strip()]
         all_rest.extend(seg_rest)
 
-        try:
-            if not seg_rest:
+        if not seg_rest:
+            try:
                 rotated = path.with_name(path.name + f".replayed-{int(time.time())}")
                 try:
                     segment_path.rename(rotated)
                 except OSError:
                     segment_path.unlink()
-            else:
-                segment_path.unlink()
-        except OSError:
-            pass
+            except OSError:
+                pass
+        else:
+            retained_segments.append(segment_path)
 
     # Safely restore any un-replayed lines from all segments back into active WAL under _wal_lock
     if all_rest:
@@ -597,8 +618,12 @@ def replay_ledger_wal(*, limit: int = 1000) -> dict[str, Any]:
             except Exception:
                 existing_in_path = ""
             new_content = "\n".join(all_rest) + ("\n" + existing_in_path if existing_in_path else "\n")
+            path.write_text(new_content, encoding="utf-8")
+            # The renamed segment is the only durable copy until this fsync returns.
+            _fsync_file(path)
+        for sp in retained_segments:
             try:
-                path.write_text(new_content, encoding="utf-8")
+                sp.unlink()
             except OSError:
                 pass
 
@@ -736,6 +761,13 @@ def _pin_cited_best_effort(action: AgentAction, *, pack_id: str | None = None) -
 
 def record_action_on_con(con, action: AgentAction) -> str:
     """Write an action on a caller-owned ops connection (same transaction)."""
+    if action.interaction_id:
+        from src.frontline.dsr import is_interaction_erased
+
+        if is_interaction_erased(action.interaction_id):
+            raise RuntimeError(
+                f"interaction {action.interaction_id} has been erased; ledger writes blocked"
+            )
     _insert_action_row(con, action)
     return action.action_id
 

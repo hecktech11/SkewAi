@@ -1,0 +1,16 @@
+  worker scored 25/68 as-of dates (9s)
+  worker scored 25/67 as-of dates (9s)
+  worker scored 25/67 as-of dates (10s)
+  worker scored 25/67 as-of dates (10s)
+  worker scored 25/68 as-of dates (10s)
+  worker scored 50/68 as-of dates (67s)
+  worker scored 50/68 as-of dates (67s)
+  worker scored 50/67 as-of dates (68s)
+  worker scored 50/67 as-of dates (69s)
+  worker scored 50/67 as-of dates (70s)
+{
+  "chosen": "z2.0_q0.05_abs3_rel0.5",
+  "config_sha256": "520ec7b0fdb6c18b5fe388102100334bd969e6308ff33b86ebfed0c556159e23",
+  "regate_mismatches": 0
+}
+EXIT 0

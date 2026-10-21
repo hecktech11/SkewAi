@@ -20,8 +20,13 @@ _archive_registry: set[Path] = set()
 
 def build_audit_archive(interaction_id: str, *, out_dir: Path | None = None) -> dict[str, Any]:
     """Write a timestamped JSON bundle with SHA256 manifest."""
+    from src.frontline.dsr import is_interaction_erased
     from src.security.identifiers import safe_out_dir, safe_token_id
 
+    if is_interaction_erased(interaction_id):
+        raise RuntimeError(
+            f"interaction {interaction_id} has been erased; archive writes blocked"
+        )
     iid = safe_token_id(interaction_id, kind="interaction_id")
     data = export_interaction(iid)
     actions = list_actions(iid)

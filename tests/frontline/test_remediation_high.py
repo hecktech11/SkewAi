@@ -21,13 +21,18 @@ def test_item11_ws_query_key_rejected_by_default():
 
 
 def test_item11_ws_query_key_opt_in_only(monkeypatch):
+    """FRONTLINE_ALLOW_QUERY_KEY does not re-enable a query-string credential."""
     import anyio
 
     from src.api.auth import require_ws_api_key
+    from fastapi import HTTPException
 
     monkeypatch.setenv("FRONTLINE_ALLOW_QUERY_KEY", "1")
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
     monkeypatch.setenv("FRONTLINE_API_KEY", "ws-query-key")
-    assert anyio.run(require_ws_api_key, "ws-query-key", None, None) is True
+    with pytest.raises(HTTPException) as exc:
+        anyio.run(require_ws_api_key, "ws-query-key", None, None)
+    assert exc.value.status_code == 401
 
 
 def test_item11_ws_header_key_accepted(monkeypatch):

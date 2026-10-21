@@ -70,7 +70,17 @@ def _persist_idf(pack_id: str, idf: dict[str, float], docs: int = 0) -> None:
     if path:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"docs": docs, "weights": idf}
+            prior = ""
+            if path.is_file():
+                try:
+                    old = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(old, dict) and old.get("vectors_identity"):
+                        prior = str(old["vectors_identity"])
+                except Exception:
+                    prior = ""
+            payload: dict[str, Any] = {"docs": docs, "weights": idf}
+            if prior and prior.lower() != "unknown":
+                payload["vectors_identity"] = prior
             path.write_text(json.dumps(payload), encoding="utf-8")
         except Exception:
             pass
@@ -102,6 +112,70 @@ def hash_embedding_version(pack_id: str | None = None) -> str:
     if digest == "uniform":
         return HASH_EMBEDDING_VERSION
     return f"{HASH_EMBEDDING_VERSION}:idf-{digest}"
+
+
+def read_vectors_identity(pack_id: str | None) -> str:
+    """Stamp written by the last rebuild. Empty when this space was never stamped."""
+    if not pack_id:
+        return ""
+    path = _idf_file_path(pack_id)
+    if not path or not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    ident = str(data.get("vectors_identity") or "").strip()
+    if not ident or ident.lower() == "unknown":
+        return ""
+    return ident
+
+
+def write_vectors_identity(pack_id: str | None, identity: str) -> None:
+    """Record the transformation that produced the stored vectors."""
+    ident = str(identity or "").strip()
+    if not pack_id or not ident or ident.lower() == "unknown":
+        return
+    path = _idf_file_path(pack_id)
+    if not path:
+        return
+    payload: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(old, dict):
+                payload = old
+        except Exception:
+            payload = {}
+    if "weights" not in payload:
+        payload["docs"] = _PACK_IDF_DOCS.get(pack_id, 0)
+        payload["weights"] = dict(_PACK_IDF.get(pack_id) or {})
+    payload["vectors_identity"] = ident
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def transformation_identity(pack_id: str | None = None) -> str:
+    """Hash of model, tokenizer, preprocessing, IDF, taxonomy, aliases, and centroid policy.
+
+    A missing provider attribute is never stored as the version string ``unknown``.
+    """
+    parts = {
+        "model": hash_embedding_version(pack_id),
+        "tokenizer": "alnum-v1",
+        "preprocessing": "lower-v1",
+        "idf": idf_digest(pack_id),
+        "taxonomy": "record-category",
+        "aliases": "pack-gazetteer",
+        "centroid_policy": "kmeans-select-k-v1",
+    }
+    raw = json.dumps(parts, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def embedding_dim() -> int:

@@ -9,8 +9,10 @@ weekly buckets, with Benjamini-Hochberg FDR control:
 - Zero-fill: every (category, entity_2) series is expanded to the continuous
   Monday-to-Monday week range it spans; missing weeks count 0. Without this,
   quiet weeks vanish and any observed week looks anomalous.
-- Leave-one-out baseline: week *w* is scored against the OTHER weeks only,
-  so a spike cannot inflate its own baseline.
+- Prior-only baseline: week *w* is scored against earlier weeks only.
+  Later weeks are not in the baseline, so adding future records cannot
+  change an alert decision that was already due. The current week is also
+  left out, so a spike cannot inflate its own baseline.
 - Quasi-Poisson z: ``z = (x - mu) / max(sample_std, sqrt(mu))``. Counts are
   not Gaussian: Poisson variance grows with the mean, so dividing a raw
   count difference by an empirical std mixes units (the old ``z = n - mean``
@@ -25,7 +27,9 @@ weekly buckets, with Benjamini-Hochberg FDR control:
   observations. With 2-3 baseline weeks only the absolute+relative heuristic
   guard may fire (``method='low-history-heuristic'``); with <2, never.
 - Multiple comparisons: one-sided Normal-approx p-values from z are adjusted
-  with Benjamini-Hochberg across ALL scored slices; ``is_anomaly`` requires
+  with Benjamini-Hochberg frozen at each week, using only slices whose
+  iso_week is at or before that week. A later cutoff does not rewrite an
+  earlier week's ``p_bh``. ``is_anomaly`` requires
   ``z >= 2.0`` AND ``p_bh <= 0.05`` AND the absolute/relative lift gates
   (``x - mu >= 5`` AND ``(x - mu)/mu >= 50%`` when ``mu > 0``). The lift
   gates keep trivial relative moves (1000 -> 1002) unflagged even when a
@@ -315,8 +319,8 @@ def score_weekly_slices(
 ) -> list[dict[str, Any]]:
     """Attach z_score / p_value / is_anomaly. Pure; no I/O.
 
-    Zero-fills each series, scores leave-one-out quasi-Poisson residuals,
-    and applies BH-FDR across all candidate slices.
+    Zero-fills each series, scores prior-only quasi-Poisson residuals,
+    and applies BH-FDR at each week using only information available then.
 
     ``in_flight`` (item 36) folds ONE in-flight contact into the CURRENT
     week bucket before scoring — ``{"iso_week", "category", "entity_2"}`` —
@@ -354,10 +358,11 @@ def score_weekly_slices(
         group = (cat, ent, model) if grain4 else (cat, ent)
         by_group[group].append((week, n))
 
-    # First pass: per-slice statistics (leave-one-out baseline).
+    # First pass: per-slice statistics. Baseline and CUSUM use only weeks
+    # at or before the week being scored.
     prelim: list[dict[str, Any]] = []
     exp = exposure or {}
-    cusum_map: dict[tuple, dict[str, Any]] = {}
+    cusum_map: dict[tuple, list[dict[str, Any]]] = {}
 
     for group, weeks in sorted(by_group.items()):
         if grain4:
@@ -366,16 +371,23 @@ def score_weekly_slices(
             cat, ent = group
             model = ""
         sorted_weeks = sorted(weeks)
-        # Precompute CUSUM on chronological series for this slice
-        s_vals = [float(n) for _, n in sorted_weeks]
-        s_mu = sum(s_vals) / len(s_vals) if s_vals else 0.0
-        s_var = sum((v - s_mu) ** 2 for v in s_vals) / max(1, len(s_vals) - 1)
-        cusum_map[(cat, ent, model)] = detect_cusum_change_point(
-            s_vals, baseline_mean=s_mu, baseline_std=math.sqrt(s_var)
-        )
+        prefix_vals: list[float] = []
+        prefix_cusum: list[dict[str, Any]] = []
+        for _week, n_raw in sorted_weeks:
+            prefix_vals.append(float(n_raw))
+            s_mu = sum(prefix_vals) / len(prefix_vals)
+            s_var = sum((v - s_mu) ** 2 for v in prefix_vals) / max(1, len(prefix_vals) - 1)
+            prefix_cusum.append(
+                detect_cusum_change_point(
+                    list(prefix_vals),
+                    baseline_mean=s_mu,
+                    baseline_std=math.sqrt(s_var),
+                )
+            )
+        cusum_map[(cat, ent, model)] = prefix_cusum
 
         for w_idx, (week, n) in enumerate(sorted_weeks):
-            others = [(w, c) for w, c in weeks if w != week]
+            others = [(w, c) for w, c in sorted_weeks if w < week]
             # Rate path (audit 8.1): per-1000-unit rates when exposure covers
             # this week AND every baseline week; else raw counts.
             exp_here = exp.get((week, cat, ent))
@@ -441,10 +453,24 @@ def score_weekly_slices(
                 }
             )
 
-    # Second pass: BH-FDR across all candidate slices (multiple comparisons).
-    candidates = [i for i, r in enumerate(prelim) if r["method"] != "insufficient-history"]
-    adj = _bh_adjust([prelim[i]["p_value"] for i in candidates])
-    p_bh_map = {idx: a for idx, a in zip(candidates, adj)}
+    # Second pass: freeze each week's FDR using only slices known at that week.
+    # p_bh is written for the cutoff week only, so a future week cannot
+    # rewrite a decision that was already due.
+    candidates_by_cutoff: dict[str, list[int]] = defaultdict(list)
+    for i, r in enumerate(prelim):
+        if r["method"] != "insufficient-history":
+            candidates_by_cutoff[str(r["iso_week"])].append(i)
+    p_bh_map: dict[int, float] = {}
+    for cutoff in sorted(candidates_by_cutoff):
+        window = [
+            i
+            for i, r in enumerate(prelim)
+            if r["method"] != "insufficient-history" and str(r["iso_week"]) <= cutoff
+        ]
+        adj = _bh_adjust([prelim[i]["p_value"] for i in window])
+        adj_by_i = {idx: a for idx, a in zip(window, adj)}
+        for i in candidates_by_cutoff[cutoff]:
+            p_bh_map[i] = adj_by_i[i]
 
     rows: list[dict[str, Any]] = []
     for i, r in enumerate(prelim):
@@ -469,12 +495,14 @@ def score_weekly_slices(
             )
         r["is_anomaly"] = bool(gates)
 
-        # CUSUM sustained shift vs transient spike classification (audit 4.3)
+        # CUSUM sustained shift vs transient spike classification (audit 4.3).
+        # The prefix stored for this week does not include later weeks.
         cat_ent = (r["category"], r["entity_2"], r.get("entity_3") or "")
-        c_res = cusum_map.get(cat_ent, {})
+        series = cusum_map.get(cat_ent, [])
+        w_idx = r.pop("w_idx", 0)
+        c_res = series[w_idx] if isinstance(series, list) and w_idx < len(series) else {}
         c_trig = bool(c_res.get("triggered"))
         c_idx = c_res.get("change_point_index")
-        w_idx = r.pop("w_idx", 0)
         is_sustained = c_trig and (c_idx is not None and w_idx >= c_idx)
         if r["is_anomaly"]:
             r["change_point_type"] = "sustained_shift" if is_sustained else "transient_spike"
@@ -488,6 +516,10 @@ def score_weekly_slices(
             and r["category"] == str(in_flight.get("category") or "")
             and r["entity_2"] == str(in_flight.get("entity_2") or "")
         )
+        r["alert_available_week"] = r["iso_week"]
+        r["information_through"] = r["iso_week"]
+        r["model_identity"] = "quasi-poisson-causal-v1"
+        r["feed_complete"] = True
         rows.append(r)
     return rows
 

@@ -505,30 +505,24 @@ async def test_fu12_orchestrator_emits_turn_with_turn_id_and_distinct_ids_not_me
     assert len(orch.ctx.turns) == 1
     assert orch.ctx.turns[0]["turn_id"] == emitted_turns[0]["meta"]["turn_id"]
 
-    # Deduplication invariant: Two distinct turns with same text ("yes") but different IDs must NOT be merged
-    turn_a = {"turn_id": "t_1", "speaker": "customer", "text": "yes"}
-    turn_b = {"turn_id": "t_2", "speaker": "customer", "text": "yes"}
-
-    def merge_turns(existing, new_turn):
-        merged = list(existing)
-        found = False
-        for i, row in enumerate(merged):
-            if row.get("turn_id") and new_turn.get("turn_id") and row["turn_id"] == new_turn["turn_id"]:
-                merged[i] = {**row, **new_turn}
-                found = True
-                break
-            if row.get("turn_id") and new_turn.get("turn_id") and row["turn_id"] != new_turn["turn_id"]:
-                continue
-            if row.get("speaker") == new_turn.get("speaker") and row.get("text", "").strip() == new_turn.get("text", "").strip():
-                merged[i] = {**row, **new_turn}
-                found = True
-                break
-        if not found:
-            merged.append(new_turn)
-        return merged
-
-    turns = merge_turns([], turn_a)
-    turns = merge_turns(turns, turn_b)
+    # Deduplication invariant: Two distinct turns with same text ("yes") but different IDs must NOT be merged.
+    # Invokes the production JSX implementation in dashboard/routes/LiveContactConsole.jsx via Node.
+    import json
+    import shutil
+    import subprocess
+    node_bin = shutil.which("node") or "/opt/homebrew/bin/node"
+    node_script = """
+const fs = require("fs");
+const code = fs.readFileSync("dashboard/routes/LiveContactConsole.jsx", "utf8");
+const match = code.match(/function mergeConsoleTurns\\([\\s\\S]*?\\n\\}/);
+if (!match) throw new Error("mergeConsoleTurns not found in LiveContactConsole.jsx");
+const mergeConsoleTurns = new Function(match[0] + "; return mergeConsoleTurns;")();
+const res1 = mergeConsoleTurns([], [{ turn_id: "t_1", speaker: "customer", text: "yes" }]);
+const res2 = mergeConsoleTurns(res1, [{ turn_id: "t_2", speaker: "customer", text: "yes" }]);
+console.log(JSON.stringify(res2));
+"""
+    proc = subprocess.run([node_bin, "-e", node_script], capture_output=True, text=True, check=True)
+    turns = json.loads(proc.stdout)
     assert len(turns) == 2
     assert turns[0]["turn_id"] == "t_1"
     assert turns[1]["turn_id"] == "t_2"

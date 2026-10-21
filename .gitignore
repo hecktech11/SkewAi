@@ -74,3 +74,7 @@ models/minilm/*.bin
 # Docker / local tooling
 *.log
 .docker/
+
+# [AI-LAYER] locally stored photo evidence (never commit customer photos)
+data/ai_evidence/
+data/hackathon/

@@ -19,6 +19,11 @@ from src.channels.base import ChannelAdapter, ChannelCapabilities
 from src.channels.stt_tts import ServerSpeechStack
 
 
+def carrier_audio_ready() -> bool:
+    """The registered Twilio route is not a completed live carrier conversation."""
+    return False
+
+
 class TwilioMediaChannel(ChannelAdapter):
     """Telephony channel adapter with deterministic pilot fallback."""
 

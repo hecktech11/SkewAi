@@ -45,7 +45,7 @@ FROM clusters c
 WHERE c.pack_id = ?
   AND (c.category = ? OR ? IS NULL)
 ORDER BY c.record_count DESC
-LIMIT 5
+LIMIT 40
 """
 
 _SPIKE_SQL = """
@@ -185,13 +185,23 @@ class InvestigatorAgent(Agent):
                 _ra(self._action(action_type="investigation_briefed",
                                  input_summary="flag disabled",
                                  output_summary="investigator disabled; skipped"))
-                return {"skipped": True, "reason": "disabled_by_flag"}
+                return {
+                    "skipped": True,
+                    "outcome": "not_applicable",
+                    "reason": "disabled_by_flag",
+                }
         except Exception:
             pass
         entity_2 = ctx.slots.get("entity_2")
         entity_3 = ctx.slots.get("entity_3")
         category = ctx.slots.get("category")
         description = ctx.slots.get("description") or ""
+        try:
+            from src.frontline.elicitation import symptom_text_for_ctx
+
+            description = symptom_text_for_ctx(ctx) or description
+        except Exception:
+            pass
         try:
             from src.ml_runtime.embedding_runtime import customer_visible_mode
         except Exception:
@@ -218,6 +228,33 @@ class InvestigatorAgent(Agent):
                 ).fetchall()
                 similar_cols = [d[0] for d in con.description]
                 candidates = [dict(zip(similar_cols, r)) for r in candidate_rows]
+                lexical: list[dict[str, Any]] = []
+                if keyword:
+                    lex_rows = con.execute(
+                        _SIMILAR_SQL,
+                        [None, None, None, None, None, None, keyword, keyword, 40],
+                    ).fetchall()
+                    lexical = [dict(zip(similar_cols, r)) for r in lex_rows]
+                vector_rows: list[dict[str, Any]] = []
+                try:
+                    from src.ml_runtime.embedding_match import rank_semantic
+
+                    sem = rank_semantic(
+                        ctx.pack.id,
+                        description or keyword or "",
+                        lexical or candidates,
+                        top_k=10,
+                    )
+                    if sem.get("status") == "performed":
+                        vector_rows = list(sem.get("ranked") or [])
+                except Exception:
+                    vector_rows = []
+                from src.ml_runtime.association import merge_candidate_rows
+
+                # Exact entity/category hits stay. A weak exact filter also
+                # takes the lexical pool. Vector hits join either way.
+                extra_lex = lexical if len(candidates) < 3 else []
+                candidates = merge_candidate_rows(candidates, extra_lex, vector_rows)
                 pool: list[dict[str, Any]] = []
 
                 # Full-corpus population for honest lift denominators
@@ -252,7 +289,8 @@ class InvestigatorAgent(Agent):
                             from src.ml_runtime.embeddings import rank_by_similarity
 
                             ranked = rank_by_similarity(
-                                description, similar or candidates, top_k=5
+                                description, similar or candidates, top_k=5,
+                                pack_id=getattr(ctx.pack, "id", None),
                             )
                             if ranked and (ranked[0].get("sim_score") or 0) > 0.05:
                                 # Keep association order when scores are close; prefer
@@ -354,7 +392,10 @@ class InvestigatorAgent(Agent):
                     try:
                         from src.ml_runtime.embeddings import cosine, embed_text
 
-                        _qvec = embed_text(description or "")
+                        _qvec = embed_text(
+                            description or "",
+                            pack_id=getattr(ctx.pack, "id", None),
+                        )
                         _qok = any(_qvec)
                     except Exception:
                         _qvec, _qok = [], False
@@ -566,7 +607,11 @@ class InvestigatorAgent(Agent):
                 ok=False,
                 error="domain warehouse missing",
             ))
-            return {"skipped": True, "reason": "domain warehouse not built"}
+            return {
+                "skipped": True,
+                "outcome": "unavailable",
+                "reason": "domain warehouse not built",
+            }
         except Exception as e:
             # Any other DB/ML failure must degrade to skipped — never strand
             # the contact in ENRICHING (item 8). The orchestrator preserves
@@ -581,7 +626,11 @@ class InvestigatorAgent(Agent):
                 ok=False,
                 error=f"{type(e).__name__}: {e}"[:500],
             ))
-            return {"skipped": True, "reason": f"investigator failed: {type(e).__name__}"}
+            return {
+                "skipped": True,
+                "outcome": "failed",
+                "reason": f"investigator failed: {type(e).__name__}",
+            }
 
         # ── Ledger: similar_search ───────────────────────────────────────
         similar_ids = [s["record_id"] for s in similar if s.get("record_id")]
@@ -691,6 +740,9 @@ class InvestigatorAgent(Agent):
         return {
             "brief": brief,
             "narration": narration,
+            "outcome": "completed",
+            "model_version": brief.get("model_version"),
+            "prompt_hash": brief.get("prompt_hash"),
             "evidence_ids": similar_ids + ([str(cluster_id)] if cluster_id is not None else []),
         }
 
@@ -749,6 +801,26 @@ class InvestigatorAgent(Agent):
                 keyword=self._extract_keyword(self.ctx.slots.get("description") or "") or "",
                 evidence_ids=[str(e) for e in evidence_ids[:5]],
             )
-            return res.text
+            from src.ai.provider import narration_violations
+
+            facts = {
+                "similar_count": count,
+                "cluster_id": cluster,
+                "lead_time_weeks": lead,
+                "evidence_ids": [str(e) for e in evidence_ids[:5]],
+                "remedies": [],
+                "promises": [],
+            }
+            violations = narration_violations(res.text or "", facts)
+            shown = res.text if not violations else fallback
+            brief["narration_shown"] = shown
+            brief["model_version"] = getattr(res, "model_id", "") or ""
+            brief["prompt_hash"] = getattr(res, "prompt_hash", "") or ""
+            brief["narration_violations"] = violations
+            brief["narration_audited"] = True
+            return shown
         except Exception:
+            brief["narration_shown"] = fallback
+            brief["model_version"] = "deterministic"
+            brief["prompt_hash"] = ""
             return fallback

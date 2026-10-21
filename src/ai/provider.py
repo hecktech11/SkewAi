@@ -112,14 +112,14 @@ def llm_enabled() -> bool:
     return bool(llm_provider())
 
 
-def can_spend() -> tuple[bool, str]:
+def can_spend(cost_units: float = 0.0) -> tuple[bool, str]:
     """Read-only cap check. Does not reserve a turn."""
     if not llm_enabled():
         return False, "llm_disabled_or_no_key"
     spend = get_spend()
     if spend["turn_count"] >= max(1, settings.llm_turn_cap):
         return False, "turn_cap"
-    if spend["cost_units"] >= float(settings.max_daily_claude_cost):
+    if (spend["cost_units"] + max(0.0, cost_units)) > float(settings.max_daily_claude_cost) or spend["cost_units"] >= float(settings.max_daily_claude_cost):
         return False, "daily_cost_cap"
     return True, "ok"
 
@@ -137,7 +137,10 @@ def _reserve_spend(cost_units: float = 0.01) -> tuple[bool, str]:
     if not llm_enabled():
         return False, "llm_disabled_or_no_key"
     with _spend_lock:
-        ok, reason = can_spend()
+        try:
+            ok, reason = can_spend(cost_units)
+        except TypeError:
+            ok, reason = can_spend()
         if not ok:
             return False, reason
         _record_spend(cost_units)
@@ -334,9 +337,61 @@ def narrate(
         )
 
 
+import re as _re
+
+_NARRATION_COUNT = _re.compile(r"\bfound\s+(\d+)\b|\b(\d+)\s+similar\b", _re.I)
+_NARRATION_CITE = _re.compile(r"\b(?:rec|adv|cmp|ev)_[A-Za-z0-9]+\b")
+_NARRATION_PROMISE = _re.compile(
+    r"\b(?:guarantee|we will (?:replace|repair|fix|refund)|connecting you|"
+    r"full refund|free refund)\b",
+    _re.I,
+)
+_NARRATION_REMEDY = _re.compile(
+    r"\b(?:replace your|repair your|we will fix)\b",
+    _re.I,
+)
+_NARRATION_WEEKS = _re.compile(r"\b(\d+)\s+weeks?\b", _re.I)
+
+
+def narration_violations(text: str, facts: dict[str, Any] | None) -> list[str]:
+    """Claims in generated prose that the structured brief does not support.
+
+    An empty list means the text may be shown. Any hit means the caller must
+    show and store the deterministic sentence instead.
+    """
+    body = text or ""
+    contract = facts or {}
+    violations: list[str] = []
+    similar = contract.get("similar_count")
+    if similar is not None:
+        for match in _NARRATION_COUNT.finditer(body):
+            raw = match.group(1) or match.group(2)
+            if raw is not None and int(raw) != int(similar):
+                violations.append("count_mismatch")
+                break
+    allowed = {str(item) for item in (contract.get("evidence_ids") or [])}
+    for cite in _NARRATION_CITE.findall(body):
+        if cite not in allowed:
+            violations.append("unsupported_citation")
+            break
+    if _NARRATION_PROMISE.search(body) and not contract.get("promises"):
+        violations.append("unsupported_promise")
+    if _NARRATION_REMEDY.search(body) and not contract.get("remedies"):
+        violations.append("unsupported_remedy")
+    lead = contract.get("lead_time_weeks")
+    if "week" in body.lower():
+        claimed = [int(item) for item in _NARRATION_WEEKS.findall(body)]
+        if claimed and lead is None:
+            violations.append("lead_mismatch")
+        elif claimed and lead is not None and int(lead) not in claimed:
+            violations.append("lead_mismatch")
+    return violations
+
+
 __all__ = [
     "NarrationResult",
     "narrate",
+    "narration_violations",
     "llm_enabled",
     "llm_provider",
     "can_spend",

@@ -24,9 +24,36 @@ from typing import Any, Iterator
 from src.data.warehouse import ops_con as duckdb_ops_con
 
 
+# Every nonempty operations DSN is unsupported. DuckDB is selected only when
+# all of these are empty. The value is never logged: it can carry a password.
+_OPS_DSN_ENVS = ("FRONTLINE_OPS_DSN", "DATABASE_URL", "POSTGRES_DSN")
+
+
+def unsupported_ops_dsn() -> str | None:
+    """Env name of the first nonempty operations DSN, or None."""
+    for name in _OPS_DSN_ENVS:
+        if os.getenv(name, "").strip():
+            return name
+    return None
+
+
+def reject_unsupported_ops_dsn() -> None:
+    """Raise before any ops DuckDB file is opened.
+
+    Callers that would otherwise fall back to DuckDB must call this first.
+    """
+    name = unsupported_ops_dsn()
+    if not name:
+        return
+    raise RuntimeError(
+        f"{name} is configured, but PostgreSQL mode is unsupported in this release: "
+        "the dialect layer and schema migrations require DuckDB. "
+        f"Unset {name}."
+    )
+
+
 def ops_backend() -> str:
-    dsn = os.getenv("FRONTLINE_OPS_DSN", "").strip()
-    if dsn.startswith("postgres"):
+    if unsupported_ops_dsn():
         return "postgres"
     return "duckdb"
 
@@ -260,12 +287,7 @@ def alembic_ready() -> bool:
 @contextmanager
 def ops_connection(read_only: bool = False) -> Iterator[Any]:
     """Yield a DB connection for ops. Rejects PostgreSQL as unsupported in this release; yields DuckDB."""
-    if ops_backend() == "postgres":
-        raise RuntimeError(
-            "FRONTLINE_OPS_DSN is configured, but PostgreSQL mode is unsupported in this release: "
-            "the dialect layer and schema migrations require DuckDB. "
-            "Unset FRONTLINE_OPS_DSN."
-        )
+    reject_unsupported_ops_dsn()
     with duckdb_ops_con(read_only=read_only) as con:
         yield _Tagged(con, backend="duckdb")
 

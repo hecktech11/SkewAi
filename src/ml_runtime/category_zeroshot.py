@@ -127,6 +127,18 @@ class CategoryCentroids:
 _CENTROIDS_CACHE: dict[tuple[str, str], CategoryCentroids] = {}
 
 
+def _provider_version(embedder: Any) -> str | None:
+    """Real embedder identity. A missing attribute is not the string ``unknown``."""
+    for attr in ("canonical_version", "version", "model_key"):
+        raw = getattr(embedder, attr, None)
+        if not isinstance(raw, str):
+            continue
+        text = raw.strip()
+        if text and text.lower() != "unknown":
+            return text
+    return None
+
+
 def get_category_centroids(pack: Any, embedder: Any | None = None) -> CategoryCentroids:
     """Compute and cache category centroids for the active pack.
 
@@ -140,9 +152,9 @@ def get_category_centroids(pack: Any, embedder: Any | None = None) -> CategoryCe
     pack_id = getattr(pack, "id", "") or "default"
     if embedder is None:
         embedder = get_category_embedder()
-    canonical_version = getattr(embedder, "canonical_version", "unknown")
-    cache_key = (pack_id, canonical_version)
-    if cache_key in _CENTROIDS_CACHE:
+    canonical_version = _provider_version(embedder)
+    cache_key = (pack_id, canonical_version) if canonical_version else None
+    if cache_key and cache_key in _CENTROIDS_CACHE:
         return _CENTROIDS_CACHE[cache_key]
 
     gaz = pack.gazetteer_for_slot("category") if hasattr(pack, "gazetteer_for_slot") else None
@@ -197,18 +209,44 @@ def get_category_centroids(pack: Any, embedder: Any | None = None) -> CategoryCe
 
     cached = CategoryCentroids(
         pack_id=pack_id,
-        canonical_version=canonical_version,
+        canonical_version=canonical_version or "unversioned-provider",
         categories=categories,
         centroids=centroids,
         category_set=category_set,
     )
-    _CENTROIDS_CACHE[cache_key] = cached
+    if cache_key:
+        _CENTROIDS_CACHE[cache_key] = cached
     return cached
 
 
 def reset_category_centroids_cache() -> None:
     """Clear centroid cache (for testing)."""
     _CENTROIDS_CACHE.clear()
+
+
+def accepted_label_calibration(rows: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Precision of accepted labels against reviewed rows, and how many were accepted.
+
+    This does not train a model. A row is accepted when ``accepted`` is true.
+    Correctness is ``correct`` when present, otherwise ``gold == predicted``.
+    """
+    data = list(rows or [])
+    accepted = [row for row in data if row.get("accepted")]
+    if not data:
+        return {"precision": None, "coverage": 0.0, "accepted": 0, "n": 0}
+    correct = 0
+    for row in accepted:
+        if "correct" in row:
+            correct += int(bool(row.get("correct")))
+        elif row.get("gold") is not None:
+            correct += int(row.get("gold") == row.get("predicted"))
+    precision = (correct / len(accepted)) if accepted else None
+    return {
+        "precision": None if precision is None else round(precision, 4),
+        "coverage": round(len(accepted) / len(data), 4),
+        "accepted": len(accepted),
+        "n": len(data),
+    }
 
 
 # ── Scoring & Gate Evaluation ───────────────────────────────────────────────
@@ -230,6 +268,7 @@ class ZeroShotCategoryResult:
     latency_ms: float
     extraction_source: str
     all_scores: dict[str, float] = field(default_factory=dict)
+    unavailable: bool = False
 
 
 def predict_category_zero_shot(
@@ -270,6 +309,7 @@ def predict_category_zero_shot(
             is_member=False,
             latency_ms=0.0,
             extraction_source="none",
+            unavailable=False,
         )
 
     if embedder is None:
@@ -291,32 +331,24 @@ def predict_category_zero_shot(
                 is_member=False,
                 latency_ms=(time.monotonic() - t0) * 1000.0,
                 extraction_source="none",
+                unavailable=True,
             )
 
-    cc = get_category_centroids(pack, embedder)
-    if not cc.categories:
-        return ZeroShotCategoryResult(
-            category=None,
-            top1_category=None,
-            top1_score=0.0,
-            top2_category=None,
-            top2_score=0.0,
-            margin=0.0,
-            floor=conf_floor,
-            margin_gate=conf_margin,
-            passed_floor=False,
-            passed_margin=False,
-            is_member=False,
-            latency_ms=(time.monotonic() - t0) * 1000.0,
-            extraction_source="none",
-        )
+    elapsed = time.monotonic() - t0
+    timeout_s = max(0.001, (max_ms / 1000.0) - elapsed)
 
-    timeout_s = max(0.001, max_ms / 1000.0)
+    def _build_and_embed():
+        centroids_obj = get_category_centroids(pack, embedder)
+        if not centroids_obj.categories:
+            return centroids_obj, None
+        embedding_val = embedder.embed(clean)
+        return centroids_obj, embedding_val
+
     fut = None
     try:
-        fut = _EMBED_EXECUTOR.submit(embedder.embed, clean)
+        fut = _EMBED_EXECUTOR.submit(_build_and_embed)
         try:
-            emb = fut.result(timeout=timeout_s)
+            cc, emb = fut.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError:
             fut.cancel()
             step_down("slm_understanding", reason=f"latency_breach: embedding timed out after {max_ms:.1f}ms")
@@ -334,6 +366,24 @@ def predict_category_zero_shot(
                 is_member=False,
                 latency_ms=(time.monotonic() - t0) * 1000.0,
                 extraction_source="none",
+                unavailable=True,
+            )
+        if not cc.categories or emb is None:
+            return ZeroShotCategoryResult(
+                category=None,
+                top1_category=None,
+                top1_score=0.0,
+                top2_category=None,
+                top2_score=0.0,
+                margin=0.0,
+                floor=conf_floor,
+                margin_gate=conf_margin,
+                passed_floor=False,
+                passed_margin=False,
+                is_member=False,
+                latency_ms=(time.monotonic() - t0) * 1000.0,
+                extraction_source="none",
+                unavailable=False,
             )
         u_v = np.array(emb.values[:384], dtype=np.float32)
         norm = float(np.linalg.norm(u_v))
@@ -357,6 +407,7 @@ def predict_category_zero_shot(
             is_member=False,
             latency_ms=(time.monotonic() - t0) * 1000.0,
             extraction_source="none",
+            unavailable=True,
         )
 
     scores = {c: float(np.dot(u_v, cc.centroids[c])) for c in cc.categories}
@@ -497,7 +548,8 @@ def extract_category_with_mode(
     })
 
     agreement = (rules_cat == zs_res.category)
-    confident_wrong = bool(rules_cat and zs_res.category and rules_cat != zs_res.category)
+    # Disagreement with the rules label is not proof the model is wrong.
+    confident_wrong = False
 
     # Shadow telemetry logged in both shadow and live modes
     record_category_shadow_comparison(
@@ -519,6 +571,7 @@ def extract_category_with_mode(
     if mode == "live":
         # In live mode: zero-shot category flows through if gated, with honest source stamping.
         # Below either gate -> return None ("Unknown" is cheap; wrong is expensive).
+        # When model artifacts are unavailable, fall back to rules.
         if zs_res.category:
             if rules_cat and rules_cat == zs_res.category:
                 source = "rules+zeroshot"
@@ -526,6 +579,10 @@ def extract_category_with_mode(
                 source = "zeroshot"
             meta["source"] = source
             return zs_res.category, source, meta
+        elif getattr(zs_res, "unavailable", False) or zs_res.extraction_source in ("unavailable", "error"):
+            source = "rules" if rules_cat else "none"
+            meta["source"] = source
+            return rules_cat, source, meta
         else:
             meta["source"] = "none"
             return None, "none", meta

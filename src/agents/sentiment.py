@@ -26,24 +26,37 @@ from src.ledger import record_action
 # NOTE: intensifiers below are MULTIPLIERS ONLY (never standalone hits).
 
 _FRUSTRATION_LEXICON: dict[str, float] = {
-    # anger / frustration
-    "angry": 0.9, "furious": 1.0, "outraged": 1.0, "mad": 0.8,
+    # anger / frustration only. Legal intent and urgency are separate signals.
+    "angry": 0.9, "furious": 1.0, "outraged": 1.0, "outrageous": 1.0, "mad": 0.8,
     "frustrated": 0.85, "frustrating": 0.85, "annoyed": 0.7, "annoying": 0.7,
     "ridiculous": 0.8, "unacceptable": 0.85, "fed up": 0.9, "sick of": 0.9,
     "tired of": 0.7, "done with": 0.8, "enough": 0.6,
-    # disappointment / escalation intent
-    "lawyer": 0.95, "lawsuit": 0.95, "sue": 0.95, "attorney": 0.9,
     "news": 0.7, "media": 0.7, "twitter": 0.6, "facebook": 0.6,
-    "complaint": 0.7, "better business": 0.8, "bbb": 0.8,
-    "regulator": 0.85, "regulatory": 0.85, "fca": 0.85, "nhtsa": 0.85,
-    "cfpb": 0.85, "consumer affairs": 0.8,
-    # safety / urgency
-    "dangerous": 0.9, "unsafe": 0.9, "scared": 0.8, "terrified": 0.95,
-    "could have died": 1.0, "almost crashed": 0.95, "could have been killed": 1.0,
     # negation dampeners
     "not happy": 0.7, "not satisfied": 0.75, "not impressed": 0.7,
     # exclamation / caps handled separately
 }
+
+_LEGAL_LEXICON: dict[str, float] = {
+    "lawyer": 0.95, "lawsuit": 0.95, "sue": 0.95, "attorney": 0.9,
+    "complaint": 0.7, "better business": 0.8, "bbb": 0.8,
+    "regulator": 0.85, "regulatory": 0.85, "fca": 0.85, "nhtsa": 0.85,
+    "cfpb": 0.85, "consumer affairs": 0.8,
+}
+
+_URGENCY_LEXICON: dict[str, float] = {
+    "dangerous": 0.9, "unsafe": 0.9, "scared": 0.8, "terrified": 0.95,
+    "could have died": 1.0, "almost crashed": 0.95, "could have been killed": 1.0,
+}
+
+_HUMAN_REQUEST_PHRASES = (
+    "talk to a human",
+    "speak to a person",
+    "speak to a human",
+    "talk to a person",
+    "real person",
+    "live agent",
+)
 
 _INTENSIFIERS: dict[str, float] = {
     "really": 1.15, "very": 1.15, "extremely": 1.2, "absolutely": 1.2,
@@ -88,16 +101,15 @@ def score_text(text: str) -> float:
                 base = min(1.0, base * mult)
                 break
 
-    # ── Punctuation / caps ─────────────────────────────────────────────────
-    excl = text.count("!")
-    if excl >= 1:
-        base = min(1.0, base + _EXCLAM_CAPS_BUMP * min(excl, 3) / 3)
-
-    # ALL-CAPS words (length >= 4) suggest shouting
-    import re
-    caps_words = re.findall(r"\b[A-Z]{4,}\b", text)
-    if caps_words:
-        base = min(1.0, base + _ALLCAPS_BUMP * min(len(caps_words), 3) / 3)
+        # Punctuation / caps amplify an emotion hit. They are not anger by themselves,
+        # so "CFPB" or "lawyer" alone cannot cross the frustration threshold.
+        excl = text.count("!")
+        if excl >= 1:
+            base = min(1.0, base + _EXCLAM_CAPS_BUMP * min(excl, 3) / 3)
+        import re
+        caps_words = re.findall(r"\b[A-Z]{4,}\b", text)
+        if caps_words:
+            base = min(1.0, base + _ALLCAPS_BUMP * min(len(caps_words), 3) / 3)
 
     # ── Profanity proxy ──────────────────────────────────────────────────
     # Crude check: 2+ consecutive masking chars (@ or #) suggest redacted
@@ -109,6 +121,49 @@ def score_text(text: str) -> float:
         base = min(1.0, base + 0.1)
 
     return round(base, 3)
+
+
+def _max_lexicon(text: str, lexicon: dict[str, float]) -> float:
+    if not text or not text.strip():
+        return 0.0
+    import re
+
+    lower = text.lower()
+    best = 0.0
+    for term, weight in lexicon.items():
+        if re.search(rf"\b{re.escape(term)}\b", lower):
+            best = max(best, float(weight))
+    return round(min(1.0, best), 3)
+
+
+def _human_request_score(text: str) -> float:
+    """1 when the caller asks for a person. The bare word agent is not a request."""
+    if not text or not text.strip():
+        return 0.0
+    import re
+
+    lower = text.lower()
+    if any(phrase in lower for phrase in _HUMAN_REQUEST_PHRASES):
+        return 1.0
+    if re.search(r"\b(?:representative|supervisor)\b", lower):
+        return 1.0
+    return 0.0
+
+
+def score_signals(text: str) -> dict[str, float]:
+    """Separate emotion, urgency, legal intent, and a request for a human.
+
+    ``frustration`` stays the emotion score. Complaint, CFPB, and lawyer alone
+    are legal intent, not anger.
+    """
+    emotion = score_text(text)
+    return {
+        "emotion": emotion,
+        "urgency": _max_lexicon(text, _URGENCY_LEXICON),
+        "legal_intent": _max_lexicon(text, _LEGAL_LEXICON),
+        "human_request": _human_request_score(text),
+        "frustration": emotion,
+    }
 
 
 # ── Sentiment agent ────────────────────────────────────────────────────────

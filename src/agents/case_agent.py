@@ -59,6 +59,12 @@ class CaseAgent(Agent):
 
     async def run(self, **kwargs: Any) -> dict[str, Any]:
         ctx = self.ctx
+        from src.frontline.dsr import is_interaction_erased
+
+        if getattr(ctx, "_erased", False) or is_interaction_erased(ctx.interaction_id):
+            raise RuntimeError(
+                f"interaction {ctx.interaction_id} has been erased; case writes blocked"
+            )
 
         # Idempotent re-close (item 7): a preset case_id that already exists
         # must never allocate a second case — finalize/update the existing one.
@@ -175,6 +181,12 @@ class CaseAgent(Agent):
         ]
 
         def _insert_case() -> None:
+            from src.frontline.dsr import is_interaction_erased
+
+            if is_interaction_erased(ctx.interaction_id):
+                raise RuntimeError(
+                    f"interaction {ctx.interaction_id} has been erased; case writes blocked"
+                )
             with ops_con() as con:
                 con.execute("BEGIN TRANSACTION")
                 try:

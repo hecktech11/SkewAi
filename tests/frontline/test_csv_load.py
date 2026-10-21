@@ -111,16 +111,22 @@ def test_http_ingest_writes_rows_and_rejects_bad_files(tmp_path, reset_ops_db, m
     from src.jobs.queue import run_next
 
     monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
-    monkeypatch.delenv("FRONTLINE_AUTH_REQUIRED", raising=False)
-    monkeypatch.setenv("FRONTLINE_OPEN_MODE", "1")
+    monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+    monkeypatch.delenv("FRONTLINE_OPEN_MODE", raising=False)
     monkeypatch.setenv("FRONTLINE_ENABLED", "1")
     monkeypatch.setenv("BUILDER_UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setenv("SESSION_SECRET", "super-secret-key-for-test-32bytes")
     src = REPO_ROOT / FIXTURE
     dest = tmp_path / "complaints.csv"
     shutil.copyfile(src, dest)
+    from src.api.rbac import issue_session
+    admin_token = issue_session("admin_usr", "admin", issuer_role="admin")["token"]
+    headers = {"X-Frontline-Session": admin_token}
+
     with TestClient(app) as client:
         ok = client.post(
             "/api/frontline/pack-builder/ingest",
+            headers=headers,
             json={
                 "pack_id": "csv_http_proof",
                 "csv_path": str(dest),
@@ -138,18 +144,21 @@ def test_http_ingest_writes_rows_and_rejects_bad_files(tmp_path, reset_ops_db, m
         notes.write_text("not a csv\n", encoding="utf-8")
         rejected = client.post(
             "/api/frontline/pack-builder/ingest",
+            headers=headers,
             json={"pack_id": "csv_http_proof", "csv_path": str(notes), "mapping": MAPPING},
         )
         assert rejected.status_code == 400
         monkeypatch.setenv("FRONTLINE_CSV_MAX_BYTES", "32")
         oversized = client.post(
             "/api/frontline/pack-builder/ingest",
+            headers=headers,
             json={"pack_id": "csv_http_proof", "csv_path": str(dest), "mapping": MAPPING},
         )
         assert oversized.status_code == 400
         monkeypatch.setenv("FRONTLINE_CSV_MAX_BYTES", str(dest.stat().st_size + 10))
         queued = client.post(
             "/api/frontline/pack-builder/ingest",
+            headers=headers,
             json={
                 "pack_id": "csv_http_job",
                 "csv_path": str(dest),
@@ -192,6 +201,19 @@ def test_ingest_route_is_closed_without_ops_write(tmp_path, reset_ops_db, monkey
             json={"pack_id": "csv_http_proof", "csv_path": str(tmp_path / "x.csv")},
         )
         assert denied.status_code == 403
+
+    # Finding 4: In open mode, anonymous calls still receive 401 and agent credentials receive 403
+    monkeypatch.setenv("FRONTLINE_OPEN_MODE", "1")
+    monkeypatch.delenv("FRONTLINE_AUTH_REQUIRED", raising=False)
+    with TestClient(app) as client:
+        anon_open = client.post("/api/frontline/pack-builder/ingest", json={})
+        assert anon_open.status_code == 401
+        agent_open = client.post(
+            "/api/frontline/pack-builder/ingest",
+            headers={"X-API-Key": "csv-load-test-key"},
+            json={"pack_id": "csv_http_proof", "csv_path": str(tmp_path / "x.csv")},
+        )
+        assert agent_open.status_code == 403
 
 
 def test_csv_load_refuses_the_pilot_warehouse(monkeypatch):

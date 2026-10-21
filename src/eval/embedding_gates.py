@@ -79,3 +79,23 @@ def filter_acceptance_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         out.append(r)
     return out
+
+
+def semantic_promotion_allowed(
+    pack_id: str,
+    embedding_version: str,
+    *,
+    dataset_id: str | None = None,
+    thresholds: dict[str, Any] | None = None,
+    model_key: str | None = None,
+) -> bool:
+    """Same gate ``activate_cluster_build`` uses. Does not approve by itself."""
+    from src.ml_runtime.cluster_builds import retrieval_scorecard_approved
+
+    return retrieval_scorecard_approved(
+        pack_id,
+        embedding_version,
+        dataset_id=dataset_id,
+        thresholds=thresholds,
+        model_key=model_key,
+    )

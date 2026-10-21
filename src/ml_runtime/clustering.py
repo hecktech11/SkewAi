@@ -16,7 +16,15 @@ from typing import Any
 
 from src.data.warehouse import apply_domain_schema, domain_con
 from src.ids import new_ulid
-from src.ml_runtime.embeddings import cosine, embed_text, embedding_dim, fit_idf
+from src.ml_runtime.embeddings import (
+    cosine,
+    embed_text,
+    embedding_dim,
+    fit_idf,
+    read_vectors_identity,
+    transformation_identity,
+    write_vectors_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,17 +456,23 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
 
         records = []
         vectors = []
-        # Fit corpus IDF before embedding so frequent terms don't dominate
-        # (item 21). Deterministic for a fixed corpus.
+        # Read the previous transformation stamp before fit_idf rewrites the
+        # IDF file. Reuse a stored vector only when that stamp still matches
+        # the identity about to be fitted — dimension alone is not identity.
+        prior_identity = read_vectors_identity(pack_id)
         try:
             fit_idf([str(t or "") for _, t, _, _, _, _, _ in rows], pack_id=pack_id)
         except Exception:
             pass
+        space_identity = transformation_identity(pack_id)
+        reuse_vectors = bool(prior_identity) and prior_identity == space_identity
         current_dim = embedding_dim()
         for rid, text, cat, emb, rec_at, ent2, ent3 in rows:
-            if emb is None or len(list(emb)) != current_dim:
-                # Missing OR stale-dimension embedding (pre-512 migration):
-                # recompute from text rather than comparing across dims.
+            if (
+                not reuse_vectors
+                or emb is None
+                or len(list(emb)) != current_dim
+            ):
                 emb = embed_text(text or "", pack_id=pack_id)
                 try:
                     con.execute(
@@ -778,7 +792,11 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
                 if rem_rid in sample_rids:
                     # Already handled during initial sampling loop
                     continue
-                if rem_emb is None or len(list(rem_emb)) != current_dim:
+                if (
+                    not reuse_vectors
+                    or rem_emb is None
+                    or len(list(rem_emb)) != current_dim
+                ):
                     rem_emb = embed_text(rem_text or "", pack_id=pack_id)
                     try:
                         con.execute(
@@ -856,10 +874,12 @@ def rebuild_clusters(pack_id: str, *, k: int = 5) -> dict[str, Any]:
             warnings.warn(msg, DeprecationWarning, stacklevel=2)
             logger.warning(msg)
 
+        write_vectors_identity(pack_id, space_identity)
         result = {
             "pack_id": pack_id,
             "clusters": len(by_lab),
             "assignments": written,
+            "transformation_identity": space_identity,
             "k": kk,
             "k_selected": selected_k,
             "silhouette": round(sil_width, 4),

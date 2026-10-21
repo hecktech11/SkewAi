@@ -6,6 +6,7 @@ import pytest
 
 from src.ml_runtime.cluster_builds import (
     activate_cluster_build,
+    approve_retrieval_scorecard,
     list_cluster_builds,
     rebuild_cluster_build,
     rollback_cluster_build,
@@ -43,6 +44,16 @@ def test_rebuild_creates_separate_version(toy_ready):
         builds = con.execute("SELECT COUNT(*) FROM cluster_builds").fetchone()[0]
     assert new_n == old_n  # live hash clusters untouched
     assert builds >= 1
+    with pytest.raises(ValueError, match="approved retrieval scorecard"):
+        activate_cluster_build("automotive_nhtsa", built["build_id"])
+    approve_retrieval_scorecard(
+        "automotive_nhtsa",
+        embedding_version=toy_ready,
+        model_key="toy-semantic-v1",
+        dataset_id="pairs_v1",
+        thresholds={"recall_at_5": 0.0, "ndcg_at_5": 0.0},
+        scorecard={"approved": True, "recall_at_5": 1.0, "ndcg_at_5": 1.0},
+    )
     act = activate_cluster_build("automotive_nhtsa", built["build_id"])
     assert act["status"] == "active"
     rb = rollback_cluster_build("automotive_nhtsa", built["build_id"])

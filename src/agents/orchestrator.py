@@ -162,6 +162,8 @@ class Orchestrator:
         )
         self.hooks = hooks or OrchestratorHooks()
         self._pre_supervised_state: str | None = None
+        self._turn_outcomes: dict[str, dict[str, Any]] = {}
+        self.last_turn_outcome: dict[str, Any] | None = None
 
     # ── Public API ────────────────────────────────────────────────────────
     async def start(self, *, region: str | None = None, locale: str | None = None) -> str:
@@ -312,362 +314,580 @@ class Orchestrator:
             except Exception:
                 pass
             logger.debug("duplicate client turn dropped: %s", client_turn_id)
-            return
-
-        # SUPERVISED (item 6): suppress only customer-facing *generation*.
-        # Safety/scoring/ledger processing below still runs for every turn —
-        # an emergency ("I'M BLEEDING") or kill-switch during takeover must
-        # never be silently dropped. `supervised=True` threads through each
-        # stage to withhold emissions while recording everything.
-        supervised = self.ctx.state == SUPERVISED
-
-        # ── Security: validate input before any agent logic ────────────────
-        from src.security import validate_input
-        v = validate_input(text)
-        if not v.ok:
-            record_action(self._orchestrator_action(
-                "state_transition",
-                input_summary="customer input rejected by security"
-                + (" (supervised: generation suppressed)" if supervised else ""),
-                output_summary=f"reason: {v.reason}",
-            ))
-            if supervised:
-                return
-            # Politely decline and ask for a rephrase; never surface the reason.
-            decline = "I'm sorry, I didn't catch that clearly. Could you rephrase?"
-            record_action(self._orchestrator_action(
-                "goodbye_emitted",  # reuse a customer-turn action type
-                input_summary="security rejection; canned rephrase request",
-                output_summary=decline,
-            ))
-            turn = self.ctx.record_turn("agent", decline, llm_used=False)
-            await self.hooks._maybe(
-                self.hooks.emit_customer_turn,
-                decline,
-                {
-                    "speaker": "agent",
-                    "fast_path": True,
-                    "llm_used": False,
-                    "turn_id": turn.get("turn_id"),
-                    "utterance_id": turn.get("turn_id"),
-                },
-            )
-            return
-        text = v.text
-
-        # Record the customer turn only after it is durable. A failed insert
-        # releases the dedup slot so the same client id can be retried.
+            stored = self._turn_outcomes.get(str(client_turn_id))
+            self.last_turn_outcome = {
+                "turn_id": str(client_turn_id),
+                "status": "duplicate",
+                "duplicate": True,
+                "outcome": stored,
+            }
+            return self.last_turn_outcome
         try:
-            customer_turn = self.ctx.record_turn("customer", text)
-        except Exception:
-            if client_turn_id:
-                self._forget_client_turn(str(client_turn_id))
-            raise
-        await self.hooks._maybe(
-            getattr(self.hooks, "emit_heard_turn", None),
-            text,
-            {"speaker": "customer", "turn_id": customer_turn.get("turn_id")},
-        )
 
-        # Recognized emergencies preempt routine gates: voice consent, a
-        # spoken human request, an invalid-VIN re-ask, and the intake gates
-        # (low-ASR readback, case-status). Hedge and negation stay inside
-        # _check_kill_switch, so "no fire" and "fire drill" do not escalate.
-        from src.agents.intake import _check_kill_switch
+            # SUPERVISED (item 6): suppress only customer-facing *generation*.
+            # Safety/scoring/ledger processing below still runs for every turn —
+            # an emergency ("I'M BLEEDING") or kill-switch during takeover must
+            # never be silently dropped. `supervised=True` threads through each
+            # stage to withhold emissions while recording everything.
+            supervised = self.ctx.state == SUPERVISED
 
-        _kill = _check_kill_switch(text, self.ctx) if text else None
-        if _kill:
-            try:
-                _script = str(self.ctx.pack.manifest.safety.escalation_script or "")
-            except Exception:
-                _script = ""
-            self.ctx.safety_flags["escalation"] = True
-            self.ctx.safety_flags[_kill] = True
-            record_action(self._orchestrator_action(
-                "safety_flag_raised",
-                input_summary=f"customer utterance matched lexicon: '{_kill}'",
-                output_summary=f"safety_flag[{_kill}]=True; preempts routine gates",
-            ))
-            if supervised:
-                if _script:
-                    self.ctx.pending_safety_script = _script[:500]
-                await self._supervised_safety_hit(_kill, text)
-                return
-            await self._complete_safety_escalation(_kill, _script)
-            return
-
-        # ── P0: explicit voice-consent gate (two-party/biometric regions) ──
-        # Until consent is obtained, intake/slots/enrichment are blocked. The
-        # script is spoken once; an affirmative reply unlocks the contact.
-        if self.ctx.voice_consent_required and not self.ctx.voice_consent_obtained:
-            try:
-                from src.frontline.elicitation import looks_like_confirmation as _llc
-
-                if _llc(text) or text.strip().lower() in (
-                    "i consent", "i agree", "yes i consent", "consent",
-                ):
-                    self.ctx.voice_consent_obtained = True
-                    record_action(self._orchestrator_action(
-                        "voice_consent_obtained",
-                        input_summary=f"region={self.ctx.region} version={self.ctx.voice_consent_version}",
-                        output_summary="caller consented; contact unlocked",
-                    ))
-                    # Consent state is recorded while a human owns the call.
-                    # The acknowledgement is AI speech and must not resume intake.
-                    if self.ctx.state == SUPERVISED or self.ctx.supervised:
-                        return
-                    ack = "Thanks — recording your consent. Now, "
+            # ── Security: validate input before any agent logic ────────────────
+            from src.security import validate_input
+            v = validate_input(text)
+            if not v.ok:
+                # Finding 1: Recognize an emergency even in rejected input, while withholding
+                # rejected input from ordinary extraction and LLM processing.
+                from src.agents.intake import _check_kill_switch
+                _kill = _check_kill_switch(v.text or text, self.ctx) if (v.text or text) else None
+                if _kill:
                     try:
-                        ack += self.ctx.pack.manifest.slot_frame[0].prompt
+                        _script = str(self.ctx.pack.manifest.safety.escalation_script or "")
                     except Exception:
-                        ack += "what's going on with your vehicle?"
-                    await self._emit_spoken(
-                        ack,
-                        action_type="question_asked",
-                        input_summary="consent acknowledged; next slot",
-                    )
+                        _script = ""
+                    self.ctx.safety_flags["escalation"] = True
+                    self.ctx.safety_flags[_kill] = True
+                    record_action(self._orchestrator_action(
+                        "safety_flag_raised",
+                        input_summary=f"customer utterance matched lexicon: '{_kill}' (preempts security rejection)",
+                        output_summary=f"safety_flag[{_kill}]=True; preempts security rejection",
+                    ))
+                    if supervised:
+                        if _script:
+                            self.ctx.pending_safety_script = _script[:500]
+                        await self._supervised_safety_hit(_kill, v.text or text)
+                        return
+                    await self._complete_safety_escalation(_kill, _script)
                     return
-            except Exception:
-                pass
-            script = self.ctx.voice_consent_script or (
-                "This call may be recorded for quality and safety. "
-                "Say 'I consent' to continue, or type to use text instead."
-            )
-            record_action(self._orchestrator_action(
-                "voice_consent_required",
-                input_summary=f"region={self.ctx.region} gate blocks intake",
-                output_summary=script[:500],
-            ))
-            if not supervised:
-                turn = self.ctx.record_turn("agent", script, llm_used=False)
+
+                record_action(self._orchestrator_action(
+                    "state_transition",
+                    input_summary="customer input rejected by security"
+                    + (" (supervised: generation suppressed)" if supervised else ""),
+                    output_summary=f"reason: {v.reason}",
+                ))
+                self._stash_turn(client_turn_id, status="rejected", reason=v.reason)
+                if supervised:
+                    return
+                # Politely decline and ask for a rephrase; never surface the reason.
+                decline = "I'm sorry, I didn't catch that clearly. Could you rephrase?"
+                record_action(self._orchestrator_action(
+                    "goodbye_emitted",  # reuse a customer-turn action type
+                    input_summary="security rejection; canned rephrase request",
+                    output_summary=decline,
+                ))
+                turn = self.ctx.record_turn("agent", decline, llm_used=False)
                 await self.hooks._maybe(
                     self.hooks.emit_customer_turn,
-                    script,
+                    decline,
                     {
                         "speaker": "agent",
                         "fast_path": True,
                         "llm_used": False,
-                        "consent_required": True,
                         "turn_id": turn.get("turn_id"),
                         "utterance_id": turn.get("turn_id"),
                     },
                 )
+                return
+            text = v.text
+
+            # Record the customer turn only after it is durable. A failed insert
+            # releases the dedup slot so the same client id can be retried.
+            try:
+                customer_turn = self.ctx.record_turn("customer", text)
+            except Exception:
+                if client_turn_id:
+                    self._forget_client_turn(str(client_turn_id))
+                raise
+            self._stash_turn(client_turn_id, status="accepted", turn_id=str(client_turn_id or ""))
             await self.hooks._maybe(
-                getattr(self.hooks, "emit_consent_required", None),
-                {"region": self.ctx.region, "script": script,
-                 "version": self.ctx.voice_consent_version},
+                getattr(self.hooks, "emit_heard_turn", None),
+                text,
+                {"speaker": "customer", "turn_id": customer_turn.get("turn_id")},
             )
-            return
 
-        # A spoken request should have the same effect as the caller-facing
-        # button. Previously only a prior automated offer could create the
-        # handoff row, so "talk to a human" was treated as ordinary intake
-        # text and the caller was left without a real pickup request.
-        if not supervised and _caller_requested_human(text):
-            await self.accept_handoff(force=True, source="spoken_request")
-            return
+            from src.frontline.dsr import is_interaction_erased
+            if getattr(self, "_erased", False) or getattr(self.ctx, "_erased", False) or is_interaction_erased(self.ctx.interaction_id):
+                self._erased = True
+                self.ctx._erased = True
+                logger.info("Dropping customer turn after emit_heard_turn on erased interaction: %s", self.ctx.interaction_id)
+                return
 
-        # ── Drive-mode guard (automotive safety): spoken + ledgered once ────
-        try:
-            from src.voice.wiring import check_drive_mode, drive_safety_script
+            # Recognized emergencies preempt routine gates: voice consent, a
+            # spoken human request, an invalid-VIN re-ask, and the intake gates
+            # (low-ASR readback, case-status). Hedge and negation stay inside
+            # _check_kill_switch, so "no fire" and "fire drill" do not escalate.
+            from src.agents.intake import _check_kill_switch
 
-            _driving = bool(check_drive_mode(
-                text_hint=text, explicit_hint=bool(drive_hint) if drive_hint is not None else None,
-            ))
-            if _driving and not self.ctx.drive_mode_offered:
-                self.ctx.drive_mode = True
-                self.ctx.drive_mode_offered = True
-                _dscript = drive_safety_script()
+            _kill = _check_kill_switch(text, self.ctx) if text else None
+            if _kill:
+                try:
+                    _script = str(self.ctx.pack.manifest.safety.escalation_script or "")
+                except Exception:
+                    _script = ""
+                self.ctx.safety_flags["escalation"] = True
+                self.ctx.safety_flags[_kill] = True
                 record_action(self._orchestrator_action(
-                    "drive_mode_offered",
-                    input_summary="driving language or client drive_hint",
-                    output_summary=_dscript[:500],
+                    "safety_flag_raised",
+                    input_summary=f"customer utterance matched lexicon: '{_kill}'",
+                    output_summary=f"safety_flag[{_kill}]=True; preempts routine gates",
                 ))
-                await self.hooks._maybe(self.hooks.emit_activity, {
-                    "agent": "drive_mode_guard",
-                    "action_type": "drive_mode_detected",
-                    "summary": _dscript,
-                    "ok": True,
-                })
+                if supervised:
+                    if _script:
+                        self.ctx.pending_safety_script = _script[:500]
+                    await self._supervised_safety_hit(_kill, text)
+                    return
+                await self._complete_safety_escalation(_kill, _script)
+                return
+
+            # ── P0: explicit voice-consent gate (two-party/biometric regions) ──
+            # Until consent is obtained, intake/slots/enrichment are blocked. The
+            # script is spoken once; an affirmative reply unlocks the contact.
+            if self.ctx.voice_consent_required and not self.ctx.voice_consent_obtained:
+                try:
+                    from src.frontline.elicitation import looks_like_confirmation as _llc
+
+                    if _llc(text) or text.strip().lower() in (
+                        "i consent", "i agree", "yes i consent", "consent",
+                    ):
+                        self.ctx.voice_consent_obtained = True
+                        record_action(self._orchestrator_action(
+                            "voice_consent_obtained",
+                            input_summary=f"region={self.ctx.region} version={self.ctx.voice_consent_version}",
+                            output_summary="caller consented; contact unlocked",
+                        ))
+                        # Consent state is recorded while a human owns the call.
+                        # The acknowledgement is AI speech and must not resume intake.
+                        if self.ctx.state == SUPERVISED or self.ctx.supervised:
+                            return
+                        ack = "Thanks — recording your consent. Now, "
+                        try:
+                            ack += self.ctx.pack.manifest.slot_frame[0].prompt
+                        except Exception:
+                            ack += "what's going on with your vehicle?"
+                        await self._emit_spoken(
+                            ack,
+                            action_type="question_asked",
+                            input_summary="consent acknowledged; next slot",
+                        )
+                        return
+                except Exception:
+                    pass
+                script = self.ctx.voice_consent_script or (
+                    "This call may be recorded for quality and safety. "
+                    "Say 'I consent' to continue, or type to use text instead."
+                )
+                record_action(self._orchestrator_action(
+                    "voice_consent_required",
+                    input_summary=f"region={self.ctx.region} gate blocks intake",
+                    output_summary=script[:500],
+                ))
                 if not supervised:
-                    turn = self.ctx.record_turn("agent", _dscript, llm_used=False)
+                    turn = self.ctx.record_turn("agent", script, llm_used=False)
                     await self.hooks._maybe(
                         self.hooks.emit_customer_turn,
-                        _dscript,
+                        script,
                         {
                             "speaker": "agent",
                             "fast_path": True,
                             "llm_used": False,
-                            "drive_mode": True,
+                            "consent_required": True,
                             "turn_id": turn.get("turn_id"),
                             "utterance_id": turn.get("turn_id"),
                         },
                     )
-                # Do not return: driving callers still get intake, but prompts
-                # downstream stay short and the callback offer is queued.
-        except Exception:
-            pass
-
-        # ── Spoken VIN / plate capture (phonetic + ISO-3779) ───────────────
-        # Only packs that declare vehicle identity run this. A finance account
-        # number is a 17-digit string and must stay on the finance intake path.
-        try:
-            from src.voice.wiring import detect_vin_in_text
-
-            if not _pack_captures_vin(self.ctx.pack):
-                _vin = {}
-            else:
-                _vin = detect_vin_in_text(text)
-            if _vin.get("vin") and _vin.get("valid") and not self.ctx.slots.get("vin"):
-                self.ctx.slots["vin"] = str(_vin["vin"])
-                self.ctx.vin = str(_vin["vin"])
-                record_action(self._orchestrator_action(
-                    "slot_extracted",
-                    input_summary=f"spoken VIN normalized: '{text[:120]}'",
-                    output_summary=f"vin={_vin['vin']} iso3779=valid",
-                ))
-                await self.hooks._maybe(self.hooks.emit_activity, {
-                    "agent": "intake",
-                    "action_type": "vin_captured",
-                    "summary": f"VIN {_vin['vin']} captured and check-digit verified.",
-                    "ok": True,
-                })
                 await self.hooks._maybe(
-                    self.hooks.emit_slots_update, dict(self.ctx.slots))
-            elif _vin.get("vin") and not _vin.get("valid"):
-                record_action(self._orchestrator_action(
-                    "slot_extracted",
-                    input_summary=f"spoken VIN failed check digit: {_vin.get('vin')}",
-                    output_summary=_vin.get("prompt", "")[:500],
-                ))
-                if not supervised:
-                    vin_prompt = str(_vin.get("prompt") or "Please read the VIN again slowly.")
-                    turn = self.ctx.record_turn("agent", vin_prompt, llm_used=False)
-                    await self.hooks._maybe(
-                        self.hooks.emit_customer_turn,
-                        vin_prompt,
-                        {
-                            "speaker": "agent",
-                            "fast_path": True,
-                            "llm_used": False,
-                            "vin_retry": True,
-                            "turn_id": turn.get("turn_id"),
-                            "utterance_id": turn.get("turn_id"),
-                        },
+                    getattr(self.hooks, "emit_consent_required", None),
+                    {"region": self.ctx.region, "script": script,
+                     "version": self.ctx.voice_consent_version},
+                )
+                return
+
+            # A spoken request should have the same effect as the caller-facing
+            # button. Previously only a prior automated offer could create the
+            # handoff row, so "talk to a human" was treated as ordinary intake
+            # text and the caller was left without a real pickup request.
+            if not supervised and _caller_requested_human(text):
+                self.ctx.slots["__handoff_status__"] = "requested"
+                queued = await self.accept_handoff(force=True, source="spoken_request")
+                self.ctx.slots["__handoff_status__"] = (
+                    "queued" if queued.get("accepted") else "failed"
+                )
+                if not queued.get("accepted"):
+                    await self._emit_spoken(
+                        "I couldn't queue a specialist just now. I can keep helping here.",
+                        action_type="question_asked",
                     )
                 return
-        except Exception:
-            pass
 
-        # Spoken confirmation of a prior diagnostic read-back.
-        # Any answer (yes/no or free text) to a pending diagnostic question is
-        # ledgered as customer-confirmed evidence and attached for audit.
-        pending_q = (self.ctx.slots or {}).get("__diag_qid")
-        if pending_q:
-            from src.frontline.elicitation import (
-                looks_like_confirmation,
-                record_spoken_confirmation,
-            )
+            # ── Drive-mode guard (automotive safety): spoken + ledgered once ────
+            try:
+                from src.voice.wiring import check_drive_mode, drive_safety_script
 
-            # Bare confirmations ("yes", "correct") close the question; longer
-            # agreements ("Yes, only on cold mornings") carry evidence and
-            # take the free-text path so the content is preserved.
-            if looks_like_confirmation(text) and len(text.strip()) <= 24:
-                record_spoken_confirmation(
-                    self.ctx.interaction_id,
-                    text,
-                    confirmed=True,
-                    question_id=pending_q,
+                _driving = bool(check_drive_mode(
+                    text_hint=text, explicit_hint=bool(drive_hint) if drive_hint is not None else None,
+                ))
+                if _driving and not self.ctx.drive_mode_offered:
+                    self.ctx.drive_mode = True
+                    self.ctx.drive_mode_offered = True
+                    _dscript = drive_safety_script()
+                    record_action(self._orchestrator_action(
+                        "drive_mode_offered",
+                        input_summary="driving language or client drive_hint",
+                        output_summary=_dscript[:500],
+                    ))
+                    await self.hooks._maybe(self.hooks.emit_activity, {
+                        "agent": "drive_mode_guard",
+                        "action_type": "drive_mode_detected",
+                        "summary": _dscript,
+                        "ok": True,
+                    })
+                    if not supervised:
+                        turn = self.ctx.record_turn("agent", _dscript, llm_used=False)
+                        await self.hooks._maybe(
+                            self.hooks.emit_customer_turn,
+                            _dscript,
+                            {
+                                "speaker": "agent",
+                                "fast_path": True,
+                                "llm_used": False,
+                                "drive_mode": True,
+                                "turn_id": turn.get("turn_id"),
+                                "utterance_id": turn.get("turn_id"),
+                            },
+                        )
+                    # Do not return: driving callers still get intake, but prompts
+                    # downstream stay short and the callback offer is queued.
+            except Exception:
+                pass
+
+            # ── Spoken VIN / plate capture (phonetic + ISO-3779) ───────────────
+            # Only packs that declare vehicle identity run this. A finance account
+            # number is a 17-digit string and must stay on the finance intake path.
+            try:
+                from src.voice.wiring import detect_vin_in_text
+
+                if not _pack_captures_vin(self.ctx.pack):
+                    _vin = {}
+                else:
+                    _vin = detect_vin_in_text(text)
+                if _vin.get("vin") and _vin.get("valid") and not self.ctx.slots.get("vin"):
+                    self.ctx.slots["vin"] = str(_vin["vin"])
+                    self.ctx.vin = str(_vin["vin"])
+                    record_action(self._orchestrator_action(
+                        "slot_extracted",
+                        input_summary=f"spoken VIN normalized: '{text[:120]}'",
+                        output_summary=f"vin={_vin['vin']} iso3779=valid",
+                    ))
+                    await self.hooks._maybe(self.hooks.emit_activity, {
+                        "agent": "intake",
+                        "action_type": "vin_captured",
+                        "summary": f"VIN {_vin['vin']} captured and check-digit verified.",
+                        "ok": True,
+                    })
+                    await self.hooks._maybe(
+                        self.hooks.emit_slots_update, dict(self.ctx.slots))
+                elif _vin.get("vin") and not _vin.get("valid"):
+                    record_action(self._orchestrator_action(
+                        "slot_extracted",
+                        input_summary=f"spoken VIN failed check digit: {_vin.get('vin')}",
+                        output_summary=_vin.get("prompt", "")[:500],
+                    ))
+                    if not supervised:
+                        vin_prompt = str(_vin.get("prompt") or "Please read the VIN again slowly.")
+                        turn = self.ctx.record_turn("agent", vin_prompt, llm_used=False)
+                        await self.hooks._maybe(
+                            self.hooks.emit_customer_turn,
+                            vin_prompt,
+                            {
+                                "speaker": "agent",
+                                "fast_path": True,
+                                "llm_used": False,
+                                "vin_retry": True,
+                                "turn_id": turn.get("turn_id"),
+                                "utterance_id": turn.get("turn_id"),
+                            },
+                        )
+                    return
+            except Exception:
+                pass
+
+            # Spoken confirmation of a prior diagnostic read-back.
+            # Any answer (yes/no or free text) to a pending diagnostic question is
+            # ledgered as customer-confirmed evidence and attached for audit.
+            pending_q = (self.ctx.slots or {}).get("__diag_qid")
+            if pending_q:
+                from src.frontline.elicitation import (
+                    looks_like_confirmation,
+                    record_elicitation_answer,
+                    record_spoken_confirmation,
                 )
-                self.ctx.slots.pop("__diag_qid", None)
-            elif text and text.strip():
-                # Free-text diagnostic answer: confirmed evidence with content
-                record_spoken_confirmation(
-                    self.ctx.interaction_id,
-                    text,
-                    confirmed=True,
-                    question_id=pending_q,
-                )
-                # Persist answer provenance (item 35) — slots alone are
-                # volatile; diagnostic_answers survives for brief/hypotheses.
-                try:
-                    from src.frontline.elicitation import record_elicitation_answer
 
-                    record_elicitation_answer(
+                # Every answer, including a short "yes", is stored with the prompt
+                # so polarity and symptom constraints survive the turn.
+                diag_prompt = str((self.ctx.slots or {}).get("__diag_prompt") or "")
+                short_yes = bool(looks_like_confirmation(text) and len(text.strip()) <= 24)
+                if text and text.strip():
+                    record_spoken_confirmation(
                         self.ctx.interaction_id,
-                        str(pending_q),
-                        text.strip(),
-                        prompt="",
+                        text,
                         confirmed=True,
+                        question_id=pending_q,
+                    )
+                    try:
+                        record_elicitation_answer(
+                            self.ctx.interaction_id,
+                            str(pending_q),
+                            text.strip(),
+                            prompt=diag_prompt,
+                            confirmed=True,
+                            source_turn=text.strip(),
+                        )
+                    except Exception:
+                        pass
+                    self.ctx.severity = None
+                    self.ctx.slots["__downstream_stale__"] = "1"
+                if short_yes:
+                    try:
+                        diag_answers = self.ctx.slots.get("__diag_answers") or {}
+                        if not isinstance(diag_answers, dict):
+                            diag_answers = {}
+                        diag_answers[str(pending_q)] = text.strip()[:1000]
+                        self.ctx.slots["__diag_answers"] = diag_answers
+                    except Exception:
+                        pass
+                    self.ctx.slots.pop("__diag_qid", None)
+                    self.ctx.slots.pop("__diag_prompt", None)
+                elif text and text.strip():
+                    # Surface the Q&A on the console activity feed (UI card).
+                    # Customer text is escaped: custom renderers don't auto-escape
+                    # (board: stored XSS); ledger/turns keep verbatim evidence.
+                    try:
+                        from src.security.input_validation import escape_untrusted
+
+                        await self.hooks._maybe(self.hooks.emit_activity, {
+                            "agent": "intake",
+                            "action_type": "diagnostic_answered",
+                            "summary": f"Q {pending_q}: {escape_untrusted(text.strip()[:200])}",
+                            "ok": True,
+                        })
+                    except Exception:
+                        pass
+                    # Keep the answer on the context for the investigation brief
+                    try:
+                        diag_answers = self.ctx.slots.get("__diag_answers") or {}
+                        if not isinstance(diag_answers, dict):
+                            diag_answers = {}
+                        diag_answers[str(pending_q)] = text.strip()[:1000]
+                        self.ctx.slots["__diag_answers"] = diag_answers
+                    except Exception:
+                        pass
+                    self.ctx.slots.pop("__diag_qid", None)
+                    self.ctx.slots.pop("__diag_prompt", None)
+                    # Re-run semantics (board #4): answers arriving AFTER
+                    # enrichment silently refresh the investigator brief (version
+                    # bump, ledgered by the agent itself) instead of leaving a
+                    # stale brief on the close path. Sentinel/Triage are NOT
+                    # re-run — severity/advisory were already decided.
+                    if self.ctx.enrichment_done and self.ctx.investigation_brief:
+                        try:
+                            refreshed = await InvestigatorAgent(self.ctx).run()
+                            if isinstance(refreshed, dict) and refreshed.get("brief"):
+                                prev = self.ctx.investigation_brief.get("brief_version", 1)
+                                self.ctx.investigation_brief["brief_version"] = int(prev) + 1
+                        except Exception:
+                            pass
+
+            # ── Sentiment (always runs; cheap, deterministic) ───────────────
+            sentiment = SentimentAgent(self.ctx)
+            sres = await sentiment.run(customer_turn=text)
+            # Fan-out live frustration for the supervisor console (H6).
+            await self.hooks._maybe(
+                getattr(self.hooks, "emit_frustration_update", None),
+                float(self.ctx.frustration_score or 0.0),
+            )
+            if sres.get("threshold_crossed") and not self.ctx.handoff_offered:
+                self.ctx.handoff_offered = True
+                offer = sres["handoff_offer"]
+                # Audit-first: ledger the handoff offer BEFORE emitting it.
+                record_action(self._orchestrator_action(
+                    "handoff_offer_emitted",
+                    input_summary="frustration threshold crossed; empathy + human offer"
+                    + (" (supervised: console only)" if supervised else ""),
+                    output_summary=offer,
+                ))
+                if supervised:
+                    # Supervisor already owns the conversation: surface on the
+                    # console activity feed instead of generating a customer turn.
+                    await self.hooks._maybe(self.hooks.emit_activity, {
+                        "agent": "sentiment",
+                        "action_type": "frustration_flagged",
+                        "summary": offer,
+                        "ok": True,
+                    })
+                else:
+                    turn = self.ctx.record_turn("agent", offer, llm_used=False)
+                    await self.hooks._maybe(
+                        self.hooks.emit_customer_turn,
+                        offer,
+                        {
+                            "speaker": "agent",
+                            "fast_path": True,
+                            "llm_used": False,
+                            "turn_id": turn.get("turn_id"),
+                            "utterance_id": turn.get("turn_id"),
+                        },
+                    )
+                await self.hooks._maybe(self.hooks.emit_handoff_offer)
+
+            # ── Intake ────────────────────────────────────────────────────────
+            # 2.3: budget_remaining logged every turn for audit of elicitation conflicts
+            try:
+                _ccount = self.ctx.count_turn()
+                from src.config import settings as _s
+                record_action(self._orchestrator_action(
+                    "state_transition",
+                    input_summary=f"turn budget: used={_ccount}/{_s.max_turns}",
+                    output_summary=f"budget_remaining={max(0, _s.max_turns - _ccount)}",
+                ))
+            except Exception:
+                pass
+            # 6.4: per-agent flags (intake kill → safe close, not crash)
+            try:
+                from src.ops.pilot import agent_enabled as _ae
+                if not _ae("intake"):
+                    record_action(self._orchestrator_action(
+                        "state_transition",
+                        input_summary="intake disabled by flag",
+                        output_summary="skip to closing",
+                    ))
+                    await self._move_to_closing()
+                    return
+            except Exception:
+                pass
+            intake = IntakeAgent(self.ctx)
+            ires = await intake.run(customer_turn=text,
+                                    asr_confidence=asr_confidence, dtmf=dtmf)
+            if self._stop_if_erased():
+                return
+            # [AI-LAYER] Optional Muse Spark pass AFTER deterministic intake: fills
+            # only still-empty slots, normalises Hindi/Hinglish, may only ADD a
+            # kill-switch hit (pack lexicon on the translation). No key -> returns
+            # ires unchanged with no I/O.
+            try:
+                from src.ai_layer.intake_enhancer import maybe_enhance_intake
+
+                ires = await maybe_enhance_intake(self.ctx, text, ires)
+            except Exception:
+                pass
+            # 2.1/6.3: turn latency observe vs 1200ms SLO
+            try:
+                import time as _t2
+                from src.observability.metrics import observe as _obs2
+                _obs2("turn_latency_ms", (_t2.perf_counter() - _turn_start) * 1000.0)
+            except Exception:
+                pass
+
+            # Supervised safety path (item 6): kill-switch/escalation language is
+            # fully processed — severity, ledger, sentinel, alert, console
+            # surfacing — while staying in SUPERVISED (the supervisor, already in
+            # control, decides what the customer hears).
+            if supervised and ires.get("kill_switch"):
+                # Keep the escalation script: if the supervisor releases with
+                # safety pending, release() emits it (audit 3.3) instead of
+                # dropping the escalation.
+                if ires.get("question"):
+                    self.ctx.pending_safety_script = str(ires["question"])[:500]
+                await self._supervised_safety_hit(ires["kill_switch"], text)
+                return
+
+            # Kill-switch → SAFETY_ESCALATION (intake path, when no earlier gate ran)
+            if ires.get("kill_switch"):
+                await self._complete_safety_escalation(
+                    str(ires["kill_switch"]), str(ires.get("question") or ""),
+                )
+                return
+
+            # Normal supervised input (item 6): the turn was validated, scored,
+            # and slot-processed above; record that safety processing ran and
+            # return WITHOUT generating a customer-facing turn.
+            if supervised:
+                record_action(self._orchestrator_action(
+                    "supervised_turn_observed",
+                    input_summary=f"customer turn safety-processed during takeover",
+                    output_summary=(
+                        f"frustration={self.ctx.frustration_score} "
+                        f"peak={self.ctx.peak_frustration} "
+                        f"kill_switch={bool(ires.get('kill_switch'))}; "
+                        "generation suppressed"
+                    ),
+                ))
+                return
+
+            # Max customer turns: force wrap-up (case + goodbye), not silent empty questions.
+            # count_turn() is the single budget counter: confirmation, readback, and
+            # elicitation replies count; supervisor turns do not.
+            over_budget = self.ctx.count_turn() >= settings.max_turns
+            if ires.get("max_turns_reached") or (over_budget and not self.ctx.has_required_slots()):
+                await self._force_budget_wrap()
+                return
+            if over_budget and self.ctx.has_required_slots():
+                # Slots filled at the cap: skip extra confirmation/elicitation loops.
+                await self._enter_enriching()
+                return
+
+            # Confidence-gated escalate → same handoff surface as frustration (not text-only).
+            if ires.get("escalate_low_confidence"):
+                if ires.get("handoff_requested"):
+                    self.ctx.handoff_offered = True
+                    self.ctx.slots["__handoff_status__"] = "requested"
+                    queued = await self.accept_handoff(
+                        force=True,
+                        source=str(ires.get("low_confidence_slot") or "dtmf_menu"),
+                    )
+                    if queued.get("accepted"):
+                        self.ctx.slots["__handoff_status__"] = "queued"
+                    else:
+                        self.ctx.slots["__handoff_status__"] = "failed"
+                        await self._emit_spoken(
+                            "I couldn't queue a specialist just now. I can keep helping here.",
+                            action_type="question_asked",
+                            input_summary="handoff request was not queued",
+                        )
+                    await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
+                    return
+                if not self.ctx.handoff_offered:
+                    self.ctx.handoff_offered = True
+                self.ctx.slots["__handoff_status__"] = "offered"
+                offer = ires.get("question") or (
+                    "I'm having trouble capturing that clearly. "
+                    "I can request a specialist if you want one."
+                )
+                if "connect" in offer.lower() and "not connected" not in offer.lower():
+                    offer = (
+                        "I'm having trouble capturing that clearly. "
+                        "I can request a specialist if you want one."
+                    )
+                record_action(self._orchestrator_action(
+                    "handoff_offer_emitted",
+                    input_summary=(
+                        f"low confidence on slot "
+                        f"{ires.get('low_confidence_slot') or 'unknown'}"
+                    ),
+                    output_summary=offer[:500],
+                ))
+                try:
+                    from src.frontline.validation_queue import enqueue_insight
+
+                    enqueue_insight(
+                        kind="low_confidence",
+                        interaction_id=self.ctx.interaction_id,
+                        summary=(
+                            f"low confidence on slot "
+                            f"{ires.get('low_confidence_slot') or 'unknown'}"
+                        ),
                     )
                 except Exception:
                     pass
-                # Surface the Q&A on the console activity feed (UI card).
-                # Customer text is escaped: custom renderers don't auto-escape
-                # (board: stored XSS); ledger/turns keep verbatim evidence.
-                try:
-                    from src.security.input_validation import escape_untrusted
-
-                    await self.hooks._maybe(self.hooks.emit_activity, {
-                        "agent": "intake",
-                        "action_type": "diagnostic_answered",
-                        "summary": f"Q {pending_q}: {escape_untrusted(text.strip()[:200])}",
-                        "ok": True,
-                    })
-                except Exception:
-                    pass
-                # Keep the answer on the context for the investigation brief
-                try:
-                    diag_answers = self.ctx.slots.get("__diag_answers") or {}
-                    if not isinstance(diag_answers, dict):
-                        diag_answers = {}
-                    diag_answers[str(pending_q)] = text.strip()[:1000]
-                    self.ctx.slots["__diag_answers"] = diag_answers
-                except Exception:
-                    pass
-                self.ctx.slots.pop("__diag_qid", None)
-                # Re-run semantics (board #4): answers arriving AFTER
-                # enrichment silently refresh the investigator brief (version
-                # bump, ledgered by the agent itself) instead of leaving a
-                # stale brief on the close path. Sentinel/Triage are NOT
-                # re-run — severity/advisory were already decided.
-                if self.ctx.enrichment_done and self.ctx.investigation_brief:
-                    try:
-                        refreshed = await InvestigatorAgent(self.ctx).run()
-                        if isinstance(refreshed, dict) and refreshed.get("brief"):
-                            prev = self.ctx.investigation_brief.get("brief_version", 1)
-                            self.ctx.investigation_brief["brief_version"] = int(prev) + 1
-                    except Exception:
-                        pass
-
-        # ── Sentiment (always runs; cheap, deterministic) ───────────────
-        sentiment = SentimentAgent(self.ctx)
-        sres = await sentiment.run(customer_turn=text)
-        # Fan-out live frustration for the supervisor console (H6).
-        await self.hooks._maybe(
-            getattr(self.hooks, "emit_frustration_update", None),
-            float(self.ctx.frustration_score or 0.0),
-        )
-        if sres.get("threshold_crossed") and not self.ctx.handoff_offered:
-            self.ctx.handoff_offered = True
-            offer = sres["handoff_offer"]
-            # Audit-first: ledger the handoff offer BEFORE emitting it.
-            record_action(self._orchestrator_action(
-                "handoff_offer_emitted",
-                input_summary="frustration threshold crossed; empathy + human offer"
-                + (" (supervised: console only)" if supervised else ""),
-                output_summary=offer,
-            ))
-            if supervised:
-                # Supervisor already owns the conversation: surface on the
-                # console activity feed instead of generating a customer turn.
-                await self.hooks._maybe(self.hooks.emit_activity, {
-                    "agent": "sentiment",
-                    "action_type": "frustration_flagged",
-                    "summary": offer,
-                    "ok": True,
-                })
-            else:
                 turn = self.ctx.record_turn("agent", offer, llm_used=False)
                 await self.hooks._maybe(
                     self.hooks.emit_customer_turn,
@@ -676,234 +896,115 @@ class Orchestrator:
                         "speaker": "agent",
                         "fast_path": True,
                         "llm_used": False,
+                        "escalate_low_confidence": True,
                         "turn_id": turn.get("turn_id"),
                         "utterance_id": turn.get("turn_id"),
                     },
                 )
-            await self.hooks._maybe(self.hooks.emit_handoff_offer)
-
-        # ── Intake ────────────────────────────────────────────────────────
-        # 2.3: budget_remaining logged every turn for audit of elicitation conflicts
-        try:
-            _ccount = self.ctx.count_turn()
-            from src.config import settings as _s
-            record_action(self._orchestrator_action(
-                "state_transition",
-                input_summary=f"turn budget: used={_ccount}/{_s.max_turns}",
-                output_summary=f"budget_remaining={max(0, _s.max_turns - _ccount)}",
-            ))
-        except Exception:
-            pass
-        # 6.4: per-agent flags (intake kill → safe close, not crash)
-        try:
-            from src.ops.pilot import agent_enabled as _ae
-            if not _ae("intake"):
-                record_action(self._orchestrator_action(
-                    "state_transition",
-                    input_summary="intake disabled by flag",
-                    output_summary="skip to closing",
-                ))
-                await self._move_to_closing()
+                await self.hooks._maybe(self.hooks.emit_handoff_offer)
+                await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
                 return
-        except Exception:
-            pass
-        intake = IntakeAgent(self.ctx)
-        ires = await intake.run(customer_turn=text,
-                                asr_confidence=asr_confidence, dtmf=dtmf)
-        # 2.1/6.3: turn latency observe vs 1200ms SLO
-        try:
-            import time as _t2
-            from src.observability.metrics import observe as _obs2
-            _obs2("turn_latency_ms", (_t2.perf_counter() - _turn_start) * 1000.0)
-        except Exception:
-            pass
 
-        # Supervised safety path (item 6): kill-switch/escalation language is
-        # fully processed — severity, ledger, sentinel, alert, console
-        # surfacing — while staying in SUPERVISED (the supervisor, already in
-        # control, decides what the customer hears).
-        if supervised and ires.get("kill_switch"):
-            # Keep the escalation script: if the supervisor releases with
-            # safety pending, release() emits it (audit 3.3) instead of
-            # dropping the escalation.
-            if ires.get("question"):
-                self.ctx.pending_safety_script = str(ires["question"])[:500]
-            await self._supervised_safety_hit(ires["kill_switch"], text)
-            return
-
-        # Kill-switch → SAFETY_ESCALATION (intake path, when no earlier gate ran)
-        if ires.get("kill_switch"):
-            await self._complete_safety_escalation(
-                str(ires["kill_switch"]), str(ires.get("question") or ""),
+            # Emit the next question (or empty if all slots filled)
+            question = ires.get("question", "")
+            safety_pending = bool(
+                ires.get("safety_question")
+                or (self.ctx.slots or {}).get("__safety_pending__")
+                or ires.get("kill_switch")
             )
-            return
+            if (
+                self.ctx.has_required_slots()
+                and not self.ctx.slots.get("__diag_asked")
+                and not safety_pending
+            ):
+                from src.frontline.elicitation import next_question
+                from src.ledger import record_action as _ra
 
-        # Normal supervised input (item 6): the turn was validated, scored,
-        # and slot-processed above; record that safety processing ran and
-        # return WITHOUT generating a customer-facing turn.
-        if supervised:
-            record_action(self._orchestrator_action(
-                "supervised_turn_observed",
-                input_summary=f"customer turn safety-processed during takeover",
-                output_summary=(
-                    f"frustration={self.ctx.frustration_score} "
-                    f"peak={self.ctx.peak_frustration} "
-                    f"kill_switch={bool(ires.get('kill_switch'))}; "
-                    "generation suppressed"
-                ),
-            ))
-            return
-
-        # Max customer turns: force wrap-up (case + goodbye), not silent empty questions.
-        # count_turn() is the single budget counter: confirmation, readback, and
-        # elicitation replies count; supervisor turns do not.
-        over_budget = self.ctx.count_turn() >= settings.max_turns
-        if ires.get("max_turns_reached") or (over_budget and not self.ctx.has_required_slots()):
-            await self._force_budget_wrap()
-            return
-        if over_budget and self.ctx.has_required_slots():
-            # Slots filled at the cap: skip extra confirmation/elicitation loops.
-            await self._enter_enriching()
-            return
-
-        # Confidence-gated escalate → same handoff surface as frustration (not text-only).
-        if ires.get("escalate_low_confidence"):
-            if not self.ctx.handoff_offered:
-                self.ctx.handoff_offered = True
-            offer = ires.get("question") or (
-                "I'm having trouble capturing that clearly. "
-                "Let me connect you with a specialist who can help."
-            )
-            record_action(self._orchestrator_action(
-                "handoff_offer_emitted",
-                input_summary=(
-                    f"low confidence on slot "
-                    f"{ires.get('low_confidence_slot') or 'unknown'}"
-                ),
-                output_summary=offer[:500],
-            ))
-            try:
-                from src.frontline.validation_queue import enqueue_insight
-
-                enqueue_insight(
-                    kind="low_confidence",
+                hyps = self.ctx.slots.get("__hypotheses__")
+                if not isinstance(hyps, list):
+                    hyps = None
+                dq = next_question(
+                    self.ctx.pack.id, self.ctx.slots,
                     interaction_id=self.ctx.interaction_id,
-                    summary=(
-                        f"low confidence on slot "
-                        f"{ires.get('low_confidence_slot') or 'unknown'}"
-                    ),
+                    hypotheses=hyps,
+                )
+                if dq:
+                    question = dq["prompt"]
+                    self.ctx.slots["__diag_qid"] = dq["question_id"]
+                    self.ctx.slots["__diag_prompt"] = dq["prompt"]
+                    self.ctx.slots["__diag_asked"] = "1"
+                    _ra(
+                        self._orchestrator_action(
+                            "diagnostic_asked",
+                            input_summary=dq["question_id"],
+                            output_summary=question[:500],
+                        )
+                    )
+            if question:
+                turn = self.ctx.record_turn("agent", question, llm_used=False)
+                await self.hooks._maybe(
+                    self.hooks.emit_customer_turn,
+                    question,
+                    {
+                        "speaker": "agent",
+                        "fast_path": True,
+                        "llm_used": False,
+                        "turn_id": turn.get("turn_id"),
+                        "utterance_id": turn.get("turn_id"),
+                    },
+                )
+                await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
+
+            # If slots complete AND no question is pending (safety or slot) → ENRICHING.
+            # A pending question means the agent is still collecting (e.g. a safety
+            # question was just asked and we must wait for the customer's answer
+            # before transitioning). This preserves the one-question-per-turn policy.
+            #
+            # Tier-A confirmation_flow: full-frame readback on voice channels before
+            # enrichment (wired, not just tested). Bounded: one prompt + one repair.
+            if (
+                not question
+                and self.ctx.has_required_slots()
+                and self.ctx.state == COLLECTING
+                and not supervised
+                and self.ctx.channel in ("web_voice", "voice", "telephony", "twilio_media")
+            ):
+                if await self._confirm_frame_gate(text):
+                    return
+            # Slot confirmation gate (board #4): a mis-heard entity compounds
+            # through cluster pick → case → corpus. One readback turn with a
+            # bounded single correction round precedes enrichment.
+            if (
+                not question
+                and self.ctx.has_required_slots()
+                and self.ctx.state == COLLECTING
+                and not supervised
+            ):
+                if await self._confirm_slots_gate(text):
+                    return
+            if (
+                not question
+                and self.ctx.has_required_slots()
+                and self.ctx.state == COLLECTING
+            ):
+                await self._enter_enriching()
+            # Live latency HUD: every turn reports elapsed vs budget (non-blocking).
+            try:
+                import time as _t3
+                from src.voice.wiring import live_turn_budget_verdict
+
+                _elapsed = (_t3.perf_counter() - _turn_start) * 1000.0
+                self.ctx.last_turn_latency_ms = float(_elapsed)
+                await self.hooks._maybe(
+                    getattr(self.hooks, "emit_turn_latency", None),
+                    {"elapsed_ms": round(float(_elapsed), 1),
+                     **live_turn_budget_verdict(float(_elapsed))},
                 )
             except Exception:
                 pass
-            turn = self.ctx.record_turn("agent", offer, llm_used=False)
-            await self.hooks._maybe(
-                self.hooks.emit_customer_turn,
-                offer,
-                {
-                    "speaker": "agent",
-                    "fast_path": True,
-                    "llm_used": False,
-                    "escalate_low_confidence": True,
-                    "turn_id": turn.get("turn_id"),
-                    "utterance_id": turn.get("turn_id"),
-                },
-            )
-            await self.hooks._maybe(self.hooks.emit_handoff_offer)
-            await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
-            return
 
-        # Emit the next question (or empty if all slots filled)
-        question = ires.get("question", "")
-        safety_pending = bool(
-            ires.get("safety_question")
-            or (self.ctx.slots or {}).get("__safety_pending__")
-            or ires.get("kill_switch")
-        )
-        if (
-            self.ctx.has_required_slots()
-            and not self.ctx.slots.get("__diag_asked")
-            and not safety_pending
-        ):
-            from src.frontline.elicitation import next_question
-            from src.ledger import record_action as _ra
-
-            dq = next_question(
-                self.ctx.pack.id, self.ctx.slots,
-                interaction_id=self.ctx.interaction_id,
-            )
-            if dq:
-                question = dq["prompt"]
-                self.ctx.slots["__diag_qid"] = dq["question_id"]
-                self.ctx.slots["__diag_asked"] = "1"
-                _ra(
-                    self._orchestrator_action(
-                        "diagnostic_asked",
-                        input_summary=dq["question_id"],
-                        output_summary=question[:500],
-                    )
-                )
-        if question:
-            turn = self.ctx.record_turn("agent", question, llm_used=False)
-            await self.hooks._maybe(
-                self.hooks.emit_customer_turn,
-                question,
-                {
-                    "speaker": "agent",
-                    "fast_path": True,
-                    "llm_used": False,
-                    "turn_id": turn.get("turn_id"),
-                    "utterance_id": turn.get("turn_id"),
-                },
-            )
-            await self.hooks._maybe(self.hooks.emit_slots_update, dict(self.ctx.slots))
-
-        # If slots complete AND no question is pending (safety or slot) → ENRICHING.
-        # A pending question means the agent is still collecting (e.g. a safety
-        # question was just asked and we must wait for the customer's answer
-        # before transitioning). This preserves the one-question-per-turn policy.
-        #
-        # Tier-A confirmation_flow: full-frame readback on voice channels before
-        # enrichment (wired, not just tested). Bounded: one prompt + one repair.
-        if (
-            not question
-            and self.ctx.has_required_slots()
-            and self.ctx.state == COLLECTING
-            and not supervised
-            and self.ctx.channel in ("web_voice", "voice", "telephony", "twilio_media")
-        ):
-            if await self._confirm_frame_gate(text):
-                return
-        # Slot confirmation gate (board #4): a mis-heard entity compounds
-        # through cluster pick → case → corpus. One readback turn with a
-        # bounded single correction round precedes enrichment.
-        if (
-            not question
-            and self.ctx.has_required_slots()
-            and self.ctx.state == COLLECTING
-            and not supervised
-        ):
-            if await self._confirm_slots_gate(text):
-                return
-        if (
-            not question
-            and self.ctx.has_required_slots()
-            and self.ctx.state == COLLECTING
-        ):
-            await self._enter_enriching()
-        # Live latency HUD: every turn reports elapsed vs budget (non-blocking).
-        try:
-            import time as _t3
-            from src.voice.wiring import live_turn_budget_verdict
-
-            _elapsed = (_t3.perf_counter() - _turn_start) * 1000.0
-            self.ctx.last_turn_latency_ms = float(_elapsed)
-            await self.hooks._maybe(
-                getattr(self.hooks, "emit_turn_latency", None),
-                {"elapsed_ms": round(float(_elapsed), 1),
-                 **live_turn_budget_verdict(float(_elapsed))},
-            )
-        except Exception:
-            pass
+        finally:
+            self._finish_turn(client_turn_id)
 
     def note_emitted_utterance(
         self,
@@ -1045,19 +1146,52 @@ class Orchestrator:
             ))
             if outcome in ("confirmed", "unknown", "declined_to_provide"):
                 self.ctx.confirmation_phase = "done"
+                self.ctx.slots["__confirmed__"] = "1"
+                try:
+                    IntakeAgent(self.ctx).mark_slots_confirmed()
+                except Exception:
+                    pass
                 return False
             if outcome == "safety_preempted":
                 self.ctx.confirmation_phase = "done"
                 return False
             if outcome == "human_requested":
-                self.ctx.confirmation_phase = "done"
-                try:
-                    await self.hooks._maybe(self.hooks.emit_handoff_offer)
-                except Exception:
-                    pass
-                return False
-            # corrected / rejected: speak the repair once, then proceed.
-            self.ctx.confirmation_phase = "done"
+                self.ctx.slots["__handoff_status__"] = "requested"
+                queued = await self.accept_handoff(force=True, source="confirmation")
+                if queued.get("accepted"):
+                    self.ctx.slots["__handoff_status__"] = "queued"
+                    self.ctx.confirmation_phase = "done"
+                else:
+                    self.ctx.slots["__handoff_status__"] = "failed"
+                    await self._emit_spoken(
+                        "I couldn't queue a specialist just now. I can keep helping here.",
+                        action_type="question_asked",
+                        input_summary="confirmation human request was not queued",
+                    )
+                return True
+            # Apply the correction. An unresolved rejection stays unconfirmed.
+            changed: dict[str, Any] = {}
+            try:
+                changed = IntakeAgent(self.ctx).reextract_overwrite(text) or {}
+            except Exception:
+                changed = {}
+            if outcome == "rejected" and not changed:
+                if reply:
+                    try:
+                        turn = self.ctx.record_turn("agent", reply, llm_used=False)
+                        await self.hooks._maybe(
+                            self.hooks.emit_customer_turn, reply,
+                            {
+                                "speaker": "agent",
+                                "fast_path": True,
+                                "llm_used": False,
+                                "turn_id": turn.get("turn_id"),
+                                "utterance_id": turn.get("turn_id"),
+                            },
+                        )
+                    except Exception:
+                        pass
+                return True
             if reply and not res.get("ok"):
                 try:
                     turn = self.ctx.record_turn("agent", reply, llm_used=False)
@@ -1125,6 +1259,10 @@ class Orchestrator:
             if looks_like_confirmation(text):
                 slots.pop("__confirm_pending__", None)
                 slots["__confirmed__"] = "1"
+                try:
+                    IntakeAgent(self.ctx).mark_slots_confirmed()
+                except Exception:
+                    pass
                 record_action(self._orchestrator_action(
                     "slot_extracted",
                     input_summary="slot confirmation accepted",
@@ -1162,9 +1300,33 @@ class Orchestrator:
                     },
                 )
                 return True
-            # No change extracted, or second round: proceed (bounded, no loops).
+            if self._unresolved_rejection(text, changed or {}):
+                summary = self._confirmation_summary()
+                record_action(self._orchestrator_action(
+                    "question_asked",
+                    input_summary="slot confirmation rejected without a replacement",
+                    output_summary=summary,
+                ))
+                turn = self.ctx.record_turn("agent", summary, llm_used=False)
+                await self.hooks._maybe(
+                    self.hooks.emit_customer_turn,
+                    summary,
+                    {
+                        "speaker": "agent",
+                        "fast_path": True,
+                        "llm_used": False,
+                        "turn_id": turn.get("turn_id"),
+                        "utterance_id": turn.get("turn_id"),
+                    },
+                )
+                return True
+            # Unclear non-rejection, or a second correction round: proceed.
             slots.pop("__confirm_pending__", None)
             slots["__confirmed__"] = "1"
+            try:
+                IntakeAgent(self.ctx).mark_slots_confirmed()
+            except Exception:
+                pass
             return False
         summary = self._confirmation_summary()
         slots["__confirm_pending__"] = "1"
@@ -1224,7 +1386,7 @@ class Orchestrator:
             except Exception:
                 pass
         if must_close:
-            if not self.ctx.case_id:
+            if not self.ctx.case_id and not self._stop_if_erased():
                 record_action(self._orchestrator_action(
                     "state_transition",
                     input_summary="hangup with safety/enrichment evidence",
@@ -1259,6 +1421,7 @@ class Orchestrator:
             output_summary="supervisor now controls the conversation",
         ))
         if was_handoff:
+            self.ctx.slots["__handoff_status__"] = "connected"
             # Supervisor claimed the queued handoff: close the queue row so
             # the SLA sweep never fires for a served customer.
             try:
@@ -1455,6 +1618,65 @@ class Orchestrator:
         )
         return {"ok": True, "message_id": mid, "action_id": action_id, "duplicate": False}
 
+    def _stash_turn(self, client_turn_id: str | None, **fields: Any) -> None:
+        tid = str(client_turn_id or "").strip()
+        if not tid:
+            return
+        row = dict(self._turn_outcomes.get(tid) or {"turn_id": tid})
+        row.update(fields)
+        self._turn_outcomes[tid] = row
+        self.last_turn_outcome = dict(row)
+
+    def _finish_turn(self, client_turn_id: str | None) -> None:
+        tid = str(client_turn_id or "").strip()
+        if not tid:
+            return
+        cur = self._turn_outcomes.get(tid)
+        if not cur:
+            return
+        if cur.get("status") == "accepted":
+            cur = dict(cur)
+            cur["status"] = "completed"
+            self._turn_outcomes[tid] = cur
+        self.last_turn_outcome = dict(self._turn_outcomes[tid])
+
+    def _unresolved_rejection(self, text: str, changed: dict[str, Any]) -> bool:
+        if changed:
+            return False
+        from src.frontline.elicitation import looks_like_confirmation
+
+        if looks_like_confirmation(text or ""):
+            return False
+        return bool(re.search(
+            r"\b(?:no|nope|wrong|incorrect|isn't right|isnt right|not right|"
+            r"that's wrong|thats wrong)\b",
+            text or "",
+            re.I,
+        ))
+
+    def note_playback(self, msg: dict[str, Any] | None) -> dict[str, Any]:
+        """Record what the caller actually heard, separate from generated text."""
+        payload = msg or {}
+        status = str(payload.get("status") or payload.get("event") or "").strip()
+        allowed = {"queued", "started", "completed", "failed", "interrupted"}
+        if status not in allowed:
+            return dict((self.ctx.slots or {}).get("__playback__") or {})
+        prior = (self.ctx.slots or {}).get("__playback__") or {}
+        if not isinstance(prior, dict):
+            prior = {}
+        text = payload.get("text")
+        if text is None:
+            text = prior.get("text") or ""
+        row = {
+            "status": status,
+            "text": str(text)[:2000],
+            "utterance_id": str(payload.get("utterance_id") or prior.get("utterance_id") or ""),
+        }
+        self.ctx.slots["__playback__"] = row
+        if status == "interrupted":
+            self.ctx.playing_utterance_id = None
+        return row
+
     def _forget_client_turn(self, client_turn_id: str) -> None:
         """Drop a dedup row when the turn was not durably accepted."""
         tid = (client_turn_id or "").strip()
@@ -1565,6 +1787,7 @@ class Orchestrator:
         self._pre_supervised_state = self.ctx.state
         self._transition(self.ctx.state, HANDOFF_PENDING)
         self._record_state(HANDOFF_PENDING)
+        self.ctx.slots["__handoff_status__"] = "queued"
         record_action(self._orchestrator_action(
             "handoff_accepted",
             input_summary="customer accepted human handoff",
@@ -1632,6 +1855,7 @@ class Orchestrator:
                 "UPDATE handoff_requests SET status = 'unfulfilled' WHERE handoff_id = ?",
                 [hid],
             )
+        self.ctx.slots["__handoff_status__"] = "timed_out"
         resume = prior or COLLECTING
         try:
             self._transition(HANDOFF_PENDING, resume)
@@ -1933,18 +2157,64 @@ class Orchestrator:
                         )
                     except Exception:
                         pass
-                return {
+                failed = {
                     "skipped": True,
                     "reason": f"{agent} failed: {type(value).__name__}",
                     "error": f"{type(value).__name__}: {value}"[:500],
                 }
+                if agent == "investigator":
+                    failed["outcome"] = "timed_out" if isinstance(value, TimeoutError) else "failed"
+                return failed
             if isinstance(value, dict):
+                if agent == "investigator":
+                    outcome = str(value.get("outcome") or "")
+                    skipped = bool(value.get("skipped")) or (bool(outcome) and outcome != "completed")
+                    if skipped:
+                        reason = str(value.get("reason") or "").lower()
+                        if not outcome:
+                            if "disabled" in reason:
+                                outcome = "not_applicable"
+                            elif "warehouse" in reason or "not found" in reason:
+                                outcome = "unavailable"
+                            elif "timeout" in reason or "timed_out" in reason:
+                                outcome = "timed_out"
+                            else:
+                                outcome = "failed"
+                        value = dict(value)
+                        value["skipped"] = True
+                        value["outcome"] = outcome
+                        if outcome != "not_applicable":
+                            self.ctx.enrichment_partial = True
+                            self.ctx.enrichment_degraded = True
+                            if outcome in ("unavailable", "failed", "timed_out"):
+                                try:
+                                    from src.jobs.queue import enqueue
+
+                                    enqueue(
+                                        "reenrich",
+                                        {
+                                            "interaction_id": self.ctx.interaction_id,
+                                            "case_id": self.ctx.case_id,
+                                            "reason": outcome,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
+                        return value
                 return value
             return {"skipped": True, "reason": f"{agent} returned no result"}
 
         sres = _settle("sentinel", "advisory_check", raw[0])
         tres = _settle("triage", "severity_scored", raw[1])
         ires = _settle("investigator", "brief_written", raw[2])
+        # [AI-LAYER] Optional AI severity: final = max(rule, AI); may only raise.
+        # No key -> tres unchanged. Qubot severity sanity still runs later.
+        try:
+            from src.ai_layer.severity import maybe_raise_severity
+
+            tres = await maybe_raise_severity(self.ctx, tres)
+        except Exception:
+            pass
 
         if sres.get("advisory_match"):
             notice = sres["notice"]
@@ -2036,6 +2306,8 @@ class Orchestrator:
 
     # ── Closing ───────────────────────────────────────────────────────────
     async def _move_to_closing(self, *, force: bool = False) -> None:
+        if self._stop_if_erased():
+            return
         if self.ctx.state == CLOSING or self.ctx.state == DONE:
             return
         if self.ctx.state == ABANDONED:
@@ -2181,11 +2453,30 @@ class Orchestrator:
         if to_state not in allowed and from_state != to_state:
             raise ValueError(f"Illegal transition: {from_state} → {to_state}")
         self.ctx.state = to_state
+        if self._stop_if_erased():
+            return
         record_action(self._orchestrator_action(
             "state_transition",
             input_summary=f"from={from_state}",
             output_summary=f"to={to_state}",
         ))
+
+    def _stop_if_erased(self) -> bool:
+        """True once erasure has started. Callers must not write after this."""
+        if getattr(self, "_erased", False) or getattr(self.ctx, "_erased", False):
+            self._erased = True
+            self.ctx._erased = True
+            return True
+        try:
+            from src.frontline.dsr import is_interaction_erased
+
+            if is_interaction_erased(self.ctx.interaction_id):
+                self._erased = True
+                self.ctx._erased = True
+                return True
+        except Exception:
+            return False
+        return False
 
     def _record_state(self, state: str) -> None:
         # Persist the latest state + slot values + frustration on the interaction row.

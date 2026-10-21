@@ -104,7 +104,7 @@ class SlotConfirmationProtocol:
         if bool(tokens & human_words) and not bool(tokens & {"yes", "correct"}):
             self.last_outcome = ConfirmationOutcome.HUMAN_REQUESTED
             self.phase = DialoguePhase.ENRICHMENT_READY
-            return False, "Connecting you with a technical representative right now."
+            return False, "I can request a person. You are not connected yet."
 
         # 3. Unknown / declined slot (e.g. unknown VIN)
         unknown_phrases = ["do not know", "dont know", "no idea", "not sure", "decline", "not have"]

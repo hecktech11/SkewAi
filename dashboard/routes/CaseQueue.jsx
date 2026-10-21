@@ -9,6 +9,8 @@ import {
   statusLabel,
 } from "../src/ui/labels.js";
 import { useDebounced, useFocusTrap, useLocalStorage } from "../src/ui/hooks.js";
+// [AI-LAYER] photo evidence panel (optional Meta AI layer; upload works without a key)
+import EvidencePanel from "../src/ai/EvidencePanel.jsx";
 
 const SEV = ["All", "Critical", "Medium", "Low"];
 const STATUS = ["All", "open", "pending_followup", "closed"];
@@ -598,6 +600,9 @@ export default function CaseQueue() {
                 >
                   Save follow-up
                 </button>
+
+                {/* [AI-LAYER] photo evidence for this case */}
+                <EvidencePanel caseId={detail.case_id || selectedId} />
 
                 <div className="h-divider" />
                 <h2 style={panelHeading} id="operator-notes-heading">Operator notes</h2>

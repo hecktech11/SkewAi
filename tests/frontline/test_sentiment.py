@@ -34,8 +34,16 @@ def test_score_text_high_on_outraged():
 
 
 def test_score_text_high_on_lawyer():
-    s = score_text("I'm calling my lawyer about this.")
-    assert s >= 0.85
+    from src.agents.sentiment import score_signals
+
+    text = "I'm calling my lawyer about this."
+    signals = score_signals(text)
+    assert score_text(text) < 0.65
+    assert signals["emotion"] < 0.65
+    assert signals["frustration"] == signals["emotion"]
+    assert signals["legal_intent"] >= 0.85
+    assert signals["urgency"] < 0.65
+    assert signals["human_request"] == 0.0
 
 
 def test_score_text_low_on_neutral():

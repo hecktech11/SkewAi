@@ -189,37 +189,104 @@ def _is_positive_row(row: dict[str, Any]) -> bool:
     return _row_polarity(row) == 1
 
 
+def _ndcg_at_k(ranked: list[tuple[float, int]], k: int) -> float | None:
+    import math
+
+    labels = [y for _, y in ranked]
+    if not labels or not any(labels):
+        return None
+
+    def _dcg(vals: list[int]) -> float:
+        return sum(y / math.log2(i + 2) for i, y in enumerate(vals[:k]))
+
+    idcg = _dcg(sorted(labels, reverse=True))
+    if idcg <= 0:
+        return None
+    return round(_dcg(labels) / idcg, 4)
+
+
 def per_class_scorecard(embedder: Any, pairs: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Rank each query's own mixed candidates, then average those queries.
+
+    A class-wide sort is not retrieval quality: one query's high score must
+    not bury another query's relevant hit.
+    """
     from collections import defaultdict
 
-    by: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    by_query: dict[str, dict[str, list[tuple[float, int, str]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for row in pairs:
         cls = str(row.get("eval_class") or "unspecified")
-        a = embedder.embed(str(row.get("query") or ""))
-        b = embedder.embed(str(row.get("candidate") or ""))
-        score = compare_embeddings(a, b)
         y = _row_polarity(row)
         if y is None:
             continue
-        by[cls].append((score, y))
+        a = embedder.embed(str(row.get("query") or ""))
+        b = embedder.embed(str(row.get("candidate") or ""))
+        score = compare_embeddings(a, b)
+        query = str(row.get("query") or "")
+        label = str(row.get("label") or "")
+        by_query[cls][query].append((score, y, label))
     out: dict[str, Any] = {}
-    for cls, scored in sorted(by.items()):
-        ranked = sorted(scored, key=lambda x: x[0], reverse=True)
-        pos = sum(y for _, y in scored)
-        rec5 = _recall_at_k(ranked, 5)
-        rec10 = _recall_at_k(ranked, 10)
-        prec5 = _precision_at_k(ranked, 5)
-        ap = _average_precision(scored)
-        pos_scores = [s for s, y in scored if y == 1]
+    for cls, queries in sorted(by_query.items()):
+        all_scored: list[tuple[float, int]] = []
+        query_recalls: list[float] = []
+        query_recalls_10: list[float] = []
+        query_precs: list[float] = []
+        query_ndcgs: list[float] = []
+        query_aps: list[float] = []
+        hard_hits = 0
+        hard_n = 0
+        for _query, rows in queries.items():
+            ranked_full = sorted(rows, key=lambda item: item[0], reverse=True)
+            ranked = [(score, y) for score, y, _label in ranked_full]
+            all_scored.extend(ranked)
+            rec5 = _recall_at_k(ranked, 5)
+            rec10 = _recall_at_k(ranked, 10)
+            prec5 = _precision_at_k(ranked, 5)
+            if rec5 is not None:
+                query_recalls.append(rec5)
+            if rec10 is not None:
+                query_recalls_10.append(rec10)
+            if prec5 is not None:
+                query_precs.append(prec5)
+            ndcg = _ndcg_at_k(ranked, 5)
+            if ndcg is not None:
+                query_ndcgs.append(ndcg)
+            ap = _average_precision(ranked)
+            if ap is not None:
+                query_aps.append(ap)
+            positives = [score for score, y, _label in ranked_full if y == 1]
+            best_pos = max(positives) if positives else None
+            for score, _y, label in ranked_full:
+                if "hard" not in label.lower():
+                    continue
+                hard_n += 1
+                if best_pos is not None and score < best_pos:
+                    hard_hits += 1
+
+        def _avg(vals: list[float]) -> float | None:
+            if not vals:
+                return None
+            return round(sum(vals) / len(vals), 4)
+
+        pos_scores = [score for score, y in all_scored if y == 1]
         lo, hi = bootstrap_mean_ci(pos_scores)
+        qlo, qhi = bootstrap_mean_ci(query_recalls)
+        ndcg = _avg(query_ndcgs)
         out[cls] = {
-            "n": len(scored),
-            "positives": pos,
-            "recall_at_5": rec5,
-            "recall_at_10": rec10,
-            "precision_at_5": prec5,
-            "average_precision": None if ap is None else round(ap, 4),
+            "n": len(all_scored),
+            "positives": sum(y for _, y in all_scored),
+            "recall_at_5": _avg(query_recalls),
+            "recall_at_10": _avg(query_recalls_10),
+            "precision_at_5": _avg(query_precs),
+            "average_precision": _avg(query_aps),
             "positive_mean_ci95": [lo, hi],
+            "ndcg": ndcg,
+            "ndcg_at_5": ndcg,
+            "hard_negative_performance": None if hard_n == 0 else round(hard_hits / hard_n, 4),
+            "query_recall_ci95": [qlo, qhi],
+            "query_level": True,
         }
     return out
 
