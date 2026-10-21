@@ -1,0 +1,83 @@
+{
+  "config_id": "z2.0_q0.05_abs3_rel0.5",
+  "records_received_by_period_end": 150768,
+  "advisories": 1861,
+  "as_of_dates": 294,
+  "precision": {
+    "flagged_slice_weeks": 1699,
+    "confirmed_slice_weeks": 1077,
+    "false_alarm_slice_weeks": 622,
+    "precision_slice_weeks": 0.634,
+    "flag_episodes": 1098,
+    "confirmed_episodes": 657,
+    "precision_episodes": 0.598,
+    "unconfirmed_slice_weeks": 622
+  },
+  "first_flag": {
+    "recalls_scored": 1861,
+    "hits": 1642,
+    "misses": 219,
+    "recall_rate": 0.882,
+    "lead_weeks_median": 274.0,
+    "lead_weeks_mean": 266.8,
+    "lead_weeks_p25": 168.75,
+    "lead_weeks_p75": 355.0,
+    "campaign_level": {
+      "campaigns": 477,
+      "hits": 421,
+      "misses": 56,
+      "recall_rate": 0.883,
+      "lead_weeks_median": 282,
+      "lead_weeks_mean": 274.0
+    },
+    "preventable_window_totals_dedup": {
+      "complaints": 99192,
+      "crash": 4635,
+      "fire": 1728,
+      "injury_complaints": 2982,
+      "injured_persons_reported": 4251,
+      "death_complaints": 59,
+      "deaths_reported": 112,
+      "crash_fire_or_injury": 6916
+    }
+  },
+  "actionable_52w": {
+    "window_weeks": 52,
+    "recalls_scored": 1861,
+    "hits": 1142,
+    "misses": 719,
+    "recall_rate": 0.614,
+    "lead_weeks_median": 8.0,
+    "lead_weeks_mean": 15.4,
+    "lead_weeks_p25": 3.0,
+    "lead_weeks_p75": 25.0,
+    "campaign_level": {
+      "campaigns": 477,
+      "hits": 299,
+      "misses": 178,
+      "recall_rate": 0.627,
+      "lead_weeks_median": 8,
+      "lead_weeks_mean": 14.7
+    },
+    "preventable_window_totals_dedup": {
+      "complaints": 23662,
+      "crash": 682,
+      "fire": 374,
+      "injury_complaints": 452,
+      "injured_persons_reported": 632,
+      "death_complaints": 16,
+      "deaths_reported": 25,
+      "crash_fire_or_injury": 1160
+    }
+  },
+  "preventable_window_source": "computed from FLAT_CMPL.zip",
+  "regate_mismatches_vs_scorer": 0,
+  "regate_rows_checked": 205337,
+  "config_sha256": "520ec7b0fdb6c18b5fe388102100334bd969e6308ff33b86ebfed0c556159e23",
+  "test_window": [
+    "2021-01-01",
+    "2024-12-31"
+  ],
+  "elapsed_s": 1130,
+  "note": "single evaluation of the frozen config; no thresholds were changed after this run"
+}

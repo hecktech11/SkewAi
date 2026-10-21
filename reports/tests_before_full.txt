@@ -1,0 +1,2072 @@
+# worktree /workspace/skewai-before-v2 head 945f5b8; cmd: pytest -q -p no:cacheprovider --timeout 120 -rfE --deselect tests/frontline/test_cluster_builds.py::test_rebuild_clusters_assigns_records_beyond_5000
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+......................F.F..F............................................ [ 17%]
+.............................................FF...FF.................... [ 21%]
+........................................................................ [ 25%]
+...F.........s.......................................................... [ 30%]
+........................................................................ [ 34%]
+.......................................................FFFFF.FFFFFF....F [ 38%]
+F............................................F.......................... [ 43%]
+...............F..F..........................F.........F................ [ 47%]
+........................................................................ [ 51%]
+.....................................................F.................. [ 56%]
+.................................................................F...... [ 60%]
+...................................FFF.................................. [ 64%]
+.................F..F...F............................................... [ 69%]
+............................................................................. [ 73%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+..................................F....F...F...FF.................FFF.FF [ 86%]
+.....F.................................................................. [ 91%]
+....................................F................................... [ 95%]
+........................................................................ [ 99%]
+......                                                                   [100%]
+=================================== FAILURES ===================================
+___________________ test_ingest_warranty_and_service_sources ___________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_warranty_and_servi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feaacfb87a0>
+
+    def test_ingest_warranty_and_service_sources(tmp_path, monkeypatch):
+        from src.config import REPO_ROOT
+        from src.data.warehouse import domain_con
+        from src.domains.source_ingest import ingest_source, namespace_id
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        auto_data = REPO_ROOT / "domains" / "automotive_nhtsa" / "data"
+        assert namespace_id("warranty", "100001") == "WARRANTY-100001"
+        assert namespace_id("warranty", "WARRANTY-100001") == "WARRANTY-100001"
+    
+        wcsv = _write_csv(tmp_path, "warranty.csv", WARRANTY_CSV)
+>       rep = ingest_source(
+            "axion_src_pack", "warranty", wcsv,
+            mapping_path=auto_data / "mapping.warranty.yaml",
+        )
+
+tests/frontline/test_axion_slice.py:46: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2ca0cf0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+___________________ test_brief_carries_source_mix_and_links ____________________
+
+orchestrator_factory = <function orchestrator_factory.<locals>._factory at 0x7feaacfd4400>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_brief_carries_source_mix_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2c37710>
+
+    @pytest.mark.asyncio
+    async def test_brief_carries_source_mix_and_links(
+        orchestrator_factory, tmp_path, monkeypatch
+    ):
+        """HONDA brake evidence across NHTSA + WARRANTY + SERVICE links up."""
+        from src.agents.base import InteractionContext
+        from src.agents.investigator import InvestigatorAgent
+        from src.config import REPO_ROOT
+        from src.domains.source_ingest import ingest_source
+    
+        orch, _ = orchestrator_factory()
+        pack = orch.ctx.pack
+        auto_data = REPO_ROOT / "domains" / "automotive_nhtsa" / "data"
+        wcsv = _write_csv(tmp_path, "w.csv", WARRANTY_CSV)
+        scsv = _write_csv(tmp_path, "s.csv", SERVICE_CSV)
+>       ingest_source(
+            pack.id, "warranty", wcsv,
+            mapping_path=auto_data / "mapping.warranty.yaml",
+        )
+
+tests/frontline/test_axion_slice.py:110: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2d6d570>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_________________________ test_ingest_source_job_type __________________________
+
+reset_ops_db = None
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_source_job_type0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2c34650>
+
+    def test_ingest_source_job_type(reset_ops_db, tmp_path, monkeypatch):
+        from src.config import REPO_ROOT
+        from src.jobs.queue import enqueue, run_next
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        wcsv = _write_csv(tmp_path, "w.csv", WARRANTY_CSV)
+        job = enqueue(
+            "ingest_source",
+            {
+                "pack_id": "job_src_pack",
+                "source": "warranty",
+                "csv_path": str(wcsv),
+                "mapping_path": str(
+                    REPO_ROOT / "domains" / "automotive_nhtsa" / "data"
+                    / "mapping.warranty.yaml"
+                ),
+            },
+        )
+        done = run_next(worker_id="ingestor-1")
+>       assert done is not None and done["status"] == "done"
+E       assert ({'error': "No module named 'pyarrow'", 'job_id': 'job_01m5ejkwvxawybgw94hry1d4gj', 'result': {'error': "No module named 'pyarrow'", 'ok': False}, 'status': 'failed'} is not None and 'failed' == 'done'
+E         
+E         - done
+E         + failed)
+
+tests/frontline/test_axion_slice.py:244: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"ts": 1792564392.967274, "event": "otel.span", "request_id": "req_f6b683b6dcc6", "pack_id": "", "name": "job.ingest_source", "trace_id": "tr_c1a4a7571b8641e8", "span_id": "sp_1c2cfc83", "duration_ms": 76.28203900003427, "attributes": {"job_id": "job_01m5ejkwvxawybgw94hry1d4gj", "owner": "ingestor-1"}, "instrumentation": "in-house"}
+_____________ test_fixture_csv_loads_every_row_and_keeps_the_lead ______________
+
+reset_ops_db = None
+
+    def test_fixture_csv_loads_every_row_and_keeps_the_lead(reset_ops_db):
+        from pathlib import Path
+    
+        from scripts.ingest_recalls import advisory_contract, insert_advisories
+        from src.backtest.recall_lead import recall_lead_report
+        from src.config import REPO_ROOT
+        from src.domains.csv_load import load_csv_rows
+        from src.ml_runtime.anomalies import current_spikes
+    
+        complaints = REPO_ROOT / FIXTURE
+>       report = load_csv_rows(
+            "csv_lead_proof",
+            complaints,
+            mapping=MAPPING,
+            source="nhtsa",
+            provenance="observed",
+            run_anomalies=True,
+        )
+
+tests/frontline/test_csv_load.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/csv_load.py:205: in load_csv_rows
+    report = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2db76f0>
+batch = [{'category': 'ELECTRICAL SYSTEM', 'embedding': [0.0, 0.0, 0.027671894136817695, 0.0, 0.05534378827363539, 0.013835947...34453872167326, 0.0, 0.0500793181293699, 0.057086134680418316, ...], 'entity_1': '2015', 'entity_2': 'FORD', ...}, ...]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+______________ test_http_ingest_writes_rows_and_rejects_bad_files ______________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_http_ingest_writes_rows_a0')
+reset_ops_db = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feaacf9ab40>
+
+    def test_http_ingest_writes_rows_and_rejects_bad_files(tmp_path, reset_ops_db, monkeypatch):
+        from src.api.main import app
+        from src.config import REPO_ROOT
+        from src.data.warehouse import domain_con
+        from src.jobs.queue import run_next
+    
+        monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
+        monkeypatch.setenv("FRONTLINE_AUTH_REQUIRED", "1")
+        monkeypatch.delenv("FRONTLINE_OPEN_MODE", raising=False)
+        monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+        monkeypatch.setenv("BUILDER_UPLOAD_DIR", str(tmp_path))
+        monkeypatch.setenv("SESSION_SECRET", "super-secret-key-for-test-32bytes")
+        src = REPO_ROOT / FIXTURE
+        dest = tmp_path / "complaints.csv"
+        shutil.copyfile(src, dest)
+        from src.api.rbac import issue_session
+        admin_token = issue_session("admin_usr", "admin", issuer_role="admin")["token"]
+        headers = {"X-Frontline-Session": admin_token}
+    
+        with TestClient(app) as client:
+>           ok = client.post(
+                "/api/frontline/pack-builder/ingest",
+                headers=headers,
+                json={
+                    "pack_id": "csv_http_proof",
+                    "csv_path": str(dest),
+                    "mapping": MAPPING,
+                    "source": "nhtsa",
+                    "provenance": "observed",
+                },
+            )
+
+tests/frontline/test_csv_load.py:127: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:555: in post
+    return super().post(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1144: in post
+    return self.request(
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:454: in request
+    return super().request(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:356: in handle_request
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/testclient.py:353: in handle_request
+    portal.call(self.app, scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/home/box/.local/share/uv/python/cpython-3.12.15-linux-x86_64-gnu/lib/python3.12/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../skewai-venv312/lib/python3.12/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+src/api/main.py:399: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:375: in __call__
+    await self.app(scope, receive, send_with_version)
+src/api/main.py:349: in __call__
+    await self.app(scope, receive, send_with_obs)
+src/security/headers.py:71: in __call__
+    await self.app(scope, receive, send_with_headers)
+src/api/identifier_guard.py:82: in __call__
+    await self.app(scope, receive, send)
+src/api/main.py:65: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/cors.py:88: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2685: in app
+    await route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1766: in handle
+    await self.original_router.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:2740: in handle
+    await included_router._handle_selected(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1786: in _handle_selected
+    await original_route.handle(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:1265: in handle
+    await app(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:151: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../skewai-venv312/lib/python3.12/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:137: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:691: in app
+    raw_response = await run_endpoint_function(
+../skewai-venv312/lib/python3.12/site-packages/fastapi/routing.py:345: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/pipeline.py:336: in pack_builder_ingest
+    report = load_csv_rows(
+src/domains/csv_load.py:205: in load_csv_rows
+    report = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9d1a630>
+batch = [{'category': 'ELECTRICAL SYSTEM', 'embedding': [0.0, 0.0, 0.027671894136817695, 0.0, 0.05534378827363539, 0.013835947...34453872167326, 0.0, 0.0500793181293699, 0.057086134680418316, ...], 'entity_1': '2015', 'entity_2': 'FORD', ...}, ...]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_____________________ test_cli_refuses_the_pilot_warehouse _____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_cli_refuses_the_pilot_war0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac859a0f0>
+capsys = <_pytest.capture.CaptureFixture object at 0x7feaace5a720>
+
+    def test_cli_refuses_the_pilot_warehouse(tmp_path, monkeypatch, capsys):
+        from scripts.ingest_source import main
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        monkeypatch.setattr(
+            "src.config.is_default_pilot_domain_path",
+            lambda path=None: True,
+        )
+        path = tmp_path / "one.csv"
+        path.write_text(
+            "ID,CDESC,DATEA\nr1,brake noise on the highway,20240102\n",
+            encoding="utf-8",
+        )
+        mapping = tmp_path / "one.yaml"
+        mapping.write_text(
+            'records:\n  record_id: ID\n  text: CDESC\n  received_at: DATEA\n  source: "CSV"\n',
+            encoding="utf-8",
+        )
+        argv = [
+            "--pack", "automotive_nhtsa",
+            "--source", "csv",
+            "--csv", str(path),
+            "--mapping", str(mapping),
+        ]
+        assert main(argv) == 1
+        assert "pilot warehouse" in capsys.readouterr().out
+>       assert main([*argv, "--allow-pilot"]) == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_csv_load.py:270: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/ingest_source.py:60: in main
+    report = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feaab71a9b0>
+batch = [{'category': None, 'embedding': [0.0, 0.0, 0.0, 0.0, 0.40613846605344767, 0.0, ...], 'entity_1': None, 'entity_2': None, ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+___________________ test_cli_run_anomalies_flag_is_accepted ____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_cli_run_anomalies_flag_is0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac859a420>
+capsys = <_pytest.capture.CaptureFixture object at 0x7feac859b170>
+
+    def test_cli_run_anomalies_flag_is_accepted(tmp_path, monkeypatch, capsys):
+        from scripts.ingest_source import main
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        path = tmp_path / "one.csv"
+        path.write_text("ID,CDESC,DATEA\nr1,brake noise on the highway,20240102\n", encoding="utf-8")
+        mapping = tmp_path / "one.yaml"
+        mapping.write_text(
+            "records:\n  record_id: ID\n  text: CDESC\n  received_at: DATEA\n  source: \"CSV\"\n",
+            encoding="utf-8",
+        )
+>       rc = main([
+            "--pack", "csv_cli_proof",
+            "--source", "csv",
+            "--csv", str(path),
+            "--mapping", str(mapping),
+            "--run-anomalies",
+        ])
+
+tests/frontline/test_csv_load.py:284: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/ingest_source.py:60: in main
+    report = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac98faf30>
+batch = [{'category': None, 'embedding': [0.0, 0.0, 0.0, 0.0, 0.40613846605344767, 0.0, ...], 'entity_1': None, 'entity_2': None, ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+___________________ test_enrichment_runs_agents_concurrently ___________________
+
+reset_ops_db = None
+seed_automotive_pack = PosixPath('/tmp/pytest-of-box/pytest-10/skewai_pytest_data0/domains/automotive_nhtsa.duckdb')
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+
+    @pytest.mark.asyncio
+    async def test_enrichment_runs_agents_concurrently(reset_ops_db, seed_automotive_pack, pack):
+        import asyncio
+        from src.agents.orchestrator import Orchestrator
+        from tests.frontline.conftest import _RecordingHooks
+    
+        started = []
+        original_sentinel = None
+    
+        from src.agents import sentinel as sentinel_mod
+        from src.agents import triage as triage_mod
+        from src.agents import investigator as inv_mod
+    
+        real_s = sentinel_mod.SentinelAgent.run
+        real_t = triage_mod.TriageAgent.run
+        real_i = inv_mod.InvestigatorAgent.run
+    
+        async def wrap(name, real, self, **kw):
+            started.append((name, "start", asyncio.get_event_loop().time()))
+            await asyncio.sleep(0.05)
+            r = await real(self, **kw)
+            started.append((name, "end", asyncio.get_event_loop().time()))
+            return r
+    
+        async def s_run(self, **kw):
+            return await wrap("sentinel", real_s, self, **kw)
+    
+        async def t_run(self, **kw):
+            return await wrap("triage", real_t, self, **kw)
+    
+        async def i_run(self, **kw):
+            return await wrap("investigator", real_i, self, **kw)
+    
+        hooks = _RecordingHooks()
+        orch = Orchestrator(
+            interaction_id="int_conc_1",
+            pack=pack,
+            channel="simulated",
+            hooks=hooks,
+        )
+        with ops_con() as con:
+            con.execute(
+                """
+                INSERT INTO interactions
+                (interaction_id, pack_id, pack_version, started_at, channel, status)
+                VALUES ('int_conc_1', ?, ?, ?, 'sim', 'active')
+                """,
+                [pack.id, pack.pack_version, datetime.now(timezone.utc)],
+            )
+        orch.ctx.slots = {
+            "entity_1": "2019",
+            "entity_2": "Toyota",
+            "entity_3": "Camry",
+            "category": "brakes",
+            "description": "soft pedal",
+        }
+        with (
+            patch.object(sentinel_mod.SentinelAgent, "run", s_run),
+            patch.object(triage_mod.TriageAgent, "run", t_run),
+            patch.object(inv_mod.InvestigatorAgent, "run", i_run),
+        ):
+            await orch._run_enrichment()
+    
+        # Overlap: at least one agent starts before another ends
+        starts = {n: t for n, ev, t in started if ev == "start"}
+        ends = {n: t for n, ev, t in started if ev == "end"}
+        assert len(starts) == 3
+        # gather() must start all three before any of them finish the 50ms probe sleep.
+        assert max(starts.values()) < min(ends.values())
+        # Concurrent: three serial 50ms sleeps are 150ms. Ledger writes share one
+        # DuckDB lock, so wall is sleep + serialized writes, still under sequential.
+        wall = max(ends.values()) - min(starts.values())
+        # Three serial 50ms sleeps are 150ms. CI runners add DuckDB/lock jitter;
+        # keep a bound well under 3x serial wall (~450ms+) so a sequential gather
+        # still fails, without flake on loaded GitHub runners.
+>       assert wall < 0.75, f"expected concurrent execution under 750ms, got {wall}"
+E       AssertionError: expected concurrent execution under 750ms, got 0.9488486199998079
+E       assert 0.9488486199998079 < 0.75
+
+tests/frontline/test_due_diligence_trust.py:207: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"ts": 1792564600.3560548, "event": "otel.span", "request_id": "req_816d5c1ec339", "pack_id": "", "name": "orchestrator.enrichment", "trace_id": "tr_7b2aa1c4913c4fb7", "span_id": "sp_b66021c2", "duration_ms": 949.006988000292, "attributes": {"interaction_id": "int_conc_1"}, "instrumentation": "in-house"}
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.embedding_runtime:embedding_runtime.py:190 semantic embedder unavailable: ArtifactIntegrityError
+_____________ test_duplicate_record_ids_in_one_batch_keep_the_last _____________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_duplicate_record_ids_in_o0')
+
+    def test_duplicate_record_ids_in_one_batch_keep_the_last(domain_tmp):
+        """A per-row loop lets the last write win. A set-based insert does not.
+    
+        ``INSERT OR REPLACE ... SELECT`` over a staged batch keeps the FIRST row
+        for a duplicated key and silently drops the rest — no error, and the
+        returned count is still the full input length, so nothing signals it.
+        The batch must therefore be deduplicated in Python, keep-last, to match
+        the semantics every existing caller was written against.
+        """
+>       n = upsert_records(PACK, [_rec("DUP", text="first version"), _rec("DUP", text="last version")])
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:73: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac94f1cb0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_______ test_duplicate_record_ids_across_a_batch_boundary_keep_the_last ________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_duplicate_record_ids_acro0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac887af00>
+
+    def test_duplicate_record_ids_across_a_batch_boundary_keep_the_last(domain_tmp, monkeypatch):
+        """The winner must not depend on where the batch happens to be cut."""
+        monkeypatch.setattr(mi, "_UPSERT_BATCH_ROWS", 2)
+        rows = [_rec("DUP", text="first"), _rec("A"), _rec("B"), _rec("DUP", text="last")]
+>       assert upsert_records(PACK, rows) == 4
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:321: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9d219b0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_____________ test_duplicate_collapse_does_not_lose_unrelated_rows _____________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_duplicate_collapse_does_n0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac85a4590>
+
+    def test_duplicate_collapse_does_not_lose_unrelated_rows(domain_tmp, monkeypatch):
+        """Collapsing a duplicate shortens the batch; the rest must still land."""
+        monkeypatch.setattr(mi, "_UPSERT_BATCH_ROWS", 3)
+        rows = [_rec("A"), _rec("A"), _rec("B"), _rec("C"), _rec("D")]
+>       assert upsert_records(PACK, rows) == 5
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:321: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2d713f0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+__________ test_rows_are_written_in_batches_not_one_statement_per_row __________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_rows_are_written_in_batch0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac887a690>
+
+    def test_rows_are_written_in_batches_not_one_statement_per_row(domain_tmp, monkeypatch):
+        """The whole point of the change: writes scale with batches, not rows."""
+        monkeypatch.setattr(mi, "_UPSERT_BATCH_ROWS", 10)
+        flushes = []
+        real_flush = mi._flush_batch
+    
+        def spy(con, batch):
+            flushes.append(len(batch))
+            return real_flush(con, batch)
+    
+        monkeypatch.setattr(mi, "_flush_batch", spy)
+>       assert upsert_records(PACK, [_rec(f"R{i:03d}") for i in range(25)]) == 25
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:110: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:321: in upsert_records
+    _flush_batch(con, batch)
+tests/frontline/test_ingest_batching.py:107: in spy
+    return real_flush(con, batch)
+           ^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac8586a30>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}, ...]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+____________ test_every_row_survives_a_load_that_spans_many_batches ____________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_every_row_survives_a_load0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2d21ee0>
+
+    def test_every_row_survives_a_load_that_spans_many_batches(domain_tmp, monkeypatch):
+        monkeypatch.setattr(mi, "_UPSERT_BATCH_ROWS", 7)
+        ids = [f"R{i:04d}" for i in range(100)]
+>       assert upsert_records(PACK, [_rec(r) for r in ids]) == 100
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:321: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2d2f130>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}, ...]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+________________ test_reingest_replaces_rather_than_duplicating ________________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_reingest_replaces_rather_0')
+
+    def test_reingest_replaces_rather_than_duplicating(domain_tmp):
+        """Idempotence: loading the same rows twice leaves one row each."""
+        rows = [_rec("A", text="original"), _rec("B")]
+>       assert upsert_records(PACK, rows) == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:136: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2c7eef0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_____________________ test_all_null_optional_columns_load ______________________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_all_null_optional_columns0')
+
+    def test_all_null_optional_columns_load(domain_tmp):
+        """A staged column with no non-null value has no type to infer.
+    
+        occurred_at is absent from sources with no incident date and entity_key
+        from sources with no entity grain, so a real batch can be uniformly
+        NULL in either. Arrow infers such a column as `null`, which will not
+        cast into a TIMESTAMP or VARCHAR column unless the schema is explicit.
+        """
+        rows = [
+            _rec("N1", occurred_at=None, entity_key="", region="", subcategory=""),
+            _rec("N2", occurred_at=None, entity_key="", region="", subcategory=""),
+        ]
+>       assert upsert_records(PACK, rows) == 2
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:158: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac85c07f0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_____________ test_embedding_round_trips_through_the_staged_batch ______________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_embedding_round_trips_thr0')
+
+    def test_embedding_round_trips_through_the_staged_batch(domain_tmp):
+        """The embedding is a FLOAT[] column, the one non-scalar in the batch."""
+        from src.ml_runtime.embeddings import cosine, embed_text
+    
+>       upsert_records(PACK, [_rec("E1", text="grinding noise when braking")])
+
+tests/frontline/test_ingest_batching.py:174: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac85af5b0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_______ test_provenance_defaults_to_observed_and_is_honoured_when_given ________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_provenance_defaults_to_ob0')
+
+    def test_provenance_defaults_to_observed_and_is_honoured_when_given(domain_tmp):
+        rows = [_rec("P1"), _rec("P2", provenance="inferred")]
+>       upsert_records(PACK, rows)
+
+tests/frontline/test_ingest_batching.py:182: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9157bf0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+__________ test_persist_trust_many_opens_one_connection_for_the_batch __________
+
+reset_ops_db = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2c36570>
+
+    def test_persist_trust_many_opens_one_connection_for_the_batch(reset_ops_db, monkeypatch):
+        """Per-row persist spent 11.7 ms of every 20.2 ms on connect-and-close."""
+        calls = []
+        real = trust_mod.ops_con
+    
+        def spy(*a, **kw):
+            calls.append(1)
+            return real(*a, **kw)
+    
+        monkeypatch.setattr(trust_mod, "ops_con", spy)
+        evs = [
+            {"record_id": f"T{i}", "trusted": True, "badge": {}, "checks": {}, "content_hash": f"h{i}"}
+            for i in range(50)
+        ]
+>       tids = persist_trust_many("automotive_nhtsa", evs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:207: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {}, 'checks': {}, 'content_hash': 'h0', 'record_id': 'T0', ...}, {'badge': {}, 'checks': {}, 'content_hash'...t_hash': 'h4', 'record_id': 'T4', ...}, {'badge': {}, 'checks': {}, 'content_hash': 'h5', 'record_id': 'T5', ...}, ...]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+___________ test_persist_trust_many_on_an_empty_batch_opens_nothing ____________
+
+reset_ops_db = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2d0cf80>
+
+    def test_persist_trust_many_on_an_empty_batch_opens_nothing(reset_ops_db, monkeypatch):
+        calls = []
+        monkeypatch.setattr(trust_mod, "ops_con", lambda *a, **kw: calls.append(1))
+>       assert persist_trust_many("automotive_nhtsa", []) == []
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:221: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa', evaluations = []
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+________________ test_ingest_mapped_csv_reports_streamed_counts ________________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_mapped_csv_reports0')
+reset_ops_db = None
+
+    def test_ingest_mapped_csv_reports_streamed_counts(domain_tmp, reset_ops_db):
+        """mapped/trusted/rejected must stay correct without a materialized list."""
+        now = utc_now().strftime("%Y%m%d")
+        csv_path = domain_tmp / "load.csv"
+        header = (
+            "RECORD_KEY,ODINO,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+            "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        )
+        lines = [
+            f"K{i}|2019|HONDA|CR-V|SERVICE BRAKES,1155{i},{i},{now},{now},2019,HONDA,CR-V,"
+            f"SERVICE BRAKES,SB:DISC,narrative number {i} about the brakes,4,CA"
+            for i in range(30)
+        ]
+        csv_path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
+>       result = ingest_mapped_csv(PACK, csv_path, mapping_path=MAPPING)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:310: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:365: in ingest_mapped_csv
+    written = upsert_records(pack_id, stream)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:310: in upsert_records
+    for rec in records:
+               ^^^^^^^
+src/data/trust.py:331: in _gen
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...0ae971b69b2503c30c46590068515fd2cbc0823e46acd4d8162a9920', 'record_id': 'K5|2019|HONDA|CR-V|SERVICE BRAKES', ...}, ...]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+_________ test_ingest_mapped_csv_spanning_many_batches_loads_every_row _________
+
+domain_tmp = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_mapped_csv_spannin0')
+reset_ops_db = None
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac88253d0>
+
+    def test_ingest_mapped_csv_spanning_many_batches_loads_every_row(
+        domain_tmp, reset_ops_db, monkeypatch
+    ):
+        """A real load is many batches; the boundary must not drop or merge rows."""
+        monkeypatch.setattr(mi, "_UPSERT_BATCH_ROWS", 9)
+        monkeypatch.setattr(trust_mod, "_TRUST_BATCH_ROWS", 4)
+        now = utc_now().strftime("%Y%m%d")
+        csv_path = domain_tmp / "many.csv"
+        header = (
+            "RECORD_KEY,ODINO,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+            "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+        )
+        lines = [
+            f"KEY{i:03d},1155{i},{i},{now},{now},2019,HONDA,CR-V,"
+            f"SERVICE BRAKES,SB:DISC,distinct narrative {i} describing a brake fault,4,CA"
+            for i in range(50)
+        ]
+        csv_path.write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
+>       result = ingest_mapped_csv(PACK, csv_path, mapping_path=MAPPING)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_ingest_batching.py:336: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:365: in ingest_mapped_csv
+    written = upsert_records(pack_id, stream)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:310: in upsert_records
+    for rec in records:
+               ^^^^^^^
+src/data/trust.py:326: in _gen
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...rue}}, 'content_hash': '1c3b67916ca4dc97a2bf4f20253cbe8da2e51ef68c17669794b9990ecefa2823', 'record_id': 'KEY003', ...}]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+____________________ test_h04_reingest_is_idempotent_upsert ____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_h04_reingest_is_idempoten0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac852d8b0>
+
+    def test_h04_reingest_is_idempotent_upsert(tmp_path, monkeypatch):
+        from src.data.warehouse import domain_con
+        from src.domains.source_ingest import ingest_source
+    
+        from src.config import REPO_ROOT
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        auto = REPO_ROOT / "domains" / "automotive_nhtsa" / "data"
+        csv = tmp_path / "w.csv"
+        csv.write_text(
+            "CLAIM_ID,CLAIM_DATE,REPAIR_DATE,MODEL_YR,MAKETXT,MODELTXT,COMPNAME,"
+            "FAIL_CODE,TECH_NOTES,CLAIM_SEVERITY,STATE\n"
+            "1,2024-03-01,2024-02-20,2019,HONDA,CR-V,SERVICE BRAKES,,grinding pads,Medium,CA\n",
+            encoding="utf-8",
+        )
+>       r1 = ingest_source("h04_pack", "warranty", csv, mapping_path=auto / "mapping.warranty.yaml")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_journey_high.py:93: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9b455b0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_______________ test_correction_rejection_and_diagnostic_answer ________________
+
+orchestrator_factory = <function orchestrator_factory.<locals>._factory at 0x7feac88bf380>
+
+    @pytest.mark.asyncio
+    async def test_correction_rejection_and_diagnostic_answer(orchestrator_factory):
+        """One confirmation flow keeps a rejection open and a diagnostic answer changes severity."""
+        orch, hooks = orchestrator_factory()
+        await orch.start()
+        register_question(
+            orch.ctx.pack.id,
+            "Is the window fogged?",
+            category="VISIBILITY",
+        )
+        smoke = register_question(
+            orch.ctx.pack.id,
+            "Did you see smoke or fire?",
+            category="ENGINE",
+        )
+        orch.ctx.slots.update({
+            "entity_1": "2019",
+            "entity_2": "HONDA",
+            "entity_3": "CR-V",
+            "category": "SERVICE BRAKES",
+            "description": "mild noise",
+            "__hypotheses__": [
+                {"category": "SERVICE BRAKES", "open": True},
+                {"category": "ENGINE", "open": True},
+            ],
+        })
+        orch.ctx.severity = "Low"
+        orch.ctx.investigation_brief = {"brief": "stale"}
+        orch.ctx.slots["__advisory__"] = {"id": "old"}
+        orch.ctx.slots["__retrieval__"] = {"ids": ["old"]}
+        orch.ctx.slots["__severity_cache__"] = "Low"
+        _skip_safety(orch)
+    
+        before, _, _ = score_severity(orch.ctx)
+        assert before != "Critical"
+    
+        await orch.handle_customer_turn("the brakes still make a mild noise")
+        assert orch.ctx.slots.get("__diag_qid") == smoke["question_id"]
+        assert orch.ctx.slots.get("__diag_prompt") == "Did you see smoke or fire?"
+        assert "smoke or fire" in " ".join(hooks.agent_texts()).lower()
+        assert orch.ctx.slots.get("__confirm_pending__") != "1"
+    
+        await orch.handle_customer_turn("yes")
+        stored = answers_for_interaction(orch.ctx.interaction_id)
+        assert stored
+        row = stored[-1]
+        assert row["polarity"] == "yes"
+        assert row["provenance"] == "customer_turn"
+        assert row["uncertainty"] == "stated"
+        assert "fire" in (row["symptom"] or "")
+        assert row["source_turn"] == "yes"
+        after, _, reason = score_severity(orch.ctx)
+        assert after == "Critical"
+        assert "fire" in reason.lower()
+        assert orch.ctx.slots.get("__downstream_stale__") == "1"
+    
+        await orch.handle_customer_turn("Actually it's a 2018, not 2019.")
+        assert orch.ctx.slots.get("entity_1") == "2018"
+        meta = orch.ctx.slots["__slot_meta__"]["entity_1"]
+        assert meta["value"] == "2018"
+        assert "2018" in meta["source_turn"]
+        assert meta["confidence"] is not None
+>       assert meta["confirmation"] == "unconfirmed"
+E       AssertionError: assert 'confirmed' == 'unconfirmed'
+E         
+E         - unconfirmed
+E         ? --
+E         + confirmed
+
+tests/frontline/test_live_corrections.py:80: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"ts": 1792564915.204386, "event": "otel.span", "request_id": "req_2994f6f5e2e5", "pack_id": "", "interaction_id": "int_1", "name": "orchestrator.enrichment", "trace_id": "tr_91f17dc9b52646e8", "span_id": "sp_38276099", "duration_ms": 1140.0073730001168, "attributes": {"interaction_id": "int_test_01m5ek3pr4dk6dwbb7zd3q8rdt"}, "instrumentation": "in-house"}
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.embedding_runtime:embedding_runtime.py:190 semantic embedder unavailable: ArtifactIntegrityError
+_________________ test_disabled_investigator_is_not_applicable _________________
+
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+
+    @pytest.mark.asyncio
+    async def test_disabled_investigator_is_not_applicable(pack):
+        ctx = InteractionContext(interaction_id="int_inv_skip", pack=pack)
+        ctx.slots.update({
+            "entity_1": "2019",
+            "entity_2": "HONDA",
+            "entity_3": "CR-V",
+            "category": "SERVICE BRAKES",
+            "description": "mild noise",
+        })
+    
+        def _enabled(name: str) -> bool:
+            return name != "investigator"
+    
+        import src.ops.pilot as pilot
+    
+        original = pilot.agent_enabled
+        pilot.agent_enabled = _enabled
+        try:
+            result = await InvestigatorAgent(ctx).run()
+        finally:
+            pilot.agent_enabled = original
+>       assert result["skipped"] is True
+               ^^^^^^^^^^^^^^^^^
+E       KeyError: 'skipped'
+
+tests/frontline/test_live_handoff_outcomes.py:85: KeyError
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.embedding_runtime:embedding_runtime.py:190 semantic embedder unavailable: ArtifactIntegrityError
+________________ test_scheduled_speech_turn_and_playback_events ________________
+
+    def test_scheduled_speech_turn_and_playback_events():
+        out = _voice_events()
+        assert out["whileSpeaking"]["flush"] is False
+        assert out["whileSpeaking"]["reason"] == "interim"
+        assert out["afterPause"]["flush"] is True
+        assert out["afterPause"]["reason"] == "committed"
+        assert out["idle"]["reprompt"] is True
+        assert out["idle"]["flush"] is False
+        assert out["notIdleYet"]["reprompt"] is False
+        assert out["notIdleYet"]["flush"] is False
+    
+        assert out["queue"]["first"]["status"] == "pending"
+        assert out["queue"]["first"]["accepted"] is False
+        assert out["queue"]["retry"]["turnId"] == "turn-voice-1"
+        assert out["queue"]["retry"]["accepted"] is False
+        assert out["queue"]["acked"]["status"] == "completed"
+        assert out["queue"]["duplicate"]["status"] == "duplicate"
+        assert out["queue"]["duplicate"]["outcome"]["status"] == "completed"
+        assert out["queue"]["duplicate"]["text"] == "um uh the brakes are grindin real bad"
+        assert out["queue"]["numbers"]["text"] == "two zero one nine"
+    
+        assert out["socketOpenOnly"] is False
+        assert out["socketAuthOnly"] is False
+        assert out["socketReady"] is True
+        assert out["playback"]["states"] == [
+            "queued", "started", "interrupted", "failed", "completed",
+        ]
+        assert out["playback"]["final"] == "completed"
+        assert "safe location" in out["playback"]["text"]
+        assert out["echoNumeric"] is False
+        assert out["echoAccent"] is False
+>       assert out["bargeNo"] is True
+E       AssertionError: assert 'No!' is True
+
+tests/frontline/test_live_voice_lifecycle.py:134: AssertionError
+_______________ test_ingest_mapped_csv_writes_canonical_records ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_mapped_csv_writes_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac8551040>
+
+    def test_ingest_mapped_csv_writes_canonical_records(tmp_path, monkeypatch):
+        # Live env path: do not fall back to the session fixture warehouse.
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+    
+        csv_path = tmp_path / "nhtsa_sample.csv"
+        csv_path.write_text(
+            "RECORD_KEY,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+            "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+            "NHTSA-A,16000001,20260801,20260728,2019,HONDA,CR-V,SERVICE BRAKES,"
+            "SERVICE BRAKES HYDRAULIC:DISC,grinding noise when braking,4,CA\n"
+            "NHTSA-B,16000002,20260802,20260729,2018,TOYOTA,CAMRY,AIR BAGS,"
+            "AIR BAGS:FRONTAL,airbag warning light stays on,4,TX\n",
+            encoding="utf-8",
+        )
+        mapping = REPO_ROOT / "domains" / "automotive_nhtsa" / "data" / "mapping.yaml"
+>       result = ingest_mapped_csv(
+            "automotive_nhtsa",
+            csv_path,
+            mapping_path=mapping,
+        )
+
+tests/frontline/test_mapping_ingest.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:365: in ingest_mapped_csv
+    written = upsert_records(pack_id, stream)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:310: in upsert_records
+    for rec in records:
+               ^^^^^^^
+src/data/trust.py:331: in _gen
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...ue}}, 'content_hash': '31202e5b1e428ab2143919a30b01fc875eb4d8e34972eb1a3b5c7e9defa54837', 'record_id': 'NHTSA-B', ...}]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+_________ test_every_category_in_the_warehouse_came_from_the_gazetteer _________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_every_category_in_the_war0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac8537e90>
+
+    def test_every_category_in_the_warehouse_came_from_the_gazetteer(tmp_path, monkeypatch):
+        """The Phase 0 done-when condition, checked where it is actually claimed.
+    
+        The converter boundary is pinned above and mapping.yaml is pinned by
+        test_mapping_yaml_points_category_at_the_normalized_column, but neither
+        proves the value survives the load. A mapping key that silently resolves
+        to nothing writes a NULL category and both of those tests still pass.
+        """
+        from datetime import timedelta
+    
+        from src.data.timeutil import utc_now
+        from src.data.warehouse import domain_con
+        from src.domains.mapping_ingest import ingest_mapped_csv
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        # The real pack, so the real mapping.yaml is the one under test. Only the
+        # warehouse is redirected.
+        pack = "automotive_nhtsa"
+        # Inside the freshness SLA, or the trust contract rejects every row as
+        # stale and the assertion below passes over an empty table.
+        recent = (utc_now() - timedelta(days=3)).strftime("%Y%m%d")
+        raws = [
+            "SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS:DISC:ROTOR",
+            "ENGINE AND ENGINE COOLING:ENGINE:GASOLINE",
+            "ELECTRICAL SYSTEM:WIRING",
+            "FORWARD COLLISION AVOIDANCE: AUTOMATIC EMERGENCY BRAKING",
+            "Other/I am not sure",
+            "",
+            "SOMETHING NHTSA HAS NEVER EMITTED",
+        ]
+        lines = [
+            _complete_line(
+                CMPLID=str(16123456 + i), ODINO=str(11555001 + i),
+                COMPDESC=raw, DATEA=recent, FAILDATE=recent,
+                CDESCR=f"narrative {i} describing the failure in the owner's words",
+            )
+            for i, raw in enumerate(raws)
+        ]
+        dest = tmp_path / "flat_mapped.csv"
+        _convert(lines, dest)
+>       report = ingest_mapped_csv(pack, dest)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_nhtsa_flat_map.py:538: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:365: in ingest_mapped_csv
+    written = upsert_records(pack_id, stream)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:310: in upsert_records
+    for rec in records:
+               ^^^^^^^
+src/data/trust.py:331: in _gen
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...bf0c728c5aceee84f256473a4bf3a637678341aa55944ad4', 'record_id': '11555006|2019|HONDA|CR-V|UNKNOWN OR OTHER', ...}, ...]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+______________________ test_committed_sample_gate_passes _______________________
+
+    @pytest.mark.skipif(
+        not _SAMPLE_MANIFEST.is_file(),
+        reason="real NHTSA sample is written after the flat file is read",
+    )
+    def test_committed_sample_gate_passes():
+        from eval.frontline.recall_lead_gate import recall_lead_gate
+    
+        gate = recall_lead_gate()
+>       assert gate.passed, gate.detail
+E       AssertionError: ModuleNotFoundError: No module named 'pyarrow'
+E       assert False
+E        +  where False = GateResult(name='recall_lead_time', pack_id='automotive_nhtsa', passed=False, detail="ModuleNotFoundError: No module named 'pyarrow'", expected='positive lead', actual='error').passed
+
+tests/frontline/test_phase1_early_warning.py:420: AssertionError
+________________ test_fixture_demo_does_not_move_anomaly_counts ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_fixture_demo_does_not_mov0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac88271d0>
+
+    def test_fixture_demo_does_not_move_anomaly_counts(tmp_path, monkeypatch):
+        from src.data.warehouse import apply_domain_schema, domain_con
+        from src.domains.source_ingest import load_demo_private_sources
+        from src.ml_runtime.anomalies import recompute_weekly_anomalies
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        pack = "phase4_fixture"
+        start = datetime(2018, 1, 8)
+        with domain_con(pack, read_only=False) as con:
+            apply_domain_schema(con)
+            for w in range(6):
+                day = start + timedelta(weeks=w)
+                for i in range(2):
+                    con.execute(
+                        """
+                        INSERT INTO records (
+                            record_id, occurred_at, received_at, entity_2, entity_3,
+                            category, text, source, provenance
+                        ) VALUES (?, ?, ?, 'HONDA', 'ACCORD', 'SERVICE BRAKES', ?, 'NHTSA', 'observed')
+                        """,
+                        [f"obs-{day:%Y%m%d}-{i}", day, day, f"observed note {i}"],
+                    )
+>       loaded = load_demo_private_sources(pack)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_phase4_field_telematics.py:48: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:200: in load_demo_private_sources
+    field = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2752d70>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': 'VIN-DEMO', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_______________ test_partner_cohort_lists_sources_and_concludes ________________
+
+reset_ops_db = None
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_partner_cohort_lists_sour0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feaace5ab10>
+
+    def test_partner_cohort_lists_sources_and_concludes(reset_ops_db, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+    
+        from src.api.main import app
+        from src.data.warehouse import apply_domain_schema, domain_con, ops_con
+        from src.domains.source_ingest import ingest_source
+        from src.frontline.live_intercept import open_or_link_investigation
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
+        monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+        pack = "phase4_partner"
+        pivot = datetime(2018, 3, 5)
+        field_rows = []
+        telematics_rows = []
+        service_rows = []
+        for week in range(1, 9):
+            before = pivot - timedelta(weeks=week)
+            after = pivot + timedelta(weeks=week)
+            for i in range(4):
+                field_rows.append([
+                    f"FR-B-{week}-{i}", before.date().isoformat(), before.date().isoformat(),
+                    "VIN-PARTNER" if week == 1 and i == 0 else f"VIN-B-{week}-{i}",
+                    "HONDA", "ACCORD", "SERVICE BRAKES", "HOSE", "Hose seep on return", "seep",
+                ])
+            for i in range(2):
+                field_rows.append([
+                    f"FR-C-{week}-{i}", before.date().isoformat(), before.date().isoformat(),
+                    f"VIN-C-{week}-{i}", "FORD", "F-150", "SERVICE BRAKES", "HOSE",
+                    "Control return", "seep",
+                ])
+            field_rows.append([
+                f"FR-A-{week}", after.date().isoformat(), after.date().isoformat(),
+                f"VIN-A-{week}", "HONDA", "ACCORD", "SERVICE BRAKES", "HOSE",
+                "Quieter return", "seep",
+            ])
+            for i in range(2):
+                field_rows.append([
+                    f"FR-D-{week}-{i}", after.date().isoformat(), after.date().isoformat(),
+                    f"VIN-D-{week}-{i}", "FORD", "F-150", "SERVICE BRAKES", "HOSE",
+                    "Control still flat", "seep",
+                ])
+        spike_day = (pivot - timedelta(weeks=1)).date().isoformat()
+        next_day = (pivot - timedelta(weeks=1) + timedelta(days=1)).date().isoformat()
+        for i in range(3):
+            telematics_rows.append([
+                f"TE-{i}", spike_day, "COHORT-A", "HONDA", "ACCORD", "SERVICE BRAKES", "P0501",
+            ])
+        telematics_rows.append([
+            "TE-3", next_day, "COHORT-A", "HONDA", "ACCORD", "SERVICE BRAKES", "P0501",
+        ])
+        service_rows.append([
+            "RO-1", spike_day, "2018", "HONDA", "ACCORD", "SERVICE BRAKES", "B123",
+            "Tech confirmed hose seep", "CA",
+        ])
+        _write_csv(
+            tmp_path / "field.csv",
+            ["RETURN_ID", "RETURN_DATE", "INSPECTION_DATE", "IDENTITY", "MAKETXT",
+             "MODELTXT", "COMPONENT", "PART", "TECH_NOTE", "SYMPTOM"],
+            field_rows,
+        )
+        _write_csv(
+            tmp_path / "telematics.csv",
+            ["EVENT_ID", "EVENT_DATE", "COHORT", "MAKETXT", "MODELTXT", "COMPONENT", "FAULT_CODE"],
+            telematics_rows,
+        )
+        _write_csv(
+            tmp_path / "service.csv",
+            ["RO_NUMBER", "VISIT_DATE", "MODEL_YR", "MAKE", "MODEL", "SYSTEM",
+             "OP_CODE", "TECH_NOTES", "STATE"],
+            service_rows,
+        )
+        with domain_con(pack, read_only=False) as con:
+            apply_domain_schema(con)
+            con.execute(
+                """
+                INSERT INTO records (
+                    record_id, occurred_at, received_at, entity_2, entity_3,
+                    category, text, source, entity_key, provenance
+                ) VALUES (?, ?, ?, 'HONDA', 'ACCORD', 'SERVICE BRAKES', ?, 'NHTSA', ?, 'observed')
+                """,
+                [
+                    "nhtsa-1",
+                    pivot - timedelta(weeks=2),
+                    pivot - timedelta(weeks=2),
+                    "Complaint hose seep",
+                    "VIN-PARTNER|HONDA|ACCORD",
+                ],
+            )
+>       field = ingest_source(
+            pack, "field", tmp_path / "field.csv",
+            mapping_path=_MAP / "mapping.field.yaml", provenance="observed",
+        )
+
+tests/frontline/test_phase4_field_telematics.py:166: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9545530>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': 'VIN-PARTNER', 'entity_2...VICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': 'VIN-C-1-1', 'entity_2': 'FORD', ...}, ...]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+___________ test_two_sources_rank_above_one_and_fixture_stays_quiet ____________
+
+reset_ops_db = None
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_two_sources_rank_above_on0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac88053d0>
+
+    def test_two_sources_rank_above_one_and_fixture_stays_quiet(reset_ops_db, tmp_path, monkeypatch):
+        from src.data.warehouse import apply_domain_schema, domain_con
+        from src.domains.source_ingest import load_demo_private_sources
+        from src.frontline.fleet_scan import run_fleet_scan
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        monkeypatch.setenv("FRONTLINE_REPORTING_LAG_DAYS", "0")
+        pack = "phase4_rank"
+        start = datetime(2018, 1, 8)
+    
+        def _week(con, prefix, day, n, category, entity_2, source):
+            for i in range(n):
+                con.execute(
+                    """
+                    INSERT INTO records (
+                        record_id, occurred_at, received_at, entity_2, category,
+                        text, source, provenance
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'observed')
+                    """,
+                    [
+                        f"{prefix}-{day:%Y%m%d}-{i}", day, day, entity_2, category,
+                        f"{prefix} note {i}", source,
+                    ],
+                )
+    
+        with domain_con(pack, read_only=False) as con:
+            apply_domain_schema(con)
+            for w in range(6):
+                day = start + timedelta(weeks=w)
+                n = 2 if w < 5 else 20
+                _week(con, "nhtsa-brakes", day, n, "SERVICE BRAKES", "HONDA", "NHTSA")
+                _week(con, "svc-brakes", day, n, "SERVICE BRAKES", "HONDA", "SERVICE")
+                _week(con, "nhtsa-bags", day, 2, "AIR BAGS", "FORD", "NHTSA")
+                _week(con, "svc-bags", day, n, "AIR BAGS", "FORD", "SERVICE")
+>       load_demo_private_sources(pack)
+
+tests/frontline/test_phase4_field_telematics.py:263: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/source_ingest.py:200: in load_demo_private_sources
+    field = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac85b72b0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': 'VIN-DEMO', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+__________________ test_data_trust_fresh_vs_stale_dup_schema ___________________
+
+reset_ops_db = None
+
+    def test_data_trust_fresh_vs_stale_dup_schema(reset_ops_db):
+        now = utc_now()
+        fresh = {
+            "record_id": "T-1",
+            "text": "grinding brakes",
+            "source": "NHTSA",
+            "received_at": now,
+            "category": "SERVICE BRAKES",
+        }
+        stale = {
+            "record_id": "T-2",
+            "text": "old row",
+            "source": "NHTSA",
+            "received_at": now - timedelta(days=400),
+        }
+        schema_break = {"record_id": "", "text": "", "source": "NHTSA", "received_at": now}
+        dup = dict(fresh)
+>       batch = evaluate_ingest("automotive_nhtsa", [fresh, stale, schema_break, dup], persist=True)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_pipeline_features.py:80: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/data/trust.py:369: in evaluate_ingest
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...: True}}, 'content_hash': '8ad046d5ff292ade0c7847e8bbbd30a8fb770a3aac77d3935fdeeb1fe5a48b41', 'record_id': 'T-1', ...}]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+________________ test_sandbox_and_pack_builder_and_marketplace _________________
+
+reset_ops_db = None
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_sandbox_and_pack_builder_0')
+
+    def test_sandbox_and_pack_builder_and_marketplace(reset_ops_db, tmp_path):
+>       boot = boot_sandbox(dest=tmp_path / "sample.csv")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_pipeline_features.py:160: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/frontline/sandbox.py:97: in boot_sandbox
+    trust = evaluate_ingest(pack_id, mapped, persist=True)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/data/trust.py:369: in evaluate_ingest
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': ['freshness'], 'freshness': 'stale', 'grounded_verdict': 'untrusted', 'source': 'sandbox'...}, 'content_hash': 'a5f1dded06696358c5169ea18b1351a6bc985afba103a19b9df2a49df2b7afd8', 'record_id': 'SBX-100003', ...}]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+_______________ test_ingest_mapped_csv_writes_only_trusted_rows ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_ingest_mapped_csv_writes_1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac8807fe0>
+reset_ops_db = None
+
+    def test_ingest_mapped_csv_writes_only_trusted_rows(tmp_path, monkeypatch, reset_ops_db):
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        mapping = Path("domains/automotive_nhtsa/data/mapping.yaml")
+        csv_path = tmp_path / "mix.csv"
+        now = utc_now().strftime("%Y%m%d")
+        csv_path.write_text(
+            "RECORD_KEY,CMPLID,DATEA,DATEC,MODEL_YR,MAKETXT,MODELTXT,"
+            "COMPONENT,COMPDESC,CDESC,NUM_CYLS,STATE\n"
+            f"KEEP1,1,{now},{now},2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,"
+            "grinding noise when braking,4,CA\n"
+            "STALE1,2,20200101,20200101,2018,FORD,F150,ENGINE,ENGINE:BLOCK,"
+            "old complaint text here,8,TX\n"
+            f"KEEP1,3,{now},{now},2019,HONDA,CR-V,SERVICE BRAKES,SB:DISC,"
+            "grinding noise when braking,4,CA\n",
+            encoding="utf-8",
+        )
+>       first = ingest_mapped_csv("automotive_nhtsa", csv_path, mapping_path=mapping)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_pipeline_features.py:368: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/domains/mapping_ingest.py:365: in ingest_mapped_csv
+    written = upsert_records(pack_id, stream)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:310: in upsert_records
+    for rec in records:
+               ^^^^^^^
+src/data/trust.py:331: in _gen
+    persist_trust_many(pack_id, pending)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pack_id = 'automotive_nhtsa'
+evaluations = [{'badge': {'failed_checks': [], 'freshness': 'fresh', 'grounded_verdict': 'trusted', 'source': 'NHTSA', ...}, 'checks...True}}, 'content_hash': 'b1dc3a9344bf4d18e5dc359fecb8bf6495ae5c4a1c85b580b55320de87750384', 'record_id': 'KEEP1', ...}]
+
+    def persist_trust_many(pack_id: str, evaluations: Iterable[dict[str, Any]]) -> list[str]:
+        """Write a batch of evaluations over one ops connection.
+    
+        Returns the new trust_ids in input order. An empty batch is a no-op and
+        must not open a connection — a load whose rows are all rejected still
+        reaches here once per batch.
+        """
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/data/trust.py:213: ModuleNotFoundError
+__________________ test_probe_c_category_zeroshot_mode_pinned __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac983c680>
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+
+    def test_probe_c_category_zeroshot_mode_pinned(monkeypatch, pack):
+        """Probe C in zero-shot mode:
+        - Accuracy lifts from 1/14 (legacy rules) to 2/14 (pinned zeroshot baseline).
+        - Crucially, the three legacy confident-wrong cases shrink/are eliminated:
+          * 'it stalls at traffic lights' -> None (was EXTERIOR LIGHTING)
+          * 'the wheel shakes in my hands on the motorway' -> None (was WHEELS)
+          * 'the dash lights flicker and the screen goes black' -> None (was EXTERIOR LIGHTING)
+        """
+        monkeypatch.setenv("FRONTLINE_SLM_MODE", "live")
+        ctx = _ctx(pack)
+        got = [extract_pack_category(t, ctx) for t, _ in C_CASES]
+        acc = sum(1 for g, e in zip(got, C_EXPECTED) if g == e)
+>       assert acc == 2, f"Expected 2/14 accuracy in zeroshot mode, got {acc}"
+E       AssertionError: Expected 2/14 accuracy in zeroshot mode, got 1
+E       assert 1 == 2
+
+tests/frontline/test_slm_probes.py:160: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  src.observability.degradation:degradation.py:89 degradation_ladder_step
+WARNING  src.observability.degradation:degradation.py:89 degradation_ladder_step
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+WARNING  src.observability.degradation:degradation.py:84 degradation_ladder_bottomed_out
+_____________ test_task4_live_turn_path_has_zero_remote_llm_calls ______________
+
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac88877a0>
+
+    @pytest.mark.asyncio
+    async def test_task4_live_turn_path_has_zero_remote_llm_calls(pack, monkeypatch):
+        """Task 4: The live turn path must never invoke remote LLM narration.
+        Intake phrasing uses deterministic pack slot prompts directly,
+        completing turns well inside the 180 ms budget without external I/O."""
+        import asyncio
+        import time
+    
+        llm_called = []
+    
+        def _trap_narration(**kwargs):
+            llm_called.append(kwargs)
+            raise RuntimeError("Illegal remote LLM call on live turn path!")
+    
+        monkeypatch.setattr("src.ai.narration.phrase_intake_question", _trap_narration)
+    
+        from src.agents.intake import IntakeAgent
+    
+        async def drive(i: int):
+            ctx = InteractionContext(interaction_id=f"int_slm_no_llm_{i}", pack=pack)
+            agent = IntakeAgent(ctx)
+            await agent.run(customer_turn="calling about my car")
+            await agent.run(customer_turn="No, nobody is hurt.")
+            t0 = time.monotonic()
+            res = await agent.run(customer_turn="Yes, I am in a safe location.")
+            return time.monotonic() - t0, res
+    
+        (d0, r0), (d1, r1) = await asyncio.gather(drive(0), drive(1))
+        assert not llm_called, f"Illegal remote LLM call detected on live path: {llm_called}"
+>       assert d0 < 0.10 and d1 < 0.10, f"Turn took too long: {d0:.3f}s / {d1:.3f}s"
+E       AssertionError: Turn took too long: 0.122s / 0.135s
+E       assert (0.12161429600018892 < 0.1)
+
+tests/frontline/test_slm_probes.py:306: AssertionError
+______________________ test_zero_shot_category_prediction ______________________
+
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+
+    def test_zero_shot_category_prediction(pack):
+        # Automotive pack test
+        res = predict_category_zero_shot("the belt doesnt retract properly", pack)
+>       assert res.category == "SEAT BELTS"
+E       AssertionError: assert None == 'SEAT BELTS'
+E        +  where None = SLMCategoryResult(category=None, score=0.0, confidence_floor=0.3, span_text='', span_start=0, span_end=0, best_matching_synonym='', source='slm', all_scores={}, latency_ms=0.5147030005900888).category
+
+tests/frontline/test_slm_runtime.py:56: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+_____________ test_extract_category_shadow_mode_no_behavior_change _____________
+
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feae2dee780>
+
+    def test_extract_category_shadow_mode_no_behavior_change(pack, monkeypatch):
+        # In shadow mode, the caller receives the EXACT rules extraction
+        monkeypatch.setenv("FRONTLINE_SLM_MODE", "shadow")
+        ctx = InteractionContext(interaction_id="int_test_shadow", pack=pack)
+    
+        # Phrasing where rules extract nothing (None)
+        cat, meta = extract_category_with_slm("the belt doesnt retract properly", ctx)
+        # Rules return None because 'retract' is not in _CATEGORY_SYNONYMS
+        assert cat is None
+        assert meta["source"] == "rules"
+        assert meta["slm_mode"] == "shadow"
+        # But shadow SLM extracted SEAT BELTS in parallel
+>       assert meta["shadow_slm_category"] == "SEAT BELTS"
+E       AssertionError: assert None == 'SEAT BELTS'
+
+tests/frontline/test_slm_runtime.py:101: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+_________________ test_extract_category_live_mode_promotes_slm _________________
+
+pack = LoadedPack(manifest=PackManifest(id='automotive_nhtsa', display_name='Automotive (NHTSA)', locale='en-US', greeting="T...'SEATS', 'CHILD SEAT']}, {'name': 'Body & Visibility', 'categories': ['STRUCTURE', 'VISIBILITY', 'WHEELS', 'TIRES']}]})
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac88858b0>
+
+    def test_extract_category_live_mode_promotes_slm(pack, monkeypatch):
+        monkeypatch.setenv("FRONTLINE_SLM_MODE", "live")
+        ctx = InteractionContext(interaction_id="int_test_live", pack=pack)
+    
+        cat, meta = extract_category_with_slm("the belt doesnt retract properly", ctx)
+>       assert cat == "SEAT BELTS"
+E       AssertionError: assert None == 'SEAT BELTS'
+
+tests/frontline/test_slm_runtime.py:110: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+WARNING  src.ml_runtime.slm_runtime:slm_runtime.py:134 SLM embedder unavailable: semantic artifact missing files: model.onnx, tokenizer.json
+_____________________ test_a_load_with_no_tag_is_observed ______________________
+
+csv_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_a_load_with_no_tag_is_obs0/warranty.csv')
+
+    def test_a_load_with_no_tag_is_observed(csv_path):
+>       report = _load(csv_path)
+                 ^^^^^^^^^^^^^^^
+
+tests/frontline/test_source_provenance.py:127: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/frontline/test_source_provenance.py:48: in _load
+    return ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9c11570>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_________________ test_a_demo_file_can_be_loaded_as_a_fixture __________________
+
+csv_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_a_demo_file_can_be_loaded0/warranty.csv')
+
+    def test_a_demo_file_can_be_loaded_as_a_fixture(csv_path):
+        """The step this exists for: demo data must be loadable as demo data."""
+>       report = _load(csv_path, provenance="fixture")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_source_provenance.py:135: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/frontline/test_source_provenance.py:48: in _load
+    return ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac991ddb0>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+________________________ test_inferred_is_loadable_too _________________________
+
+csv_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_inferred_is_loadable_too0/warranty.csv')
+
+    def test_inferred_is_loadable_too(csv_path):
+>       _load(csv_path, provenance="inferred")
+
+tests/frontline/test_source_provenance.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/frontline/test_source_provenance.py:48: in _load
+    return ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac8514c30>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+____________ test_a_later_load_can_promote_fixture_rows_to_observed ____________
+
+csv_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_a_later_load_can_promote_0/warranty.csv')
+
+    def test_a_later_load_can_promote_fixture_rows_to_observed(csv_path):
+        """The tag travels with the row, so a re-ingest must actually retag it."""
+>       _load(csv_path, provenance="fixture")
+
+tests/frontline/test_source_provenance.py:163: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/frontline/test_source_provenance.py:48: in _load
+    return ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac99aee30>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+________________________ test_limit_applies_with_a_tag _________________________
+
+csv_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_limit_applies_with_a_tag0/warranty.csv')
+
+    def test_limit_applies_with_a_tag(csv_path):
+>       report = _load(csv_path, limit=2, provenance="fixture")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/frontline/test_source_provenance.py:170: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/frontline/test_source_provenance.py:48: in _load
+    return ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feae2d0b830>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ry': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HONDA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+_____________________ test_cli_loads_a_fixture_and_says_so _____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-10/test_cli_loads_a_fixture_and_s0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac9c71b80>
+capsys = <_pytest.capture.CaptureFixture object at 0x7feac9c703b0>
+
+    def test_cli_loads_a_fixture_and_says_so(tmp_path, monkeypatch, capsys):
+        """The report line has to name the tag: a silent fixture load is the bug."""
+        from scripts.ingest_source import main
+    
+        monkeypatch.setenv("DOMAIN_DB_PATH", str(tmp_path))
+        path = tmp_path / "warranty.csv"
+        path.write_text(WARRANTY_CSV, encoding="utf-8")
+>       rc = main([
+            "--pack", PACK, "--source", "warranty", "--csv", str(path),
+            "--mapping", str(WARRANTY_MAPPING), "--provenance", "fixture",
+        ])
+
+tests/frontline/test_source_provenance.py:264: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+scripts/ingest_source.py:60: in main
+    report = ingest_source(
+src/domains/source_ingest.py:171: in ingest_source
+    written = upsert_records(pack_id, [rec for rec in staged if rec.get("record_id")])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/domains/mapping_ingest.py:324: in upsert_records
+    _flush_batch(con, batch)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+con = <_duckdb.DuckDBPyConnection object at 0x7feac9c13930>
+batch = [{'category': 'SERVICE BRAKES', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2019', 'entity_2': 'HON...ategory': 'AIR BAGS', 'embedding': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...], 'entity_1': '2018', 'entity_2': 'TOYOTA', ...}]
+
+    def _flush_batch(con, batch: list[dict[str, Any]]) -> None:
+        """Insert one staged batch with a single statement."""
+        if not batch:
+            return
+>       import pyarrow as pa
+E       ModuleNotFoundError: No module named 'pyarrow'
+
+src/domains/mapping_ingest.py:281: ModuleNotFoundError
+________________ test_malformed_frame_does_not_fail_the_contact ________________
+
+reset_ops_db = None
+seed_automotive_pack = PosixPath('/tmp/pytest-of-box/pytest-10/skewai_pytest_data0/domains/automotive_nhtsa.duckdb')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7feac8536f60>
+
+    def test_malformed_frame_does_not_fail_the_contact(reset_ops_db, seed_automotive_pack, monkeypatch):
+        monkeypatch.delenv("FRONTLINE_API_KEY", raising=False)
+        monkeypatch.setenv("FRONTLINE_ENABLED", "1")
+        with TestClient(app) as client:
+            started = client.post("/api/interactions/start", params={"channel": "web_text"})
+            iid = started.json()["interaction_id"]
+            with client.websocket_connect(f"/ws/interaction/{iid}") as ws:
+                ws.send_json([])
+                frame = ws.receive_json()
+>               assert frame.get("code") == "bad_message"
+E               AssertionError: assert None == 'bad_message'
+E                +  where None = <built-in method get of dict object at 0x7feac9b3d740>('code')
+E                +    where <built-in method get of dict object at 0x7feac9b3d740> = {'attached': True, 'authenticated': True, 'interaction_id': 'int_01m5em219j0dhe0zh5jztawp3n', 'resumed': False, ...}.get
+
+tests/frontline/test_voice_audit_fixes.py:194: AssertionError
+=============================== warnings summary ===============================
+../skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/skewai-venv312/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/frontline/test_axion_slice.py::test_ingest_warranty_and_service_sources
+FAILED tests/frontline/test_axion_slice.py::test_brief_carries_source_mix_and_links
+FAILED tests/frontline/test_axion_slice.py::test_ingest_source_job_type - ass...
+FAILED tests/frontline/test_csv_load.py::test_fixture_csv_loads_every_row_and_keeps_the_lead
+FAILED tests/frontline/test_csv_load.py::test_http_ingest_writes_rows_and_rejects_bad_files
+FAILED tests/frontline/test_csv_load.py::test_cli_refuses_the_pilot_warehouse
+FAILED tests/frontline/test_csv_load.py::test_cli_run_anomalies_flag_is_accepted
+FAILED tests/frontline/test_due_diligence_trust.py::test_enrichment_runs_agents_concurrently
+FAILED tests/frontline/test_ingest_batching.py::test_duplicate_record_ids_in_one_batch_keep_the_last
+FAILED tests/frontline/test_ingest_batching.py::test_duplicate_record_ids_across_a_batch_boundary_keep_the_last
+FAILED tests/frontline/test_ingest_batching.py::test_duplicate_collapse_does_not_lose_unrelated_rows
+FAILED tests/frontline/test_ingest_batching.py::test_rows_are_written_in_batches_not_one_statement_per_row
+FAILED tests/frontline/test_ingest_batching.py::test_every_row_survives_a_load_that_spans_many_batches
+FAILED tests/frontline/test_ingest_batching.py::test_reingest_replaces_rather_than_duplicating
+FAILED tests/frontline/test_ingest_batching.py::test_all_null_optional_columns_load
+FAILED tests/frontline/test_ingest_batching.py::test_embedding_round_trips_through_the_staged_batch
+FAILED tests/frontline/test_ingest_batching.py::test_provenance_defaults_to_observed_and_is_honoured_when_given
+FAILED tests/frontline/test_ingest_batching.py::test_persist_trust_many_opens_one_connection_for_the_batch
+FAILED tests/frontline/test_ingest_batching.py::test_persist_trust_many_on_an_empty_batch_opens_nothing
+FAILED tests/frontline/test_ingest_batching.py::test_ingest_mapped_csv_reports_streamed_counts
+FAILED tests/frontline/test_ingest_batching.py::test_ingest_mapped_csv_spanning_many_batches_loads_every_row
+FAILED tests/frontline/test_journey_high.py::test_h04_reingest_is_idempotent_upsert
+FAILED tests/frontline/test_live_corrections.py::test_correction_rejection_and_diagnostic_answer
+FAILED tests/frontline/test_live_handoff_outcomes.py::test_disabled_investigator_is_not_applicable
+FAILED tests/frontline/test_live_voice_lifecycle.py::test_scheduled_speech_turn_and_playback_events
+FAILED tests/frontline/test_mapping_ingest.py::test_ingest_mapped_csv_writes_canonical_records
+FAILED tests/frontline/test_nhtsa_flat_map.py::test_every_category_in_the_warehouse_came_from_the_gazetteer
+FAILED tests/frontline/test_phase1_early_warning.py::test_committed_sample_gate_passes
+FAILED tests/frontline/test_phase4_field_telematics.py::test_fixture_demo_does_not_move_anomaly_counts
+FAILED tests/frontline/test_phase4_field_telematics.py::test_partner_cohort_lists_sources_and_concludes
+FAILED tests/frontline/test_phase4_field_telematics.py::test_two_sources_rank_above_one_and_fixture_stays_quiet
+FAILED tests/frontline/test_pipeline_features.py::test_data_trust_fresh_vs_stale_dup_schema
+FAILED tests/frontline/test_pipeline_features.py::test_sandbox_and_pack_builder_and_marketplace
+FAILED tests/frontline/test_pipeline_features.py::test_ingest_mapped_csv_writes_only_trusted_rows
+FAILED tests/frontline/test_slm_probes.py::test_probe_c_category_zeroshot_mode_pinned
+FAILED tests/frontline/test_slm_probes.py::test_task4_live_turn_path_has_zero_remote_llm_calls
+FAILED tests/frontline/test_slm_runtime.py::test_zero_shot_category_prediction
+FAILED tests/frontline/test_slm_runtime.py::test_extract_category_shadow_mode_no_behavior_change
+FAILED tests/frontline/test_slm_runtime.py::test_extract_category_live_mode_promotes_slm
+FAILED tests/frontline/test_source_provenance.py::test_a_load_with_no_tag_is_observed
+FAILED tests/frontline/test_source_provenance.py::test_a_demo_file_can_be_loaded_as_a_fixture
+FAILED tests/frontline/test_source_provenance.py::test_inferred_is_loadable_too
+FAILED tests/frontline/test_source_provenance.py::test_a_later_load_can_promote_fixture_rows_to_observed
+FAILED tests/frontline/test_source_provenance.py::test_limit_applies_with_a_tag
+FAILED tests/frontline/test_source_provenance.py::test_cli_loads_a_fixture_and_says_so
+FAILED tests/frontline/test_voice_audit_fixes.py::test_malformed_frame_does_not_fail_the_contact
+46 failed, 1620 passed, 1 skipped, 1 deselected, 1 warning in 1742.01s (0:29:02)
+EXIT 1

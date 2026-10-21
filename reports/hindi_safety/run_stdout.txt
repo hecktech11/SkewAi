@@ -1,0 +1,75 @@
+{
+ "original_60": {
+  "lowers": 0,
+  "all_rules": {
+   "n": 60,
+   "severity_counts": {
+    "Low": 6,
+    "Medium": 22,
+    "Critical": 4
+   },
+   "triage_skipped": 28,
+   "pipeline_errors": 0,
+   "kill_switch_expected": 12,
+   "kill_switch_hits": 6,
+   "kill_switch_misses": 6,
+   "kill_switch_false_alarms": 0,
+   "category_expected": 60,
+   "category_correct": 32,
+   "category_wrong": 0
+  },
+  "all_hindi": {
+   "n": 60,
+   "severity_counts": {
+    "Low": 8,
+    "Medium": 36,
+    "Critical": 6
+   },
+   "triage_skipped": 10,
+   "pipeline_errors": 0,
+   "kill_switch_expected": 12,
+   "kill_switch_hits": 12,
+   "kill_switch_misses": 0,
+   "kill_switch_false_alarms": 0,
+   "category_expected": 60,
+   "category_correct": 50,
+   "category_wrong": 0
+  }
+ },
+ "fresh_24": {
+  "lowers": 0,
+  "all_rules": {
+   "n": 24,
+   "severity_counts": {
+    "Low": 1,
+    "Medium": 7,
+    "Critical": 1
+   },
+   "triage_skipped": 15,
+   "pipeline_errors": 0,
+   "kill_switch_expected": 12,
+   "kill_switch_hits": 0,
+   "kill_switch_misses": 12,
+   "kill_switch_false_alarms": 0,
+   "category_expected": 20,
+   "category_correct": 9,
+   "category_wrong": 0
+  },
+  "all_hindi": {
+   "n": 24,
+   "severity_counts": {
+    "Medium": 10,
+    "Critical": 5
+   },
+   "triage_skipped": 9,
+   "pipeline_errors": 0,
+   "kill_switch_expected": 12,
+   "kill_switch_hits": 12,
+   "kill_switch_misses": 0,
+   "kill_switch_false_alarms": 1,
+   "category_expected": 20,
+   "category_correct": 15,
+   "category_wrong": 0
+  }
+ }
+}

@@ -1,0 +1,53 @@
+  worker scored 25/59 as-of dates (246s)
+  worker scored 25/59 as-of dates (249s)
+  worker scored 25/59 as-of dates (250s)
+  worker scored 25/59 as-of dates (251s)
+  worker scored 25/58 as-of dates (252s)
+  worker scored 50/59 as-of dates (834s)
+  worker scored 50/59 as-of dates (841s)
+  worker scored 50/58 as-of dates (845s)
+  worker scored 50/59 as-of dates (870s)
+  worker scored 50/59 as-of dates (875s)
+{
+  "config_id": "z2.0_q0.05_abs3_rel0.5",
+  "precision": {
+    "flagged_slice_weeks": 1699,
+    "confirmed_slice_weeks": 1077,
+    "false_alarm_slice_weeks": 622,
+    "precision_slice_weeks": 0.634,
+    "flag_episodes": 1098,
+    "confirmed_episodes": 657,
+    "precision_episodes": 0.598,
+    "unconfirmed_slice_weeks": 622
+  },
+  "actionable_52w": {
+    "window_weeks": 52,
+    "recalls_scored": 1861,
+    "hits": 1142,
+    "misses": 719,
+    "recall_rate": 0.614,
+    "lead_weeks_median": 8.0,
+    "lead_weeks_mean": 15.4,
+    "lead_weeks_p25": 3.0,
+    "lead_weeks_p75": 25.0,
+    "campaign_level": {
+      "campaigns": 477,
+      "hits": 299,
+      "misses": 178,
+      "recall_rate": 0.627,
+      "lead_weeks_median": 8,
+      "lead_weeks_mean": 14.7
+    },
+    "preventable_window_totals_dedup": {
+      "complaints": 23662,
+      "crash": 682,
+      "fire": 374,
+      "injury_complaints": 452,
+      "injured_persons_reported": 632,
+      "death_complaints": 16,
+      "deaths_reported": 25,
+      "crash_fire_or_injury": 1160
+    }
+  }
+}
+EXIT 0

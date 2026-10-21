@@ -1,0 +1,60 @@
+{
+  "sha256": "520ec7b0fdb6c18b5fe388102100334bd969e6308ff33b86ebfed0c556159e23",
+  "body": {
+    "thresholds": {
+      "z": 2.0,
+      "q": 0.05,
+      "abs_lift": 3,
+      "rel_lift": 0.5
+    },
+    "config_id": "z2.0_q0.05_abs3_rel0.5",
+    "production_thresholds": {
+      "z": 2.0,
+      "q": 0.05,
+      "abs_lift": 5,
+      "rel_lift": 0.5
+    },
+    "objective": "maximise harmonic mean of (actionable 52-week campaign recall rate, episode precision) on the train window; ties -> higher episode precision, then the production config",
+    "grid": {
+      "z": [
+        2.0,
+        2.5,
+        3.0
+      ],
+      "q": [
+        0.05,
+        0.01
+      ],
+      "abs_lift": [
+        3,
+        5,
+        8
+      ],
+      "rel_lift": [
+        0.5,
+        1.0
+      ]
+    },
+    "train_window": [
+      "2015-01-01",
+      "2020-12-31"
+    ],
+    "test_window": [
+      "2021-01-01",
+      "2024-12-31"
+    ],
+    "pack": "automotive_nhtsa",
+    "label_rule": "recall report date (RCDATE); precision label = later recall of same make+component issued by the period end",
+    "detector": "src.ml_runtime.anomalies.score_weekly_slices (received clock, make+component grain), re-gated",
+    "data": {
+      "flat_cmpl": {
+        "name": "FLAT_CMPL.zip",
+        "bytes": 374664687,
+        "sha256": "c00707bd4afd6cad075000e0c45e74b59d140976aab2ddae3c6f47a4f807ffe1"
+      },
+      "records_received_by_train_end": 50822,
+      "train_advisories": 1423
+    },
+    "frozen_at": "2026-10-21T04:59:48+00:00"
+  }
+}
