@@ -1,0 +1,65 @@
+# [AI-LAYER] SkewAi hackathon image: the pilot image + optional Meta AI layer demo.
+# Same stages as ./Dockerfile; adds the committed NHTSA backtest reports and a
+# first-start demo seed. Build/run via docker-compose.hackathon.yml.
+# Smoke: curl -sf http://127.0.0.1:8000/health
+
+# ── Dashboard (Vite production build) ──────────────────────────────────────
+FROM node:20-alpine AS dashboard
+WORKDIR /dash
+COPY dashboard/package.json dashboard/package-lock.json* ./
+# Hermetic when lockfile present; falls back to install for fresh trees
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY dashboard/ ./
+RUN npm run build
+
+# ── Python deps (wheels only; no compiler in final image) ──────────────────
+FROM python:3.12-slim AS pydeps
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+COPY requirements-docker.txt requirements-lock.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements-docker.txt -c requirements-lock.txt
+
+# ── Runtime ────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DOMAIN_PACK=automotive_nhtsa \
+    FRONTLINE_ENABLED=1 \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    AI_DEMO_ENABLED=1 \
+    AI_EVIDENCE_DIR=/app/data/ai_evidence
+
+# Site-packages + console scripts from builder
+COPY --from=pydeps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=pydeps /usr/local/bin /usr/local/bin
+
+COPY src ./src
+COPY domains ./domains
+COPY scripts ./scripts
+COPY eval ./eval
+COPY reports/nhtsa ./reports/nhtsa
+COPY Makefile .
+COPY --from=dashboard /dash/dist ./dashboard/dist
+
+RUN useradd -m -u 10001 frontline \
+    && mkdir -p /app/data/domains /app/reports/qubot/contacts /app/reports/qubot/digests \
+    && chown -R frontline:frontline /app
+
+COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/hackathon-entrypoint.sh /hackathon-entrypoint.sh
+RUN chmod +x /entrypoint.sh /hackathon-entrypoint.sh
+
+USER frontline
+EXPOSE 8000
+STOPSIGNAL SIGTERM
+
+# Compose also defines a healthcheck; this covers bare `docker run`.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+
+ENTRYPOINT ["/hackathon-entrypoint.sh"]

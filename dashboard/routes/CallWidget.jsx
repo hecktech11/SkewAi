@@ -32,6 +32,9 @@ import {
   advancePlayback,
 } from "../src/voiceHelpers.js";
 import { capabilityLabel } from "../src/ui/labels.js";
+// [AI-LAYER] optional Meta AI layer add-ons
+import CallAiExtras from "../src/ai/CallAiExtras.jsx";
+import { aiSpeechLang } from "../src/ai/aiApi.js";
 
 // Backoff caps at 5s, so 8 tries ≈ 25s of retrying — comfortably inside the
 // server's reconnect grace (FRONTLINE_WS_RECONNECT_GRACE_S, default 120s).
@@ -1010,7 +1013,8 @@ export default function CallWidget() {
     const recog = new SR();
     recog.continuous = true;
     recog.interimResults = true;
-    try { recog.lang = packLocale() || "en-US"; } catch { recog.lang = "en-US"; }
+    // [AI-LAYER] optional hi-IN / en-IN recognition override; unset = existing behaviour
+    try { recog.lang = aiSpeechLang() || packLocale() || "en-US"; } catch { recog.lang = "en-US"; }
     recog.onresult = (ev) => {
       // While thinking the mic is paused — drop late STT so it cannot stack
       // a second user_turn behind the one the server is already answering.
@@ -1739,6 +1743,9 @@ export default function CallWidget() {
               </button>
             </form>
           )}
+
+          {/* [AI-LAYER] speech-language option + mid-call photo upload (additive) */}
+          <CallAiExtras interactionId={interactionId} caseId={ended?.case_id} />
 
           {handoff && inCall && (
             <div className="banner banner-ok" role="status" style={{ marginTop: 12 }}>

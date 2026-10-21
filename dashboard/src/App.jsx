@@ -18,6 +18,11 @@ import QualityEconomics from "../routes/QualityEconomics.jsx";
 import InsightsBoard from "../routes/InsightsBoard.jsx";
 import FeatureStudio from "../routes/FeatureStudio.jsx";
 import PackBuilder from "../routes/PackBuilder.jsx";
+// [AI-LAYER] optional Meta AI layer: demo path page + mode badge
+import DemoMode from "../routes/DemoMode.jsx";
+import AiTools from "../routes/AiTools.jsx"; // [AI-LAYER] road-safety tools hub
+import AiStatus from "../routes/AiStatus.jsx"; // [AI-LAYER] AI status page: call health + raise review
+import AiModeBadge from "./ai/AiModeBadge.jsx";
 import CommandPalette from "./ui/CommandPalette.jsx";
 import { ToastProvider, useToast } from "./ui/Toast.jsx";
 import { ErrorBoundary } from "./ui/Feedback.jsx";
@@ -79,6 +84,12 @@ const EXTRA_PAGES = [
   { id: "platform-os", label: "Platform OS", route: PlatformOS, keywords: "governance deployments proposals v3" },
   { id: "studio", label: "Feature studio", route: FeatureStudio, keywords: "features sandbox prompt test" },
   { id: "builder", label: "Pack builder", route: PackBuilder, keywords: "pack builder upload yaml" },
+  // [AI-LAYER] hackathon demo path (#demo); not in the nav, existing screens unchanged
+  { id: "demo", label: "Demo tour", route: DemoMode, keywords: "demo hackathon hindi photo brief safety meta muse sam" },
+  // [AI-LAYER] road-safety tools hub (#ai-tools): vehicle risk, alerts, service centre, spread, WhatsApp mock
+  { id: "ai-tools", label: "Road-safety tools", route: AiTools, keywords: "vehicle risk alerts service centre spread whatsapp video" },
+  // [AI-LAYER] AI status page (#ai-status): Meta call health + supervisor review of AI severity raises
+  { id: "ai-status", label: "AI status", route: AiStatus, keywords: "ai status meta call health latency fallback review raise supervisor agreement" },
 ];
 const ALL_PAGES = [...ALL_NAV, ...EXTRA_PAGES];
 const THEMES = ["dark", "light"];
@@ -682,6 +693,8 @@ function Shell() {
           </div>
 
           <div className="topbar-right">
+            {/* [AI-LAYER] AI mode badge (enhanced | deterministic) */}
+            {route !== "signin" && route !== "signup" && <AiModeBadge />}
             {route !== "signin" && (
               me?.signed_in ? (
                 <span className="topbar-who" title={me.subject || ""}>
