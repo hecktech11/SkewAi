@@ -99,3 +99,26 @@ async def service_centre_queue(
     from src.ai_layer.service_centre import service_queue
 
     return await asyncio.to_thread(service_queue, max(1, min(int(limit), 500)), include_simulated)
+
+
+# ── Fault spread by region / time ───────────────────────────────────────────
+@router.get("/api/ai/spread")
+async def ai_fault_spread(
+    make: str | None = None,
+    model: str | None = None,
+    component: str | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    months: int = 60,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.spread import fault_spread
+
+    for v in (make, model, component):
+        if v is not None and len(v) > 80:
+            raise HTTPException(status_code=400, detail="filter too long")
+    try:
+        return await asyncio.to_thread(fault_spread, make, model, component, year_min, year_max,
+                                       months=max(1, min(int(months), 240)))
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="domain warehouse not built") from None
