@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from src.api.limiter import limiter
 from src.api.rbac import require_perm_dep
@@ -141,3 +141,82 @@ async def whatsapp_mock_webhook(
         return await handle_webhook(body)
     except ServiceDrainingError:
         raise HTTPException(status_code=503, detail="service_draining") from None
+
+
+# ── Short video evidence (analysis behind AI_VIDEO_ANALYSIS; unverified) ────
+def _video_http(e: Exception) -> HTTPException:
+    from src.ai_layer.video_evidence import VideoError
+
+    if isinstance(e, VideoError):
+        return HTTPException(status_code=e.status, detail=e.detail)
+    if isinstance(e, ValueError):
+        return HTTPException(status_code=400, detail="invalid id")
+    raise e
+
+
+@router.post("/api/ai/cases/{case_id}/video", status_code=201)
+async def upload_case_video(
+    case_id: str,
+    file: UploadFile = File(...),
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.video_evidence import analysis_enabled, analyze_video, max_bytes, store_video
+
+    limit = max_bytes()
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"video too large (max {limit} bytes)")
+    try:
+        v = await asyncio.to_thread(store_video, data=data, filename=file.filename,
+                                    declared_mime=file.content_type, case_id=case_id)
+    except Exception as e:
+        raise _video_http(e) from e
+    if analysis_enabled() and v.get("analysis_status") == "pending":
+        async def _run() -> None:
+            try:
+                await asyncio.to_thread(analyze_video, v["video_id"])
+            except Exception:
+                pass
+        asyncio.get_running_loop().create_task(_run())
+    return v
+
+
+@router.get("/api/ai/cases/{case_id}/video")
+async def list_case_video(
+    case_id: str,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.video_evidence import UNVERIFIED_NOTE, analysis_enabled, list_for_case
+
+    return {"case_id": case_id, "videos": await asyncio.to_thread(list_for_case, case_id),
+            "analysis_enabled": analysis_enabled(), "analysis_note": UNVERIFIED_NOTE}
+
+
+@router.get("/api/ai/video/{video_id}/file")
+async def get_video_file(
+    video_id: str,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+):
+    from fastapi.responses import FileResponse
+
+    from src.ai_layer.video_evidence import get_video
+
+    try:
+        row = await asyncio.to_thread(get_video, video_id, include_path=True)
+    except Exception as e:
+        raise _video_http(e) from e
+    return FileResponse(row["storage_path"], media_type=row["mime"],
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+@router.post("/api/ai/video/{video_id}/analyze")
+async def analyze_case_video(
+    video_id: str,
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.video_evidence import analyze_video
+
+    try:
+        return await asyncio.to_thread(analyze_video, video_id)
+    except Exception as e:
+        raise _video_http(e) from e

@@ -7,6 +7,7 @@ import Alerts from "../src/ai/tools/Alerts.jsx";
 import ServiceQueue from "../src/ai/tools/ServiceQueue.jsx";
 import Spread from "../src/ai/tools/Spread.jsx";
 import WhatsAppMock from "../src/ai/tools/WhatsAppMock.jsx";
+import VideoEvidence from "../src/ai/tools/VideoEvidence.jsx";
 
 const TABS = [
   { id: "vehicle", label: "Vehicle fault risk", el: VehicleRisk },
@@ -14,6 +15,7 @@ const TABS = [
   { id: "service", label: "Service-centre queue", el: ServiceQueue },
   { id: "spread", label: "Fault spread", el: Spread },
   { id: "whatsapp", label: "WhatsApp intake (mock)", el: WhatsAppMock },
+  { id: "video", label: "Video evidence", el: VideoEvidence },
 ];
 
 export default function AiTools({ hashQuery }) {
@@ -29,7 +31,7 @@ export default function AiTools({ hashQuery }) {
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "primary" : "ghost"} onClick={() => setTab(t.id)}>{t.label}</button>
         ))}
       </div>
-      <section className="card" style={{ padding: 14 }}><Cur /></section>
+      <section className="card" style={{ padding: 14 }}><Cur hashQuery={hashQuery} /></section>
     </div>
   );
 }

@@ -181,6 +181,10 @@ def erase_interaction(con, interaction_id: str) -> dict[str, int]:
         ).fetchone()[0]
         con.execute("DELETE FROM ai_layer_events WHERE interaction_id = ?", [interaction_id])
         deleted["ai_layer_events"] = int(n)
+    from src.ai_layer.video_evidence import erase_for_interaction as _erase_video
+
+    if _relation_exists(con, "case_video_evidence"):
+        deleted["case_video_evidence"] = _erase_video(con, interaction_id)
     return deleted
 
 
