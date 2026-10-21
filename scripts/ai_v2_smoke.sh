@@ -16,7 +16,7 @@ B="http://127.0.0.1:$PORT"
 
 start() { "$PY" -m uvicorn src.api.main:app --host 127.0.0.1 --port "$PORT" > "$OUT/$1_server.log" 2>&1 & echo $! > "$TMP/pid";
   for i in $(seq 1 60); do curl -sf "$B/health" >/dev/null && return 0; sleep 1; done; echo "server did not start"; return 1; }
-stop() { kill "$(cat "$TMP/pid")" 2>/dev/null; wait "$(cat "$TMP/pid")" 2>/dev/null; sleep 1; }
+stop() { local p; p=$(cat "$TMP/pid"); kill "$p" 2>/dev/null; for i in $(seq 1 15); do kill -0 "$p" 2>/dev/null || break; sleep 1; done; kill -9 "$p" 2>/dev/null; sleep 1; }  # background jobs can delay graceful shutdown
 hit() { # name method path [curl args...]
   local name=$1 m=$2 p=$3; shift 3
   code=$(curl -s -o "$OUT/$name.json" -w '%{http_code}' -X "$m" "$B$p" "$@")
