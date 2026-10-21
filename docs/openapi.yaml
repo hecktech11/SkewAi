@@ -7276,6 +7276,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  # [AI-LAYER] v2: call health, status overview, supervisor review of AI raises (additive)
   /api/ai/call-health:
     get:
       tags:
@@ -8493,6 +8494,7 @@ components:
       required:
       - file
       title: Body_upload_interaction_evidence_api_interactions__interaction_id__evidence_post
+    # [AI-LAYER] v2: request body for supervisor review of AI severity raises
     ReviewBody:
       properties:
         verdict:
