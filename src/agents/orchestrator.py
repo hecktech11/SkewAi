@@ -769,6 +769,32 @@ class Orchestrator:
                                     asr_confidence=asr_confidence, dtmf=dtmf)
             if self._stop_if_erased():
                 return
+            # [AI-LAYER] Deterministic Hindi/Hinglish pass (no key needed): may only
+            # ADD a kill-switch hit (pack lexicon on a Hindi gloss) and fill slots
+            # that are still empty. AI_HINDI_SAFETY=0 disables it.
+            try:
+                from src.ai_layer.hindi_safety import maybe_apply_hindi_intake
+
+                ires = await maybe_apply_hindi_intake(self.ctx, text, ires)
+            except Exception:
+                pass
+            # [AI-LAYER] Optional OBD-II fault codes typed as 'codes: C0035 P0300': stored as evidence only.
+            try:
+                from src.ai_layer.fault_codes import maybe_capture_fault_codes
+
+                await maybe_capture_fault_codes(self.ctx, text)
+            except Exception:
+                pass
+            # [AI-LAYER] Optional Muse Spark pass AFTER deterministic intake: fills
+            # only still-empty slots, normalises Hindi/Hinglish, may only ADD a
+            # kill-switch hit (pack lexicon on the translation). No key -> returns
+            # ires unchanged with no I/O.
+            try:
+                from src.ai_layer.intake_enhancer import maybe_enhance_intake
+
+                ires = await maybe_enhance_intake(self.ctx, text, ires)
+            except Exception:
+                pass
             # 2.1/6.3: turn latency observe vs 1200ms SLO
             try:
                 import time as _t2
@@ -2197,6 +2223,28 @@ class Orchestrator:
         sres = _settle("sentinel", "advisory_check", raw[0])
         tres = _settle("triage", "severity_scored", raw[1])
         ires = _settle("investigator", "brief_written", raw[2])
+        # [AI-LAYER] Optional AI severity: final = max(rule, AI); may only raise.
+        # No key -> tres unchanged. Qubot severity sanity still runs later.
+        try:
+            from src.ai_layer.severity import maybe_raise_severity
+
+            tres = await maybe_raise_severity(self.ctx, tres)
+        except Exception:
+            pass
+        # [AI-LAYER] Hindi/Hinglish safety vocabulary floor: final = max(rule, floor); raise-only.
+        try:
+            from src.ai_layer.hindi_safety import maybe_raise_severity_hi
+
+            tres = await maybe_raise_severity_hi(self.ctx, tres)
+        except Exception:
+            pass
+        # [AI-LAYER] Safety-system fault code floor: final = max(rule, floor); raise-only.
+        try:
+            from src.ai_layer.fault_codes import maybe_raise_severity_dtc
+
+            tres = await maybe_raise_severity_dtc(self.ctx, tres)
+        except Exception:
+            pass
 
         if sres.get("advisory_match"):
             notice = sres["notice"]

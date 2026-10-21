@@ -1,0 +1,44 @@
+# [AI-LAYER] BuildKit per-Dockerfile ignore for Dockerfile.hackathon: same as .dockerignore
+# but ships reports/nhtsa (the committed NHTSA backtest the demo board quotes).
+# Keep image build context small and free of secrets / local junk.
+
+.git
+.github
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Dashboard sources are copied only into the node stage; exclude host modules/dist
+dashboard/node_modules
+# dist is produced inside the image; do not ship host build
+
+# Local data, reports, secrets
+data
+reports/*
+!reports/nhtsa
+.env
+.env.*
+*.duckdb
+*.duckdb.wal
+
+# Docs / tests not needed in runtime image
+docs
+tests
+context
+*.md
+!README.md
+
+# IDE
+.DS_Store
+.idea
+.vscode
+.cursor
+.grok
+**/.DS_Store

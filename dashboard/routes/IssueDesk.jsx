@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { apiHeaders } from "../src/apiAuth.js";
 import { BarList } from "../src/ui/Chart.jsx";
 import { openCases, openConsole } from "../src/ui/opsActions.js";
+// [AI-LAYER] grounded brief + photo evidence panels (optional Meta AI layer)
+import GroundedBriefPanel from "../src/ai/GroundedBriefPanel.jsx";
+import EvidencePanel from "../src/ai/EvidencePanel.jsx";
 
 function fmtUSD(x) {
   if (x === null || x === undefined || Number.isNaN(Number(x))) return null;
@@ -632,6 +635,14 @@ export default function IssueDesk({ issueId, refreshKey }) {
           </p>
         </div>
       </header>
+
+      {/* [AI-LAYER] grounded brief (safety risk, cited claims, inspection actions) + photos from linked cases */}
+      {inv?.investigation_id && (
+        <div className="panel">
+          <GroundedBriefPanel investigationId={inv.investigation_id} />
+          <EvidencePanel investigationId={inv.investigation_id} readOnly title="Customer photos on this issue" />
+        </div>
+      )}
 
       {/* ── 1. What is failing ── */}
       <div className="panel">

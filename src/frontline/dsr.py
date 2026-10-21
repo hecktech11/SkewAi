@@ -388,6 +388,14 @@ def delete_interaction(interaction_id: str, *, mode: str = "erase") -> dict[str,
                 deleted[table] = int(before)
             except Exception:
                 deleted[table] = -1
+        # [AI-LAYER] erase optional AI-layer rows + evidence files; returns {}
+        # (no change to the result) when the AI layer never created its tables.
+        try:
+            from src.ai_layer.store import erase_interaction
+
+            deleted.update(erase_interaction(con, iid))
+        except Exception:
+            pass
     return {"interaction_id": iid, "deleted": deleted, "ok": erasure_succeeded(deleted)}
 
 

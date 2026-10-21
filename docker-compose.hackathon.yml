@@ -1,0 +1,49 @@
+# [AI-LAYER] SkewAi hackathon demo: ONE container (API + dashboard + demo seed).
+#
+#   FRONTLINE_API_KEY=$(python3 -c "import secrets;print(secrets.token_hex(24))") \
+#     docker compose -f docker-compose.hackathon.yml up --build
+#   → http://127.0.0.1:8000/ui/#demo   (Sign in → "Have an operator API key?" → paste the key)
+#
+# Optional Meta AI layer (Muse Spark, SAM 3.1, Muse Image): also set META_API_KEY
+# (and META_API_BASE / META_MODEL_* if your account differs from the defaults
+# documented in HACKATHON.md). Without it, the deterministic path runs every step.
+# Nothing here deploys anywhere; the image is portable to any container host.
+services:
+  skewai:
+    build:
+      context: .
+      dockerfile: Dockerfile.hackathon
+    image: skewai-hackathon:local
+    ports:
+      - "${SKEWAI_PUBLISH:-127.0.0.1:8000:8000}"
+    environment:
+      DOMAIN_PACK: automotive_nhtsa
+      FRONTLINE_ENABLED: "1"
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      FRONTLINE_AUTH_REQUIRED: "1"
+      FRONTLINE_API_KEY: ${FRONTLINE_API_KEY:?Set FRONTLINE_API_KEY (32+ random chars) for the demo container}
+      AI_DEMO_ENABLED: "1"
+      SIM_COUNT: ${SIM_COUNT:-15}
+      META_API_KEY: ${META_API_KEY:-}
+      META_API_BASE: ${META_API_BASE:-}
+      META_MODEL_TEXT: ${META_MODEL_TEXT:-}
+      META_MODEL_VISION: ${META_MODEL_VISION:-}
+      META_MODEL_SAM: ${META_MODEL_SAM:-}
+      META_MODEL_IMAGE: ${META_MODEL_IMAGE:-}
+      META_SAM_ENDPOINT: ${META_SAM_ENDPOINT:-}
+      META_IMAGE_ENDPOINT: ${META_IMAGE_ENDPOINT:-}
+      META_ALLOWED_HOSTS: ${META_ALLOWED_HOSTS:-}
+    volumes:
+      - skewai-hackathon-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 240s
+    restart: unless-stopped
+    mem_limit: 2g
+
+volumes:
+  skewai-hackathon-data:
