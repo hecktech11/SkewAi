@@ -234,6 +234,8 @@ Every ordinary customer-visible line is ledgered before it is sent. A failed tra
 
 **Mission: reduce road accidents by catching vehicle faults early, from every call, in the caller's own language.**
 
+Road-safety tools at `/ui/#ai-tools`: per-vehicle fault risk, manufacturer alert feed (pull only), service-centre call-in queue, fault spread by state and month, WhatsApp intake **mock** (no WhatsApp API), and 5–10 s video evidence (analysis flag-gated, unverified). Details in [HACKATHON.md](HACKATHON.md).
+
 The deterministic pipeline above is the default and the fallback. The AI layer
 switches on only when `META_API_KEY` (or `MODEL_API_KEY`) is set. With no key,
 nothing changes and no network call is made. On any error, timeout, invalid

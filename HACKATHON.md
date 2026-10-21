@@ -29,6 +29,17 @@ the final say.
 | | `scripts/judge_setup.sh`, `scripts/ai_demo_seed.py`, `Dockerfile.hackathon`, `docker-compose.hackathon.yml` |
 | | Tests: `tests/frontline/ai_layer/` (every Meta call mocked) |
 
+### 1a. Road-safety tools (`#ai-tools`, all deterministic without a key)
+
+| Tool | Endpoint(s) | What it does (data behind it) |
+|---|---|---|
+| Per-vehicle fault risk | `GET /api/ai/vehicle-risk?make&model&year[&mileage]` | Per-component complaint counts for that make/model/year, share vs model-year peers, crash/fire/injury mentions and matching recall campaigns from the NHTSA warehouse → level (act now / high / elevated / watch / low) + owner advice. Every level shows its counts. Mileage is accepted but **not used** (NHTSA rows carry no mileage). Optional Muse Spark plain-language explanation is rejected if it cites any number not in the facts. |
+| Manufacturer alert feed | `POST /api/ai/alerts/scan`, `GET /api/ai/alerts`, `GET /api/ai/alerts/feed.json`, `POST /api/ai/alerts/{id}/ack` | Investigations crossing a threshold (≥3 cases high, ≥10 elevated; env-configurable) become alerts carrying the grounded brief + recommended repair actions. Deduped per investigation, only escalates. Delivery is a pull JSON Feed 1.1 and a webhook **payload preview; nothing is sent externally.** |
+| Service-centre queue | `GET /api/ai/service-centre/queue` | Open cases ranked by explained points: existing severity, kill-switch flags, component tier, recall match, investigation, waiting time; each with a call-in action. |
+| Fault spread | `GET /api/ai/spread?make&model&component&year_min&year_max` | Complaint counts by NHTSA reporting state and received month, region × year heat grid, first-reporting regions. Raw counts, **not normalised** for population or fleet size. |
+| WhatsApp intake **MOCK** | `POST /api/ai/whatsapp-mock/webhook` | Accepts a WhatsApp-Cloud-API-shaped `messages` webhook body and feeds each text into the **existing** orchestrator (channel `whatsapp_mock`, sender stored only as sha256). Kill-switch, `assess_safety`, Qubot and audit run as for any contact. Replies are returned in the response (`status: mock_not_sent`). **No WhatsApp/Meta API is called.** |
+| Short video evidence | `POST/GET /api/ai/cases/{id}/video`, `GET /api/ai/video/{id}/file`, `POST /api/ai/video/{id}/analyze` | mp4/mov/webm sniffed by magic bytes, size cap `AI_VIDEO_MAX_BYTES` (20 MB), duration read from the container (MP4 `mvhd` / WebM `Info/Duration`), 1–10 s (`AI_VIDEO_MAX_SECONDS`); unreadable duration is rejected. Stored per case, erased by the DSR hook. Analysis only with `AI_VIDEO_ANALYSIS=1` + key: **unverified: video input support not confirmed**; informational, never changes severity. Default: `stored_no_analysis`. |
+
 ## 2. How each Meta tool is used
 
 All calls go through `src/ai_layer/meta_client.py`, which does the following:
@@ -145,6 +156,7 @@ modified.
 
 - Endpoint defaults follow the public docs at <https://dev.meta.ai/docs> (read 2026-10-21): base `https://api.meta.ai/v1`, Bearer auth, `muse-spark-1.3` chat completions with `response_format: json_schema`, `sam-3.1` via `/v1/responses` streaming box tokens, and `muse-image-1.0` via `/v1/images/generations`. **None of this has been called live.** The request/response shapes are covered only by mocked tests.
 - The following are assumptions: `json_schema` strict-mode support on Muse Spark, the exact SAM box-token grammar, image-input formatting for vision, rate limits and pricing. Every one is env-configurable (`META_API_BASE`, `META_MODEL_*`, `META_CHAT_PATH`, `META_SAM_ENDPOINT`, `META_IMAGE_ENDPOINT`, `META_TIMEOUT_S`, …; see `src/ai_layer/config.py`).
+- Video input to Muse Spark (sending an mp4/webm data URL as an `image_url` part) is **not documented/confirmed**; it is behind `AI_VIDEO_ANALYSIS` and labelled unverified.
 - Muse Voice Transcribe (`muse-voice-transcribe-1.0`) exists in the docs but is **not implemented**. Hindi speech uses the browser's `hi-IN` Web Speech recogniser.
 - Enhanced-mode accuracy numbers do not exist yet (see §4.2).
 - **To verify in about 30 seconds with a key:** `META_API_KEY=… python -m scripts.ai_meta_smoke` (add `--image` for Muse Image). It makes one small call each to text, vision and SAM 3.1 through the product client and prints ok/failed with the reason. Without a key it is skipped and makes no network call.
