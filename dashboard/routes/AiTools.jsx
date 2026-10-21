@@ -3,9 +3,11 @@
 // component under dashboard/src/ai/tools; existing screens are untouched.
 import { useState } from "react";
 import VehicleRisk from "../src/ai/tools/VehicleRisk.jsx";
+import Alerts from "../src/ai/tools/Alerts.jsx";
 
 const TABS = [
   { id: "vehicle", label: "Vehicle fault risk", el: VehicleRisk },
+  { id: "alerts", label: "Manufacturer alerts", el: Alerts },
 ];
 
 export default function AiTools({ hashQuery }) {

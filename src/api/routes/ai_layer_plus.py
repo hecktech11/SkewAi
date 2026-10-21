@@ -36,3 +36,54 @@ async def vehicle_risk_route(
     if mileage is not None and not (0 <= mileage <= 2_000_000):
         raise HTTPException(status_code=400, detail="mileage out of range")
     return await asyncio.to_thread(vehicle_risk, make, model, year, mileage)
+
+
+# ── Manufacturer alert feed (no external sending) ──────────────────────────
+@router.post("/api/ai/alerts/scan")
+@limiter.limit("20 per minute")
+async def alerts_scan(
+    request: Request,
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.alerts import scan_alerts
+
+    return await asyncio.to_thread(scan_alerts)
+
+
+@router.get("/api/ai/alerts")
+async def alerts_list(
+    status: str | None = None,
+    limit: int = 100,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.alerts import list_alerts, thresholds
+
+    if status not in (None, "open", "acknowledged"):
+        raise HTTPException(status_code=400, detail="status must be open or acknowledged")
+    alerts = await asyncio.to_thread(list_alerts, status, max(1, min(int(limit), 500)))
+    return {"alerts": alerts, "count": len(alerts), "thresholds": thresholds(),
+            "delivery": "pull feed only; nothing is sent externally"}
+
+
+@router.get("/api/ai/alerts/feed.json")
+async def alerts_feed(
+    request: Request,
+    _role: str = Depends(require_perm_dep("case:read", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.alerts import json_feed
+
+    return await asyncio.to_thread(json_feed, str(request.base_url).rstrip("/"))
+
+
+@router.post("/api/ai/alerts/{alert_id}/ack")
+async def alerts_ack(
+    alert_id: str,
+    _role: str = Depends(require_perm_dep("case:write", open_mode_ok=True)),
+) -> dict[str, Any]:
+    from src.ai_layer.alerts import ack_alert
+
+    if not alert_id.startswith("alrt_") or len(alert_id) > 40 or not alert_id[5:].isalnum():
+        raise HTTPException(status_code=400, detail="bad alert id")
+    if not await asyncio.to_thread(ack_alert, alert_id):
+        raise HTTPException(status_code=404, detail="alert not found")
+    return {"alert_id": alert_id, "status": "acknowledged"}
